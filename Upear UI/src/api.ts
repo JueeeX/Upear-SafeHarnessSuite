@@ -284,18 +284,24 @@ export async function apiRequest<T>(
   target?: 'local',
 ): Promise<T> {
   const url = `${getApiUrl()}${path}`;
+  // Content-Type 去重：调用方自带（任意大小写）则不再补默认值——重复头会被
+  // 代理合并成 "application/json, application/json"，后端因此不按 JSON 解析
+  // 请求体（pydantic 报 "Input should be a valid dictionary"）。
+  const optionHeaders = { ...(options?.headers as Record<string, string> | undefined) };
+  if (!Object.keys(optionHeaders).some((key) => key.toLowerCase() === 'content-type')) {
+    optionHeaders['Content-Type'] = 'application/json';
+  }
   const response = await fetch(url, {
     ...options,
     credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
       // 混合路由：显式声明本地目标时打头（web / 非双模式下反代忽略该头）。
       ...(target === 'local' ? localHeader() : {}),
       // 兜底：与 authFetch 同源推断——路径含本地项目/本地会话 id 时自动打头，
       // 否则 file-confirm / pending-confirm 等会话作用域请求会被误发云端，
       // 云端无此会话而报「会话不存在或无权访问」。
       ...inferTargetHeadersFromUrl(path),
-      ...(options?.headers ?? {}),
+      ...optionHeaders,
     },
   });
 
@@ -2285,6 +2291,20 @@ export interface ExternalAgentCardItem {
   project: string;
   description: string;
   available: boolean;
+  custom?: boolean;
+}
+
+export interface ExternalAgentRecord {
+  agent_id: string;
+  name: string;
+  framework: string;
+  project: string;
+  description: string;
+  enabled: boolean;
+  created_by?: string;
+  created_at?: string;
+  updated_by?: string;
+  updated_at?: string;
 }
 
 export interface ExternalAgentModelSettings {
@@ -2401,6 +2421,36 @@ export async function putExternalAgentModelSetting(
     body: JSON.stringify({ scope, provider_id: providerId }),
   });
   return unwrapData<ExternalAgentModelSettings>(res);
+}
+
+export async function registerExternalAgent(
+  body: Omit<ExternalAgentRecord, 'enabled' | 'created_by' | 'created_at' | 'updated_by' | 'updated_at'>,
+): Promise<ExternalAgentRecord> {
+  const res = await apiRequest<unknown>('/v1/external-agents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return unwrapData<ExternalAgentRecord>(res);
+}
+
+export async function updateExternalAgent(
+  agentId: string,
+  patch: Partial<Pick<ExternalAgentRecord, 'name' | 'framework' | 'project' | 'description' | 'enabled'>>,
+): Promise<ExternalAgentRecord> {
+  const res = await apiRequest<unknown>(`/v1/external-agents/${encodeURIComponent(agentId)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  return unwrapData<ExternalAgentRecord>(res);
+}
+
+export async function deleteExternalAgent(agentId: string): Promise<{ deleted: string }> {
+  const res = await apiRequest<unknown>(`/v1/external-agents/${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+  });
+  return unwrapData<{ deleted: string }>(res);
 }
 
 export async function listReviewQueue(): Promise<ReviewQueueResponse> {

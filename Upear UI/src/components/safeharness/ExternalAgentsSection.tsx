@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, Button, Card, Col, Empty, Input, InputNumber, Modal, Row, Select, Space, Spin, Switch, Tag, Typography, message,
+  Alert, Button, Card, Col, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Switch, Tag, Typography, message,
 } from 'antd';
-import { ReloadOutlined, RocketOutlined, SaveOutlined } from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, ReloadOutlined, RocketOutlined, SaveOutlined } from '@ant-design/icons';
 import {
+  deleteExternalAgent,
   getExternalAgentCard,
   getExternalAgentMemoryConfig,
   listExternalAgents,
@@ -11,14 +12,26 @@ import {
   putExternalAgentCard,
   putExternalAgentMemoryConfig,
   putExternalAgentModelSetting,
+  registerExternalAgent,
   runExternalAgent,
   type ExternalAgentMemoryConfig,
+  type ExternalAgentRecord,
   type ExternalAgentRunResult,
   type ExternalAgentsResponse,
 } from '../../api';
 import { t } from '../../i18n';
 
 const DEFAULT_OPTION = '__follow_default__';
+const FRAMEWORK_OPTIONS = ['smolagents', 'openai-agents', 'autogen'].map((value) => ({ value }));
+const AGENT_ID_PATTERN = /^[a-z][a-z0-9-]{2,62}$/;
+
+const EMPTY_REGISTER: Omit<ExternalAgentRecord, 'enabled'> = {
+  agent_id: '',
+  name: '',
+  framework: 'smolagents',
+  project: '',
+  description: '',
+};
 
 /** 外部智能体：真实第三方框架接入（smolagents / openai-agents / autogen）。
  * 每个智能体可单独指定模型供应商，也可跟随统一默认（再回退平台主模型）。 */
@@ -36,6 +49,9 @@ export function ExternalAgentsSection() {
   const [savingCard, setSavingCard] = useState(false);
   const [memoryConfig, setMemoryConfig] = useState<ExternalAgentMemoryConfig | null>(null);
   const [savingMemory, setSavingMemory] = useState(false);
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [registerForm, setRegisterForm] = useState<Omit<ExternalAgentRecord, 'enabled'>>(EMPTY_REGISTER);
+  const [registering, setRegistering] = useState(false);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -121,6 +137,47 @@ export function ExternalAgentsSection() {
       setCardDraft({ agentId, text: JSON.stringify(card, null, 2) });
     } catch (error) {
       message.error(error instanceof Error ? error.message : t('读取 AgentCard 失败'));
+    }
+  };
+
+  const submitRegister = async () => {
+    if (!AGENT_ID_PATTERN.test(registerForm.agent_id)) {
+      message.error(t('标识需为小写字母开头的 3-63 位小写字母/数字/连字符'));
+      return;
+    }
+    if (!registerForm.name.trim() || !registerForm.description.trim()) {
+      message.error(t('必填'));
+      return;
+    }
+    setRegistering(true);
+    try {
+      await registerExternalAgent({
+        ...registerForm,
+        name: registerForm.name.trim(),
+        description: registerForm.description.trim(),
+      });
+      message.success(t('自定义智能体已注册'));
+      setRegisterOpen(false);
+      setRegisterForm(EMPTY_REGISTER);
+      await load();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : t('注册失败'));
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const removeAgent = async (agentId: string) => {
+    try {
+      await deleteExternalAgent(agentId);
+      message.success(t('自定义智能体已删除'));
+      if (selectedId === agentId) {
+        setSelectedId('');
+        setResult(null);
+      }
+      await load();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : t('删除失败'));
     }
   };
 
@@ -222,6 +279,12 @@ export function ExternalAgentsSection() {
         )}
       </Card>
 
+      <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+        <Typography.Text type="secondary">{t('智能体目录（内置 + 注册的自定义）')}</Typography.Text>
+        <Button size="small" icon={<PlusOutlined />} onClick={() => setRegisterOpen(true)}>
+          {t('注册自定义智能体')}
+        </Button>
+      </Space>
       <Row gutter={[12, 12]}>
         {data.agents.map((agent) => {
           const override = settings?.agents[agent.agent_id] ?? null;
@@ -236,6 +299,7 @@ export function ExternalAgentsSection() {
                   <Space wrap size={4}>
                     <span>{agent.name}</span>
                     <Tag color={agent.available ? 'green' : 'red'}>{agent.available ? t('可用') : t('不可用')}</Tag>
+                    {agent.custom && <Tag color="purple">{t('自定义')}</Tag>}
                     <Button
                       size="small"
                       type="text"
@@ -243,6 +307,22 @@ export function ExternalAgentsSection() {
                     >
                       {t('AgentCard')}
                     </Button>
+                    {agent.custom && (
+                      <Popconfirm
+                        title={t('确认删除该自定义智能体？其卡面与模型覆盖将一并清理。')}
+                        okText={t('删除')}
+                        cancelText={t('取消')}
+                        onConfirm={() => { void removeAgent(agent.agent_id); }}
+                      >
+                        <Button
+                          size="small"
+                          type="text"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={(event) => event.stopPropagation()}
+                        />
+                      </Popconfirm>
+                    )}
                   </Space>
                 }
               >
@@ -352,6 +432,53 @@ export function ExternalAgentsSection() {
           autoSize={{ minRows: 14, maxRows: 26 }}
           style={{ fontFamily: 'monospace', fontSize: 12 }}
         />
+      </Modal>
+      <Modal
+        open={registerOpen}
+        title={t('注册自定义智能体')}
+        okText={t('注册')}
+        cancelText={t('取消')}
+        confirmLoading={registering}
+        onOk={() => void submitRegister()}
+        onCancel={() => setRegisterOpen(false)}
+        maskClosable={false}
+      >
+        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          {t('卡片是数据、运行器是代码：框架限定为平台已接入的三种，安全链路与内置智能体完全一致。')}
+        </Typography.Text>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Input
+            placeholder={t('标识（agent_id）')}
+            value={registerForm.agent_id}
+            onChange={(event) => setRegisterForm((prev) => ({ ...prev, agent_id: event.target.value }))}
+            maxLength={63}
+          />
+          <Input
+            placeholder={t('名称')}
+            value={registerForm.name}
+            onChange={(event) => setRegisterForm((prev) => ({ ...prev, name: event.target.value }))}
+            maxLength={64}
+          />
+          <Select
+            value={registerForm.framework}
+            options={FRAMEWORK_OPTIONS}
+            onChange={(value) => setRegisterForm((prev) => ({ ...prev, framework: value }))}
+            style={{ width: '100%' }}
+          />
+          <Input
+            placeholder={t('来源项目（可选）')}
+            value={registerForm.project}
+            onChange={(event) => setRegisterForm((prev) => ({ ...prev, project: event.target.value }))}
+            maxLength={200}
+          />
+          <Input.TextArea
+            placeholder={t('描述')}
+            value={registerForm.description}
+            onChange={(event) => setRegisterForm((prev) => ({ ...prev, description: event.target.value }))}
+            autoSize={{ minRows: 2, maxRows: 5 }}
+            maxLength={500}
+          />
+        </Space>
       </Modal>
     </Space>
   );
