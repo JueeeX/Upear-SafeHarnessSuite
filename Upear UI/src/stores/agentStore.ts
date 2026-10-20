@@ -13,7 +13,7 @@ export interface AgentChangeHistoryItem {
 
 export interface UserAgentItem {
   agent_id: string;
-  owner_type: 'admin' | 'user' | 'builtin';
+  owner_type: 'admin' | 'user' | 'builtin' | 'system';
   user_id: string | null;
   name: string;
   avatar: string | null;
@@ -28,8 +28,8 @@ export interface UserAgentItem {
   model_provider_id: string | null;
   temperature: number | null;
   max_tokens: number | null;
-  max_iters: number;
-  timeout: number;
+  max_iters: number | null;
+  timeout: number | null;
   is_enabled: boolean;
   sort_order: number;
   ontology_tags: string[];
@@ -39,6 +39,11 @@ export interface UserAgentItem {
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
+  /** 外部框架智能体（GET /v1/agents 合成行）：只读、经外部桥执行 */
+  external?: boolean;
+  custom?: boolean;
+  framework?: string;
+  project?: string;
 }
 
 export interface AvailableResources {

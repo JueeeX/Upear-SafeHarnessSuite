@@ -2870,6 +2870,7 @@ textarea.jx-composer{
 .jx-slashPopup-icon--mcp { color: #0E7490; }
 .jx-slashPopup-badge--agent { background: #E7F6EC; color: #0F7B5F; }
 .jx-slashPopup-badge--mcp { background: #E0F7FA; color: #0E7490; }
+.jx-slashPopup-badge--external { background: #F3EEFB; color: #6B21A8; }
 
 
 /* ── ContentEditable editor — replaces textarea ── */

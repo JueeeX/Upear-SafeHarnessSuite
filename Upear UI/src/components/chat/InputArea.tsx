@@ -1111,7 +1111,14 @@ export function InputArea({
                   }
                   return enabled.map((a) => ({
                     key: `agent-${a.agent_id}`,
-                    label: a.name,
+                    label: (
+                      <>
+                        {a.name}
+                        {a.external && (
+                          <span className="jx-slashPopup-badge jx-slashPopup-badge--external">{t('外部')}</span>
+                        )}
+                      </>
+                    ),
                     onClick: () => onPickAgentFromMenu(a),
                   }));
                 })(),

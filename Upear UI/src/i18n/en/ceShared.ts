@@ -4,6 +4,7 @@ export const CE_SHARED_DICT: Record<string, string> = {
   'AgentCard 已保存': 'AgentCard saved',
   'AgentCard 不是合法 JSON': 'AgentCard is not valid JSON',
   '读取 AgentCard 失败': 'Failed to load the AgentCard',
+  '外部': 'External',
   '注册自定义智能体': 'Register custom agent',
   '智能体目录（内置 + 注册的自定义）': 'Agent catalog (builtin + registered custom)',
   '确认删除该自定义智能体？其卡面与模型覆盖将一并清理。': 'Delete this custom agent? Its card face and model override will be cleaned up too.',

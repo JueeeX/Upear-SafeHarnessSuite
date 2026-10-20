@@ -4,6 +4,7 @@ import { scaleIn } from '../../utils/motionVariants';
 import { usePopupFlip } from '../../hooks/usePopupFlip';
 import { useAgentStore } from '../../stores/agentStore';
 import type { UserAgentItem } from '../../stores/agentStore';
+import { t } from '../../i18n';
 
 interface AgentMentionPopupProps {
   input: string;
@@ -69,6 +70,9 @@ export function AgentMentionPopup({ input, visible, selectedIndex, onSelect, onH
             >
               <span className="jx-mentionPopup-at">@</span>
               <span className="jx-mentionPopup-name">{agent.name}</span>
+              {agent.external && (
+                <span className="jx-slashPopup-badge jx-slashPopup-badge--external">{t('外部')}</span>
+              )}
             </div>
           ))}
         </motion.div>
