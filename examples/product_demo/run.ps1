@@ -409,6 +409,19 @@ Invoke-Checked $DemoPython @((Join-Path $PSScriptRoot 'bootstrap.py')) $runDirec
 $backendEnvironment.Remove('SAFEHARNESS_DEMO_ADMIN_PASSWORD')
 $backendEnvironment.Remove('SAFEHARNESS_DEMO_TENANT_ID')
 
+# Optional deployment-posture summary (M11 posture_check): advisory, print-only,
+# never gates startup. Enable with SAFEHARNESS_POSTURE_REPORT=1/true/yes. The
+# scan sees the backend's effective environment (same hashtable the process
+# gets) via Invoke-WithEnvironment — secrets are applied in-memory only.
+if (("$env:SAFEHARNESS_POSTURE_REPORT").Trim().ToLower() -in @('1', 'true', 'yes')) {
+    Write-Step 'Deployment posture summary (advisory)'
+    $postureEnvironment = $backendEnvironment.Clone()
+    $postureEnvironment['PYTHONPATH'] = "$($RepoRoot)\src;$RepoRoot"
+    Invoke-WithEnvironment $postureEnvironment {
+        & $DemoPython -m safeharness.posture_check | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 try {
     Write-Step 'Start simulated Agent Communication Gateway'
     Start-DemoProcess `
