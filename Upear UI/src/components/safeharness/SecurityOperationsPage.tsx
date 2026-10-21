@@ -748,6 +748,33 @@ function PolicyRulesCard() {
                 readOnly
                 autoSize={{ minRows: 4, maxRows: 12 }}
               />
+              {(aiResult.chain_draft?.length ?? 0) > 0 && (
+                <>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{'链式规则草稿（两步工具序列；与规则一并人工核对）'}</Typography.Text>
+                  <Input.TextArea
+                    value={JSON.stringify(aiResult.chain_draft, null, 2)}
+                    readOnly
+                    autoSize={{ minRows: 3, maxRows: 8 }}
+                  />
+                </>
+              )}
+              {aiResult.regression && (
+                <Table
+                  size="small"
+                  rowKey="name"
+                  columns={[
+                    { title: '指标', dataIndex: 'name' },
+                    { title: '数值', dataIndex: 'value' },
+                  ]}
+                  dataSource={[
+                    { name: '攻击集样本数', value: aiResult.regression.total },
+                    { name: '基线命中', value: aiResult.regression.baseline_caught },
+                    { name: '草稿命中', value: aiResult.regression.draft_caught },
+                    { name: '逃逸', value: aiResult.regression.escapes.length },
+                  ]}
+                  pagination={false}
+                />
+              )}
               <Alert type="warning" showIcon message="草稿仅供参考：请人工核对正则与理由后，点“填入编辑器”再手动保存才会热生效。" />
             </>
           )}

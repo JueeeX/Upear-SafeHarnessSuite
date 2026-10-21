@@ -130,10 +130,31 @@ export interface SafeHarnessPolicyRulesTestResult {
   rule_count: number;
 }
 
+export interface SafeHarnessPolicyChainRule {
+  name: string;
+  first: string;
+  then: string;
+  max_gap?: number;
+  severity?: string;
+  reason?: string;
+  first_tags?: string[];
+  then_tags?: string[];
+}
+
+export interface SafeHarnessDraftRegression {
+  total: number;
+  baseline_caught: number;
+  draft_caught: number;
+  escapes: string[];
+  per_rule: Array<{ name: string; fired: number }>;
+}
+
 export interface SafeHarnessPolicyRulesDraftResult {
   draft: SafeHarnessPolicyRule[];
+  chain_draft?: SafeHarnessPolicyChainRule[];
   validation_errors: string[];
   sample_results: Array<{ text: string; hit: boolean; matched_rule: string | null }>;
+  regression?: SafeHarnessDraftRegression | null;
   model: string;
   notice: string;
 }
@@ -388,7 +409,7 @@ export const safeharnessApi = {
   },
   getPolicies: (signal?: AbortSignal) => request<SafeHarnessPolicyResponse>(ROUTES.policies, { signal }),
   getPolicyRules: (signal?: AbortSignal) => request<SafeHarnessPolicyRulesState>(ROUTES.policyRules, { signal }),
-  putPolicyRules: (body: { enabled: boolean; rules: SafeHarnessPolicyRule[] }) => request<SafeHarnessPolicyRulesState>(ROUTES.policyRules, {
+  putPolicyRules: (body: { enabled: boolean; rules: SafeHarnessPolicyRule[]; chains?: SafeHarnessPolicyChainRule[] }) => request<SafeHarnessPolicyRulesState>(ROUTES.policyRules, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
