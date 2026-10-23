@@ -1,6 +1,6 @@
 {
   "name": "production",
-  "description": "与 hardened 同守卫姿态，并以 --strict 门禁启动：姿态校验出现任何 WARN/FAIL（含基线偏离）即拒绝启动五进程。通信网关配置对由启动器原生注入，基线仅作确认。",
+  "description": "与 hardened 同守卫与健康红绿灯姿态，并以 --strict 门禁启动：姿态校验出现任何 WARN/FAIL（含基线偏离）即拒绝启动五进程。通信网关配置对由启动器原生注入，基线仅作确认。",
   "env": {
     "SAFEHARNESS_MCP_POLICY_GUARD": "1",
     "SAFEHARNESS_MCP_DESCRIPTOR_ENFORCE": "1",
@@ -8,9 +8,18 @@
     "SAFEHARNESS_EXTERNAL_OUTPUT_GUARD": "1",
     "SAFEHARNESS_EXTERNAL_OUTPUT_ENFORCE": "1",
     "SAFEHARNESS_AUDIT_REDACTION": "1",
-    "SAFEHARNESS_INFORM_RULES_WATCH": "1"
+    "SAFEHARNESS_INFORM_RULES_WATCH": "1",
+    "SAFEHARNESS_HEALTH_DETAIL": "1"
   },
-  "gateway_env": {},
+  "gateway_env": {
+    "SAFEHARNESS_HEALTH_DETAIL": "1"
+  },
+  "tool_gateway_env": {
+    "SAFEHARNESS_HEALTH_DETAIL": "1"
+  },
+  "admin_ui_env": {
+    "SAFEHARNESS_HEALTH_DETAIL": "1"
+  },
   "secrets": {
     "SAFEHARNESS_DEMO_SIGNING_KEY": "demoSigningKey"
   },

@@ -28,10 +28,22 @@ PROFILES_PACKAGE_DIR = Path(__file__).resolve().parent / "posture_profiles"
 TAG_PROFILE_BASELINE = "Profile 基线偏离（按基线收紧，env 生效方式随底层项）"
 
 _SCHEMA_KEYS = frozenset(
-    {"name", "description", "env", "gateway_env", "secrets", "expect", "strict", "gate", "report"}
+    {
+        "name",
+        "description",
+        "env",
+        "gateway_env",
+        "tool_gateway_env",
+        "admin_ui_env",
+        "secrets",
+        "expect",
+        "strict",
+        "gate",
+        "report",
+    }
 )
 _BOOL_KEYS = ("strict", "gate", "report")
-_MAP_KEYS = ("env", "gateway_env", "secrets", "expect")
+_MAP_KEYS = ("env", "gateway_env", "tool_gateway_env", "admin_ui_env", "secrets", "expect")
 _SEVERITY_RANK = {OK: 0, WARN: 1, FAIL: 2}
 
 

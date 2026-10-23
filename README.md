@@ -39,6 +39,7 @@ Upear SafeHarness Suite 的核心判断（源自 SafeHarness 论文并在此实�
 | 自定义智能体热接入 | 运营者经 API/UI 注册自定义外部智能体卡（卡片是数据、框架限代码侧白名单），下一请求即生效，安全链路与内置一致 |
 | 部署姿态校验 | `python -m safeharness.posture_check` 只读扫描守卫开关与配置对（建议性告警，绝不打印密钥值，可进 CI） |
 | Profile 化部署姿态 | 具名 Profile（demo/hardened/production）= JSON 数据基线：启动器按 Profile 注入守卫开关与现场生成密钥，`--profile` 按基线校验（偏离追加 FAIL），production 以 `--strict` 门禁启动；默认 demo 逐位一致 |
+| 可观测红绿灯一期 | 健康面组件红绿灯（`SAFEHARNESS_HEALTH_DETAIL` 门控默认关）+ `python -m safeharness.deploy_patrol` 三合一巡检（姿态 + 审计 DENY 速率异常 + 健康探针，飞书 webhook 通知可挂 OS 计划任务）；审计库/表缺失跳过不误报，密钥与 payload 零上报告警 |
 | 租户隔离一期 | 统一租户解析贯穿身份上下文、文件/记忆/进化结算属主校验（含匿名下载 401 收紧）、租户配额框架（账号容量 + 每日对话运行，缺席=无限制） |
 | FSM 规划安全守卫 | 规划输入逐条语义验证；LLM 只提案，执行权在确定性编译的代码 |
 

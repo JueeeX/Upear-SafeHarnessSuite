@@ -90,12 +90,16 @@ function Invoke-WithEnvironment(
 
 # Apply one env map of the loaded posture profile ("env" / "gateway_env") onto
 # a launcher hashtable. No-op for demo (all maps empty). Values are strings.
+# Missing maps (older profile files) are tolerated so StrictMode never turns a
+# profile-schema extension into a launcher crash.
 function Add-ProfileEnv(
     [hashtable]$Target,
     $ProfileData,
     [string]$MapKey
 ) {
-    foreach ($prop in $ProfileData.$MapKey.PSObject.Properties) {
+    $property = $ProfileData.PSObject.Properties[$MapKey]
+    if ($null -eq $property) { return }
+    foreach ($prop in $property.Value.PSObject.Properties) {
         $Target[$prop.Name] = [string]$prop.Value
     }
 }
@@ -106,7 +110,9 @@ function Add-ProfileSecrets(
     [hashtable]$Target,
     $ProfileData
 ) {
-    foreach ($prop in $ProfileData.secrets.PSObject.Properties) {
+    $property = $ProfileData.PSObject.Properties['secrets']
+    if ($null -eq $property) { return }
+    foreach ($prop in $property.Value.PSObject.Properties) {
         $secretName = [string]$prop.Value
         if (-not $PostureSecrets.ContainsKey($secretName)) {
             throw "Posture profile '$DeploymentProfile' references unknown launcher secret '$secretName'"
@@ -572,42 +578,46 @@ try {
     Wait-Http 'gateway' 'http://127.0.0.1:38200/health' @{ Authorization = "Bearer $supervisorKey" }
 
     Write-Step 'Start SafeHarness loopback Admin UI'
+    $adminUiEnvironment = @{
+        PYTHONPATH = $parentPythonPath
+        PYTHONDONTWRITEBYTECODE = '1'
+        SAFEHARNESS_ADMIN_UI_UPSTREAM_URL = 'http://127.0.0.1:38200'
+        SAFEHARNESS_ADMIN_UI_ADMIN_KEY = $coordinationAdminKey
+        SAFEHARNESS_ADMIN_UI_ACCESS_TOKEN = $uiAccessToken
+        SAFEHARNESS_ADMIN_UI_MUTATION_KEY = $mutationKey
+        SAFEHARNESS_ADMIN_UI_AUDIT_DATABASE = ''
+    }
+    Add-ProfileEnv $adminUiEnvironment $PostureProfile 'admin_ui_env'
     Start-DemoProcess `
         'admin-ui' `
         $RootPython `
         @('-m', 'safeharness.admin_ui.server', '--config', $emptyEnvFile, '--host', '127.0.0.1', '--port', '38308') `
         $RepoRoot `
-        @{
-            PYTHONPATH = $parentPythonPath
-            PYTHONDONTWRITEBYTECODE = '1'
-            SAFEHARNESS_ADMIN_UI_UPSTREAM_URL = 'http://127.0.0.1:38200'
-            SAFEHARNESS_ADMIN_UI_ADMIN_KEY = $coordinationAdminKey
-            SAFEHARNESS_ADMIN_UI_ACCESS_TOKEN = $uiAccessToken
-            SAFEHARNESS_ADMIN_UI_MUTATION_KEY = $mutationKey
-            SAFEHARNESS_ADMIN_UI_AUDIT_DATABASE = ''
-        } `
+        $adminUiEnvironment `
         $logDirectory | Out-Null
     Wait-Http 'admin-ui' 'http://127.0.0.1:38308/api/overview' @{ 'X-SafeHarness-UI-Token' = $uiAccessToken }
 
     Write-Step 'Start SafeHarness Tool Gateway (central authorization + receipt verification)'
+    $toolGatewayEnvironment = @{
+        PYTHONPATH = $backendPythonPath
+        PYTHONDONTWRITEBYTECODE = '1'
+        DATABASE_URL = $databaseUrl
+        SAFEHARNESS_ENFORCEMENT_RECEIPT_MODE = 'hmac'
+        SAFEHARNESS_ENFORCEMENT_RECEIPT_SIGNING_KEY = $enforcementReceiptKey
+        SAFEHARNESS_TOOL_GATEWAY_CAPABILITY_KEY = $gatewayCapabilityKey
+        SAFEHARNESS_TOOL_GATEWAY_API_KEY = $gatewayApiKey
+        SAFEHARNESS_TOOL_GATEWAY_HOST = '127.0.0.1'
+        SAFEHARNESS_TOOL_GATEWAY_PORT = '38310'
+        SAFEHARNESS_DEMO_TENANT_ID = 'fiberhome-demo'
+        SAFEHARNESS_COMMUNICATION_AGENT_ID = 'main_agent'
+    }
+    Add-ProfileEnv $toolGatewayEnvironment $PostureProfile 'tool_gateway_env'
     Start-DemoProcess `
         'tool-gateway' `
         $DemoPython `
         @('-m', 'tool_gateway_main') `
         $RepoRoot `
-        @{
-            PYTHONPATH = $backendPythonPath
-            PYTHONDONTWRITEBYTECODE = '1'
-            DATABASE_URL = $databaseUrl
-            SAFEHARNESS_ENFORCEMENT_RECEIPT_MODE = 'hmac'
-            SAFEHARNESS_ENFORCEMENT_RECEIPT_SIGNING_KEY = $enforcementReceiptKey
-            SAFEHARNESS_TOOL_GATEWAY_CAPABILITY_KEY = $gatewayCapabilityKey
-            SAFEHARNESS_TOOL_GATEWAY_API_KEY = $gatewayApiKey
-            SAFEHARNESS_TOOL_GATEWAY_HOST = '127.0.0.1'
-            SAFEHARNESS_TOOL_GATEWAY_PORT = '38310'
-            SAFEHARNESS_DEMO_TENANT_ID = 'fiberhome-demo'
-            SAFEHARNESS_COMMUNICATION_AGENT_ID = 'main_agent'
-        } `
+        $toolGatewayEnvironment `
         $logDirectory | Out-Null
     Wait-Http 'tool-gateway' 'http://127.0.0.1:38310/health' @{ Authorization = "Bearer $gatewayApiKey" }
 
