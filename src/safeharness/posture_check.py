@@ -78,6 +78,7 @@ GUARD_FLAGS = (
     ("SAFEHARNESS_TOOL_GATEWAY_DESCRIPTOR_ENFORCE", "网关侧工具描述注入扫描仅告警不剔除", TAG_RESTART_PROCESS),
     ("SAFEHARNESS_EXTERNAL_OUTPUT_GUARD", "外部智能体回复无输出侧语义复查", TAG_NEXT_REQUEST),
     ("SAFEHARNESS_EXTERNAL_OUTPUT_ENFORCE", "输出守卫仅 warn 模式（复查不过仍照常返回回复）", TAG_NEXT_REQUEST),
+    ("SAFEHARNESS_RUNNER_SANDBOX", "外部智能体 runner 无进程级沙箱隔离（smolagents 生成代码在平台进程内执行）", TAG_NEXT_REQUEST),
     ("SAFEHARNESS_AUDIT_REDACTION", "审计账本不脱敏（payload 摘要/键名掩码关闭）", TAG_NEXT_REQUEST),
     ("SAFEHARNESS_INFORM_RULES_WATCH", "文件层规则改动需重启才生效", TAG_RULES_DIR),
     ("MEM0_ENABLED", "跨会话长期记忆关闭（外部智能体仅会话窗记忆）", TAG_RESTART_BACKEND),
