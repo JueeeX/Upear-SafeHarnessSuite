@@ -29,6 +29,7 @@ from safeharness.gateway.protocol import (
     success_response,
 )
 from safeharness.gateway.telemetry import GatewayRequestObservation, GatewayTelemetry
+from safeharness.health_detail import health_detail_enabled
 from safeharness.policies._schema import validate_arguments
 from safeharness.ports import (
     EnforcementReceiptVerification,
@@ -106,15 +107,29 @@ class ToolGatewayApplication:
         self.workload_identity = workload_identity
 
     async def health(self) -> tuple[int, dict[str, Any]]:
+        detail = health_detail_enabled()
+        components: dict[str, Any] = {}
         try:
-            for check in self.readiness_checks:
+            for index, check in enumerate(self.readiness_checks):
                 result = check()
                 result = await result if inspect.isawaitable(result) else result
+                components[f"readiness_{index}"] = bool(result)
                 if not result:
                     return _gateway_not_ready()
+            if detail:
+                components["receipt_verifier"] = self.enforcement_receipt_verifier is not None
+                audit_health = getattr(self.audit_sink, "health", None)
+                if audit_health is not None:
+                    components["audit_sink"] = bool(await audit_health())
         except Exception as exc:
             _log_backend_failure("Gateway dependency readiness check failed", exc)
             return _gateway_not_ready()
+        if detail:
+            return HTTPStatus.OK, success_response(
+                service="safeharness-tool-gateway",
+                status="ready",
+                components=components,
+            )
         return HTTPStatus.OK, success_response(
             service="safeharness-tool-gateway",
             status="ready",

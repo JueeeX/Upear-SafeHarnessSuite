@@ -43,6 +43,7 @@ from safeharness.communication.store import CommunicationStore
 from safeharness.communication.persistence import PersistentCoordinationControlPlane
 from safeharness.communication.rate_limit import CommunicationRateLimiter
 from safeharness.gateway.telemetry import GatewayRequestObservation, GatewayTelemetry
+from safeharness.health_detail import health_detail_enabled
 
 
 logger = logging.getLogger(__name__)
@@ -82,20 +83,32 @@ class AgentCommunicationApplication:
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     async def health(self) -> tuple[int, dict[str, Any]]:
+        detail = health_detail_enabled()
+        components: dict[str, bool] = {}
         try:
-            if not await self.store.health():
+            components["message_store"] = bool(await self.store.health())
+            if not components["message_store"]:
                 return _communication_not_ready()
             state_store = getattr(self.control_plane, "state_store", None)
-            if state_store is not None and not state_store.health():
-                return _communication_not_ready()
-            for check in self.readiness_checks:
+            if state_store is not None:
+                components["state_store"] = bool(state_store.health())
+                if not components["state_store"]:
+                    return _communication_not_ready()
+            for index, check in enumerate(self.readiness_checks):
                 result = check()
                 result = await result if inspect.isawaitable(result) else result
+                components[f"readiness_{index}"] = bool(result)
                 if not result:
                     return _communication_not_ready()
         except Exception as exc:
             _log_failure("Communication gateway readiness check failed", exc)
             return _communication_not_ready()
+        if detail:
+            return HTTPStatus.OK, success_response(
+                service="safeharness-agent-communication-gateway",
+                status="ready",
+                components=components,
+            )
         return HTTPStatus.OK, success_response(
             service="safeharness-agent-communication-gateway",
             status="ready",

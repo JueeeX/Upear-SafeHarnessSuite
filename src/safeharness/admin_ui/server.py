@@ -22,6 +22,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from safeharness.backends.sqlite import SQLiteAuditReader
 from safeharness.communication.protocol import strict_json_loads
+from safeharness.health_detail import health_detail_enabled
 
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,9 @@ class AdminUIRequestHandler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         if parsed.path in _ASSETS:
             self._serve_asset(parsed.path)
+            return
+        if parsed.path == "/health":
+            self._write_health()
             return
         if parsed.path == "/api/overview":
             if not self._require_browser_token():
@@ -421,6 +425,23 @@ class AdminUIRequestHandler(BaseHTTPRequestHandler):
             HTTPStatus.METHOD_NOT_ALLOWED,
             _error("method_not_allowed", "The HTTP method is not supported."),
         )
+
+    def _write_health(self) -> None:
+        # Unauthenticated and content-free: configuration indicators only,
+        # never key values. Component detail follows the shared opt-in.
+        payload: dict[str, Any] = {
+            "ok": True,
+            "service": "safeharness-admin-ui",
+            "upstream_configured": bool(self.server.settings.configured_upstream_url),
+        }
+        if health_detail_enabled():
+            payload["components"] = {
+                "admin_key": bool(self.server.settings.admin_key),
+                "access_token": bool(self.server.settings.access_token),
+                "mutation_key": bool(self.server.settings.mutation_key),
+                "audit_database": bool(self.server.settings.audit_database),
+            }
+        self._write_json(HTTPStatus.OK, payload)
 
     def _write_json(self, status: int | HTTPStatus, payload: dict[str, Any]) -> None:
         self._write(
