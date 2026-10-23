@@ -76,6 +76,7 @@ safeharness = [
   "admin_ui/static/*.css",
   "admin_ui/static/*.html",
   "admin_ui/static/*.js",
+  "posture_profiles/*.json",
 ]
 
 [tool.pytest.ini_options]

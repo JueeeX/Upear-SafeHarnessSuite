@@ -1,0 +1,32 @@
+{
+  "name": "hardened",
+  "description": "演示拓扑 + 守卫全开：MCP 策略守卫、两侧描述注入 enforce、外部智能体输出守卫 enforce、审计脱敏、规则热重载、真实能力签名材料（DEMO_SIGNING_KEY 由启动器现场生成，经 secrets 引用注入，不落盘）。基线要求九守卫 + 签名材料全 OK；仅建议性报告，不阻止启动。",
+  "env": {
+    "SAFEHARNESS_MCP_POLICY_GUARD": "1",
+    "SAFEHARNESS_MCP_DESCRIPTOR_ENFORCE": "1",
+    "SAFEHARNESS_TOOL_GATEWAY_DESCRIPTOR_ENFORCE": "1",
+    "SAFEHARNESS_EXTERNAL_OUTPUT_GUARD": "1",
+    "SAFEHARNESS_EXTERNAL_OUTPUT_ENFORCE": "1",
+    "SAFEHARNESS_AUDIT_REDACTION": "1",
+    "SAFEHARNESS_INFORM_RULES_WATCH": "1"
+  },
+  "gateway_env": {},
+  "secrets": {
+    "SAFEHARNESS_DEMO_SIGNING_KEY": "demoSigningKey"
+  },
+  "expect": {
+    "SAFEHARNESS_PROTECTED_CHAT_ENABLED": "OK",
+    "SAFEHARNESS_MCP_POLICY_GUARD": "OK",
+    "SAFEHARNESS_MCP_DESCRIPTOR_ENFORCE": "OK",
+    "SAFEHARNESS_TOOL_GATEWAY_DESCRIPTOR_ENFORCE": "OK",
+    "SAFEHARNESS_EXTERNAL_OUTPUT_GUARD": "OK",
+    "SAFEHARNESS_EXTERNAL_OUTPUT_ENFORCE": "OK",
+    "SAFEHARNESS_AUDIT_REDACTION": "OK",
+    "SAFEHARNESS_INFORM_RULES_WATCH": "OK",
+    "MEM0_ENABLED": "OK",
+    "SAFEHARNESS_DEMO_SIGNING_KEY": "OK"
+  },
+  "strict": false,
+  "gate": false,
+  "report": true
+}

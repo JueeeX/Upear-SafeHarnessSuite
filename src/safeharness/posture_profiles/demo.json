@@ -1,0 +1,11 @@
+{
+  "name": "demo",
+  "description": "本地演示默认姿态：可选守卫全部保持默认关，仅建议性报告，不做基线收紧。与不指定 Profile 的行为逐位一致。",
+  "env": {},
+  "gateway_env": {},
+  "secrets": {},
+  "expect": {},
+  "strict": false,
+  "gate": false,
+  "report": false
+}

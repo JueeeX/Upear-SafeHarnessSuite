@@ -138,3 +138,21 @@ def test_demo_signing_fallback_and_placeholder_embed_key():
 def test_severities_are_the_defined_three():
     findings = collect_findings({})
     assert {f.severity for f in findings} <= {FAIL, WARN, OK}
+
+
+def test_bff_pair_uses_runtime_env_names():
+    # settings.py consumes SAFEHARNESS_BFF_UI_ACCESS_TOKEN / SAFEHARNESS_BFF_MUTATION_KEY.
+    complete = collect_findings(
+        {
+            "SAFEHARNESS_BFF_ADMIN_UI_URL": "http://127.0.0.1:38308",
+            "SAFEHARNESS_BFF_UI_ACCESS_TOKEN": "token-value-at-least-32-chars-long!",
+            "SAFEHARNESS_BFF_MUTATION_KEY": "mutation-value-at-least-32-chars-long!",
+        }
+    )
+    bff = [f for f in complete if "SAFEHARNESS_BFF_ADMIN_UI_URL" in f.envs]
+    assert bff and bff[0].severity == OK
+
+    incomplete = collect_findings({"SAFEHARNESS_BFF_ADMIN_UI_URL": "http://127.0.0.1:38308"})
+    bff = [f for f in incomplete if "SAFEHARNESS_BFF_MUTATION_KEY" in f.envs]
+    assert bff and bff[0].severity == FAIL
+    assert set(bff[0].envs) == {"SAFEHARNESS_BFF_UI_ACCESS_TOKEN", "SAFEHARNESS_BFF_MUTATION_KEY"}

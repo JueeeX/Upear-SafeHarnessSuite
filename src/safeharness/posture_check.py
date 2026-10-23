@@ -8,6 +8,12 @@ checker never mutates anything and exit codes only matter to whoever (or
 whatever CI) invokes it.
 
     python -m safeharness.posture_check [--format text|json] [--env-file PATH] [--strict]
+                                        [--profile demo|hardened|production]
+
+With ``--profile NAME`` the scan is additionally measured against that
+profile's baseline (see ``safeharness.posture_profile``): every env the
+baseline pins must measure at least as good as the baseline allows, and each
+violation appends a FAIL deviation finding — original findings stay untouched.
 
 Exit codes: 0 = clean or warnings only; 1 = at least one FAIL (with
 ``--strict``: any warning counts); 2 = the checker itself failed to run.
@@ -86,8 +92,8 @@ SECRET_MIN_LENGTHS = (
     "SAFEHARNESS_ADMIN_UI_ADMIN_KEY",
     "SAFEHARNESS_ADMIN_UI_ACCESS_TOKEN",
     "SAFEHARNESS_ADMIN_UI_MUTATION_KEY",
-    "SAFEHARNESS_BFF_ADMIN_UI_MUTATION_KEY",
-    "SAFEHARNESS_BFF_ADMIN_UI_ACCESS_TOKEN",
+    "SAFEHARNESS_BFF_MUTATION_KEY",
+    "SAFEHARNESS_BFF_UI_ACCESS_TOKEN",
 )
 
 DEMO_SIGNING_FALLBACK = "local-demo-only-signing-key-change-before-production"
@@ -237,7 +243,7 @@ def _check_pairs(env: dict[str, str]) -> list[Finding]:
     if _set(bff_url):
         missing = [
             name
-            for name in ("SAFEHARNESS_BFF_ADMIN_UI_ACCESS_TOKEN", "SAFEHARNESS_BFF_ADMIN_UI_MUTATION_KEY")
+            for name in ("SAFEHARNESS_BFF_UI_ACCESS_TOKEN", "SAFEHARNESS_BFF_MUTATION_KEY")
             if not _set(env.get(name))
         ]
         if missing:
@@ -305,13 +311,18 @@ def _check_paths(env: dict[str, str]) -> list[Finding]:
     return out
 
 
-def collect_findings(env: dict[str, str]) -> list[Finding]:
+def collect_findings(env: dict[str, str], *, profile: dict | None = None) -> list[Finding]:
     findings: list[Finding] = []
     findings.extend(_check_guards(env))
     findings.extend(_check_pairs(env))
     findings.extend(_check_strength(env))
     findings.extend(_check_weak_material(env))
     findings.extend(_check_paths(env))
+    if profile:
+        # Imported here: posture_profile imports this module at top level.
+        from safeharness.posture_profile import baseline_deviations
+
+        findings.extend(baseline_deviations(findings, profile))
     return findings
 
 
@@ -357,7 +368,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--format", choices=("text", "json"), default="text")
     parser.add_argument("--env-file", default=None, help="从 KEY=VALUE 文件读快照（默认读进程环境）")
     parser.add_argument("--strict", action="store_true", help="WARN 也计入失败（退出码 1）")
+    parser.add_argument("--profile", default=None, help="按具名 Profile 基线校验（偏离基线追加 FAIL）")
     args = parser.parse_args(argv)
+
+    profile = None
+    if args.profile:
+        # Imported here: posture_profile imports this module at top level.
+        from safeharness.posture_profile import ProfileError, load_posture_profile
+
+        try:
+            profile = load_posture_profile(args.profile)
+        except ProfileError as exc:
+            print(f"safeharness-posture-check: {exc}", file=sys.stderr)
+            return 2
 
     try:
         env = _parse_env_file(args.env_file) if args.env_file else dict(os.environ)
@@ -365,16 +388,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"safeharness-posture-check: 无法读取 env 文件：{exc}", file=sys.stderr)
         return 2
 
-    findings = collect_findings(env)
+    findings = collect_findings(env, profile=profile)
     fails = sum(1 for f in findings if f.severity == FAIL)
     warns = sum(1 for f in findings if f.severity == WARN)
+    strict = args.strict or bool(profile and profile.get("strict"))
 
     if args.format == "json":
         print(
             json.dumps(
                 {
                     "findings": [f.to_dict() for f in findings],
-                    "summary": {"fail": fails, "warn": warns, "ok": len(findings) - fails - warns},
+                    "summary": {
+                        "fail": fails,
+                        "warn": warns,
+                        "ok": len(findings) - fails - warns,
+                        "profile": args.profile,
+                    },
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -385,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if fails:
         return 1
-    if args.strict and warns:
+    if strict and warns:
         return 1
     return 0
 
