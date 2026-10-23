@@ -1,7 +1,12 @@
 ﻿[CmdletBinding()]
 param(
     [string]$ImportRun,
-    [switch]$SkipChecks
+    [switch]$SkipChecks,
+    # Named deployment-posture profile (data: src/safeharness/posture_profiles/*.json).
+    # demo = default launcher behaviour, bit-identical; hardened = guards on +
+    # baseline report; production = hardened + --strict startup gate.
+    [ValidateSet('demo', 'hardened', 'production')]
+    [string]$DeploymentProfile = 'demo'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +26,16 @@ $DemoEnvironment = Join-Path $env:LOCALAPPDATA 'SUMC\product-demo\venv'
 $DemoPython = Join-Path $DemoEnvironment 'Scripts\python.exe'
 $DependencyStamp = Join-Path $DemoEnvironment '.requirements.sha256'
 $Processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+
+# Load the deployment-posture profile early so a missing/malformed file fails
+# fast, before any process or check runs. Profiles are data only (see
+# safeharness.posture_profile); secrets are referenced by launcher variable
+# name and injected in-memory at launch time — never stored in the JSON.
+$PostureProfilePath = Join-Path $RepoRoot "src\safeharness\posture_profiles\$DeploymentProfile.json"
+if (-not (Test-Path -LiteralPath $PostureProfilePath)) {
+    throw "Deployment posture profile '$DeploymentProfile' not found: $PostureProfilePath"
+}
+$PostureProfile = Get-Content -LiteralPath $PostureProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json
 
 function Write-Step([string]$Message) {
     Write-Host "`n== $Message ==" -ForegroundColor Cyan
@@ -70,6 +85,33 @@ function Invoke-WithEnvironment(
         foreach ($name in $Environment.Keys) {
             [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
         }
+    }
+}
+
+# Apply one env map of the loaded posture profile ("env" / "gateway_env") onto
+# a launcher hashtable. No-op for demo (all maps empty). Values are strings.
+function Add-ProfileEnv(
+    [hashtable]$Target,
+    $ProfileData,
+    [string]$MapKey
+) {
+    foreach ($prop in $ProfileData.$MapKey.PSObject.Properties) {
+        $Target[$prop.Name] = [string]$prop.Value
+    }
+}
+
+# Resolve profile "secrets" (env name -> launcher secret variable name) to the
+# generated values in $PostureSecrets. Values exist only in process memory.
+function Add-ProfileSecrets(
+    [hashtable]$Target,
+    $ProfileData
+) {
+    foreach ($prop in $ProfileData.secrets.PSObject.Properties) {
+        $secretName = [string]$prop.Value
+        if (-not $PostureSecrets.ContainsKey($secretName)) {
+            throw "Posture profile '$DeploymentProfile' references unknown launcher secret '$secretName'"
+        }
+        $Target[$prop.Name] = $PostureSecrets[$secretName]
     }
 }
 
@@ -352,6 +394,25 @@ $probeKey = New-Secret 32
 $enforcementReceiptKey = New-Secret 48
 $gatewayCapabilityKey = New-Secret 48
 $gatewayApiKey = New-Secret 48
+# Dedicated signing material for posture profiles (hardened/production inject
+# it as SAFEHARNESS_DEMO_SIGNING_KEY so the NOC side stops falling back to the
+# hardcoded demo key). Generated unconditionally; demo never injects it, so
+# the default run is unchanged.
+$demoSigningKey = New-Secret 48
+# Launcher secret name -> value, referenced by posture-profile "secrets".
+$PostureSecrets = @{
+    demoSigningKey = $demoSigningKey
+    coordinationAdminKey = $coordinationAdminKey
+    coordinationSigningKey = $coordinationSigningKey
+    supervisorKey = $supervisorKey
+    diagnosisKey = $diagnosisKey
+    uiAccessToken = $uiAccessToken
+    mutationKey = $mutationKey
+    probeKey = $probeKey
+    enforcementReceiptKey = $enforcementReceiptKey
+    gatewayCapabilityKey = $gatewayCapabilityKey
+    gatewayApiKey = $gatewayApiKey
+}
 Set-Content -Path (Join-Path $runDirectory 'probe-key') -Value $probeKey -NoNewline
 # Agent-facing gateway credential, same trust class as probe-key. The gateway
 # capability signing key is server-only material and is deliberately NOT
@@ -409,45 +470,104 @@ Invoke-Checked $DemoPython @((Join-Path $PSScriptRoot 'bootstrap.py')) $runDirec
 $backendEnvironment.Remove('SAFEHARNESS_DEMO_ADMIN_PASSWORD')
 $backendEnvironment.Remove('SAFEHARNESS_DEMO_TENANT_ID')
 
-# Optional deployment-posture summary (M11 posture_check): advisory, print-only,
-# never gates startup. Enable with SAFEHARNESS_POSTURE_REPORT=1/true/yes. The
-# scan sees the backend's effective environment (same hashtable the process
-# gets) via Invoke-WithEnvironment — secrets are applied in-memory only.
-if (("$env:SAFEHARNESS_POSTURE_REPORT").Trim().ToLower() -in @('1', 'true', 'yes')) {
-    Write-Step 'Deployment posture summary (advisory)'
-    $postureEnvironment = $backendEnvironment.Clone()
-    $postureEnvironment['PYTHONPATH'] = "$($RepoRoot)\src;$RepoRoot"
-    Invoke-WithEnvironment $postureEnvironment {
-        & $DemoPython -m safeharness.posture_check | ForEach-Object { Write-Host "  $_" }
+# BFF-only env additions, extracted so the non-demo posture scan can see the
+# backend's complete effective environment. Merged into $backendEnvironment
+# right before the backend process starts (same merge the inline literal did).
+$bffEnvironment = @{
+    DEPLOY_PROFILE = ''
+    REDIS_URL = 'memory://'
+    SESSION_STORE = 'memory'
+    AUTH_MODE = 'session'
+    SSO_LOGIN_MODE = 'local'
+    LOCAL_AUTH_ENABLED = 'true'
+    STORAGE_TYPE = 'local'
+    STORAGE_PATH = $storageDirectory
+    SANDBOX_PROVIDER = 'script_runner'
+    SANDBOX_TOOLS_ENABLED = 'false'
+    PORT = '3001'
+    BACKEND_PORT = '3001'
+    STARTUP_PRELOAD_ENABLED = 'false'
+    MCP_WARMUP_ENABLED = 'false'
+    SAFEHARNESS_BFF_ADMIN_UI_URL = 'http://127.0.0.1:38308'
+    SAFEHARNESS_BFF_UI_ACCESS_TOKEN = $uiAccessToken
+    SAFEHARNESS_BFF_MUTATION_KEY = $mutationKey
+    SAFEHARNESS_PROTECTED_CHAT_ENABLED = 'true'
+    SAFEHARNESS_ENABLE_FSM_PLANNING = 'true'
+    SAFEHARNESS_PROTECTED_CHAT_SYSTEM_PROMPT = $protectedChatSystemPrompt
+    SUMC_SECURITY_REPORT_PATH = $securityReport
+}
+
+# Posture-profile env additions (guards) + launcher secrets. Empty for the
+# demo profile — the backend environment stays bit-identical.
+Add-ProfileEnv $backendEnvironment $PostureProfile 'env'
+Add-ProfileSecrets $backendEnvironment $PostureProfile
+
+# Deployment-posture summary / gate (M11 posture_check, P2.1 profiles). The
+# demo profile keeps the original advisory behaviour: caller-env triggered,
+# backend env only, print-only. hardened/production always run with the
+# profile baseline and the BFF-complete environment; production additionally
+# gates startup (--strict, any WARN/FAIL aborts before any process starts).
+# The scan never sees secret values — only set/unset and length buckets.
+if (("$env:SAFEHARNESS_POSTURE_REPORT").Trim().ToLower() -in @('1', 'true', 'yes') -or [bool]$PostureProfile.report) {
+    if ($DeploymentProfile -eq 'demo') {
+        Write-Step 'Deployment posture summary (advisory)'
+        $postureEnvironment = $backendEnvironment.Clone()
+        $postureEnvironment['PYTHONPATH'] = "$($RepoRoot)\src;$RepoRoot"
+        Invoke-WithEnvironment $postureEnvironment {
+            & $DemoPython -m safeharness.posture_check | ForEach-Object { Write-Host "  $_" }
+        }
+    }
+    else {
+        Write-Step "Deployment posture check (profile: $DeploymentProfile)"
+        $postureEnvironment = $backendEnvironment.Clone()
+        foreach ($key in $bffEnvironment.Keys) { $postureEnvironment[$key] = $bffEnvironment[$key] }
+        $postureEnvironment['PYTHONPATH'] = "$($RepoRoot)\src;$RepoRoot"
+        $postureArgs = @('-m', 'safeharness.posture_check', '--format', 'text', '--profile', $DeploymentProfile)
+        if ([bool]$PostureProfile.strict) { $postureArgs += '--strict' }
+        Invoke-WithEnvironment $postureEnvironment {
+            & $DemoPython @postureArgs | ForEach-Object { Write-Host "  $_" }
+        }
+        if ($LASTEXITCODE -ne 0) {
+            if ([bool]$PostureProfile.gate) {
+                throw "Deployment posture gate FAILED for profile '$DeploymentProfile' (exit $LASTEXITCODE). Fix the findings above or choose a profile matching this deployment. Startup aborted; no demo process was started."
+            }
+            Write-Host '  Posture findings present (advisory profile) — continuing.' -ForegroundColor Yellow
+        }
+        else {
+            Write-Host '  Posture gate passed.' -ForegroundColor Green
+        }
     }
 }
 
 try {
     Write-Step 'Start simulated Agent Communication Gateway'
+    $gatewayEnvironment = @{
+        PYTHONPATH = $parentPythonPath
+        PYTHONDONTWRITEBYTECODE = '1'
+        SAFEHARNESS_COMMUNICATION_GATEWAY_ENV_FILE = $emptyEnvFile
+        SAFEHARNESS_COMMUNICATION_GATEWAY_HOST = '127.0.0.1'
+        SAFEHARNESS_COMMUNICATION_GATEWAY_PORT = '38200'
+        SAFEHARNESS_COMMUNICATION_DATABASE = $communicationDatabase
+        SAFEHARNESS_COMMUNICATION_BACKEND = 'sqlite'
+        SAFEHARNESS_COMMUNICATION_COORDINATION_BACKEND = 'sqlite'
+        SAFEHARNESS_COMMUNICATION_COORDINATION_SIGNING_KEY = $coordinationSigningKey
+        SAFEHARNESS_COMMUNICATION_TENANT_ID = 'fiberhome-demo'
+        SAFEHARNESS_COMMUNICATION_SUPERVISOR_AGENT_ID = 'noc-supervisor-agent'
+        SAFEHARNESS_COMMUNICATION_DIAGNOSIS_AGENT_ID = 'noc-diagnosis-agent'
+        SAFEHARNESS_COMMUNICATION_SUPERVISOR_API_KEY = $supervisorKey
+        SAFEHARNESS_COMMUNICATION_DIAGNOSIS_API_KEY = $diagnosisKey
+        SAFEHARNESS_COMMUNICATION_ADMIN_ACTOR = 'noc-security-admin'
+        SAFEHARNESS_COMMUNICATION_ADMIN_API_KEY = $coordinationAdminKey
+        SAFEHARNESS_OTEL_ENABLED = 'false'
+    }
+    Add-ProfileEnv $gatewayEnvironment $PostureProfile 'gateway_env'
+    Add-ProfileSecrets $gatewayEnvironment $PostureProfile
     Start-DemoProcess `
         'gateway' `
         $RootPython `
         @('-m', 'examples.langgraph_noc.communication_gateway', '--host', '127.0.0.1', '--port', '38200', '--database', $communicationDatabase) `
         $RepoRoot `
-        @{
-            PYTHONPATH = $parentPythonPath
-            PYTHONDONTWRITEBYTECODE = '1'
-            SAFEHARNESS_COMMUNICATION_GATEWAY_ENV_FILE = $emptyEnvFile
-            SAFEHARNESS_COMMUNICATION_GATEWAY_HOST = '127.0.0.1'
-            SAFEHARNESS_COMMUNICATION_GATEWAY_PORT = '38200'
-            SAFEHARNESS_COMMUNICATION_DATABASE = $communicationDatabase
-            SAFEHARNESS_COMMUNICATION_BACKEND = 'sqlite'
-            SAFEHARNESS_COMMUNICATION_COORDINATION_BACKEND = 'sqlite'
-            SAFEHARNESS_COMMUNICATION_COORDINATION_SIGNING_KEY = $coordinationSigningKey
-            SAFEHARNESS_COMMUNICATION_TENANT_ID = 'fiberhome-demo'
-            SAFEHARNESS_COMMUNICATION_SUPERVISOR_AGENT_ID = 'noc-supervisor-agent'
-            SAFEHARNESS_COMMUNICATION_DIAGNOSIS_AGENT_ID = 'noc-diagnosis-agent'
-            SAFEHARNESS_COMMUNICATION_SUPERVISOR_API_KEY = $supervisorKey
-            SAFEHARNESS_COMMUNICATION_DIAGNOSIS_API_KEY = $diagnosisKey
-            SAFEHARNESS_COMMUNICATION_ADMIN_ACTOR = 'noc-security-admin'
-            SAFEHARNESS_COMMUNICATION_ADMIN_API_KEY = $coordinationAdminKey
-            SAFEHARNESS_OTEL_ENABLED = 'false'
-        } `
+        $gatewayEnvironment `
         $logDirectory | Out-Null
     Wait-Http 'gateway' 'http://127.0.0.1:38200/health' @{ Authorization = "Bearer $supervisorKey" }
 
@@ -492,29 +612,7 @@ try {
     Wait-Http 'tool-gateway' 'http://127.0.0.1:38310/health' @{ Authorization = "Bearer $gatewayApiKey" }
 
     Write-Step 'Start SUMC BFF'
-    $backendEnvironment += @{
-        DEPLOY_PROFILE = ''
-        REDIS_URL = 'memory://'
-        SESSION_STORE = 'memory'
-        AUTH_MODE = 'session'
-        SSO_LOGIN_MODE = 'local'
-        LOCAL_AUTH_ENABLED = 'true'
-        STORAGE_TYPE = 'local'
-        STORAGE_PATH = $storageDirectory
-        SANDBOX_PROVIDER = 'script_runner'
-        SANDBOX_TOOLS_ENABLED = 'false'
-        PORT = '3001'
-        BACKEND_PORT = '3001'
-        STARTUP_PRELOAD_ENABLED = 'false'
-        MCP_WARMUP_ENABLED = 'false'
-        SAFEHARNESS_BFF_ADMIN_UI_URL = 'http://127.0.0.1:38308'
-        SAFEHARNESS_BFF_UI_ACCESS_TOKEN = $uiAccessToken
-        SAFEHARNESS_BFF_MUTATION_KEY = $mutationKey
-        SAFEHARNESS_PROTECTED_CHAT_ENABLED = 'true'
-        SAFEHARNESS_ENABLE_FSM_PLANNING = 'true'
-        SAFEHARNESS_PROTECTED_CHAT_SYSTEM_PROMPT = $protectedChatSystemPrompt
-        SUMC_SECURITY_REPORT_PATH = $securityReport
-    }
+    $backendEnvironment += $bffEnvironment
     Start-DemoProcess `
         'backend' `
         $DemoPython `
