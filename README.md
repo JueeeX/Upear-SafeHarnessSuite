@@ -512,7 +512,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # tsc -> lib/
-pnpm test             # vitest：26 个文件 / 521 个用例（内部含黄金语料与失败矩阵；公开仓库 24 文件 / 504 用例，CI 另剔除 tests/perf.test.ts → 23 文件 / 493）
+pnpm test             # vitest：26 个文件 / 521 个用例（内部含黄金语料与失败矩阵；公开仓库 24 文件 / 504，其中 3 例在没有内部语料时跳过。CI 另剔除 tests/perf.test.ts → 23 文件 / 496 = 493 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
