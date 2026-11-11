@@ -134,8 +134,14 @@ export function postureTool(run: () => Promise<PostureReport>): ToolDefinition {
   })
 }
 
-/** Patrol check names accepted by the `include` parameter. */
-const PATROL_CHECKS: readonly string[] = ['audit_rate', 'health_probe', 'config_drift', 'ledger_reconcile']
+/**
+ * Patrol check names accepted by the `include` parameter.
+ *
+ * Mirrors `PATROL_CODES`: an operator (or a test) must be able to name every check
+ * the patrol can run, including `notify` — otherwise the only way to exercise the
+ * notification path through the tool is "run everything".
+ */
+const PATROL_CHECKS: readonly string[] = ['audit_rate', 'health_probe', 'config_drift', 'ledger_reconcile', 'notify']
 
 /** `safeharness_patrol`: run the deployment patrol now (§6.10, T3.4). */
 export function patrolTool(run: (options?: { include?: readonly string[] }) => Promise<PatrolReport>): ToolDefinition {

@@ -11,7 +11,8 @@ import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { createFakeHost, readLedger, type FakeHost } from './helpers/fake-host.js'
 import { apply } from '../src/index.js'
 import { patrolTool, statusTool } from '../src/surface/tools.js'
-import { safeharnessCommand } from '../src/surface/commands.js'
+import { safeharnessCommand, type JudgeCommandTarget } from '../src/surface/commands.js'
+import type { JudgeResult } from '../src/judge/client.js'
 import type { PatrolReport } from '../src/patrol/index.js'
 import type { Runtime } from '../src/runtime.js'
 import { mkdtempSync } from 'node:fs'
@@ -42,12 +43,16 @@ async function invoke(definition: unknown, args: unknown = {}): Promise<Record<s
 }
 
 /** Build the command definition over a fake runtime (the factory is pure). */
-function captureCommand(runtime: Runtime, patrol?: (options?: { include?: readonly string[] }) => Promise<PatrolReport>): { definition: { handler: (invocation: unknown) => Promise<CommandResult> } } {
+function captureCommand(
+  runtime: Runtime,
+  patrol?: (options?: { include?: readonly string[] }) => Promise<PatrolReport>,
+  judge?: JudgeCommandTarget,
+): { definition: { handler: (invocation: unknown) => Promise<CommandResult> } } {
   const definition = safeharnessCommand(runtime, async () => ({
     ranAt: new Date().toISOString(),
     findings: [],
     summary: { fail: 0, warn: 0, ok: 0, skip: 0, clean: true },
-  }), patrol)
+  }), patrol, judge)
   return { definition: definition as unknown as { handler: (invocation: unknown) => Promise<CommandResult> } }
 }
 
@@ -75,8 +80,10 @@ describe('safeharness_patrol tool (§6.12)', () => {
       seen.push(options?.include)
       return report()
     })
-    await invoke(tool, { include: ['health_probe'] })
-    expect(seen).toEqual([['health_probe']])
+    // `notify` is a real patrol check, so the tool surface must accept it; otherwise
+    // the notification path could only be reached by "run everything".
+    await invoke(tool, { include: ['health_probe', 'notify'] })
+    expect(seen).toEqual([['health_probe', 'notify']])
     // `defineTool` validates the declared parameter schema before the body runs, so
     // a malformed filter is refused rather than silently dropped.
     await expect(invoke(tool, { include: ['health_probe', 7, null] })).rejects.toThrow(/must be a string/u)
@@ -155,6 +162,81 @@ describe('safeharness_status M3 facts', () => {
     expect(result.kind).toBe('success')
     expect(result.text).toContain('judge: on scope=always route=p/m')
     expect(result.text).toContain('budget: limit=100/turn')
+  })
+})
+
+describe('/safeharness judge command', () => {
+  /** A judge target whose probe returns one fixed result (no model call). */
+  function target(overrides: Partial<JudgeResult> = {}, available = true): JudgeCommandTarget & { calls: number } {
+    const state = {
+      calls: 0,
+      state: () => ({ enabled: true, scope: 'flagged', provider: 'p', model: 'm', available }),
+      probe: async (): Promise<JudgeResult> => {
+        state.calls += 1
+        return {
+          status: 'ok',
+          verdict: 'allow',
+          blocked: false,
+          labels: {},
+          metrics: { duration_ms: 7, prompt_chars: 80 },
+          ...overrides,
+        }
+      },
+    }
+    return state
+  }
+
+  it('shows the route and whether an llm service is composed, without probing', async () => {
+    const { runtime } = createFakeHost({ config: { preset: 'balanced', output: { judge: { enabled: true, provider: 'p', model: 'm' } } } })
+    const judge = target()
+    const { definition } = captureCommand(runtime, undefined, judge)
+    const result = await definition.handler({ rawInput: 'judge', commandId: 'c', agent: {}, signal: new AbortController().signal })
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('judge: on scope=flagged route=p/m')
+    expect(result.text).toContain('available: yes')
+    expect(result.text).toContain('/safeharness judge probe')
+    expect(judge.calls).toBe(0)
+  })
+
+  it('probes the configured route once and prints status/verdict/latency only', async () => {
+    const { runtime } = createFakeHost({ config: { preset: 'balanced', output: { judge: { enabled: true, provider: 'p', model: 'm' } } } })
+    const judge = target({ metrics: { duration_ms: 42 } })
+    const { definition } = captureCommand(runtime, undefined, judge)
+    const result = await definition.handler({ rawInput: 'judge probe', commandId: 'c', agent: {}, signal: new AbortController().signal })
+    expect(judge.calls).toBe(1)
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('judge probe: status=ok verdict=allow blocked=no route=p/m')
+    expect(result.text).toContain('duration_ms=42')
+    // The judge result deliberately carries no reviewed content; the command must not invent any.
+    expect(result.text).not.toMatch(/prompt|content|reply/iu)
+  })
+
+  it('reports a provider failure as an error but still describes the status honestly', async () => {
+    const { runtime } = createFakeHost({ config: { preset: 'balanced', output: { judge: { enabled: true, provider: 'p', model: 'm' } } } })
+    const judge = target({ status: 'timeout', verdict: 'unknown', blocked: false, labels: { reason: 'timeout' }, metrics: { timeout_ms: 4000 } })
+    const { definition } = captureCommand(runtime, undefined, judge)
+    const result = await definition.handler({ rawInput: 'judge probe', commandId: 'c', agent: {}, signal: new AbortController().signal })
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('status=timeout')
+    expect(result.text).toContain('reason=timeout')
+  })
+
+  it('refuses to probe when the profile composes no llm service', async () => {
+    const { runtime } = createFakeHost({ config: { preset: 'balanced', output: { judge: { enabled: true, provider: 'p', model: 'm' } } } })
+    const judge = target({}, false)
+    const { definition } = captureCommand(runtime, undefined, judge)
+    const result = await definition.handler({ rawInput: 'judge probe', commandId: 'c', agent: {}, signal: new AbortController().signal })
+    expect(result.kind).toBe('error')
+    expect(result.text).toMatch(/no llm service/iu)
+    expect(judge.calls).toBe(0)
+  })
+
+  it('reports the missing handle when the command is built without a judge target', async () => {
+    const { runtime } = createFakeHost({ config: { preset: 'balanced' } })
+    const { definition } = captureCommand(runtime)
+    const result = await definition.handler({ rawInput: 'judge probe', commandId: 'c', agent: {}, signal: new AbortController().signal })
+    expect(result.kind).toBe('error')
+    expect(result.text).toMatch(/no judge handle/iu)
   })
 })
 

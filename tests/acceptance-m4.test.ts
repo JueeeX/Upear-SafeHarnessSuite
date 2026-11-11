@@ -94,8 +94,12 @@ describe('M4: hardened load gate leaves no partial wiring (R36)', () => {
 
 describe('M4: published package shape', () => {
   it('reports the release-candidate version everywhere', () => {
-    expect(VERSION).toBe('1.0.0-rc.1')
+    // The exact rc number moves per release; the invariant is that the built
+    // runtime stamp, the manifest and the README all name the same candidate.
+    expect(VERSION).toMatch(/^1\.0\.0-rc\.\d+$/u)
     expect(manifest()['version']).toBe(VERSION)
+    const readme = readFileSync(join(pluginRoot, 'README.md'), 'utf8')
+    expect(readme).toContain(`版本 \`${VERSION}\``)
   })
 
   it('keeps the coarse dsh compatibility gate', () => {

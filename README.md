@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.0.0-rc.1` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
+> 版本 `1.0.0-rc.2` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -124,7 +124,7 @@ pnpm test             # 477 个用例（23 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.0.0-rc.1.tgz（lib + rules + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.0.0-rc.2.tgz（lib + rules + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -138,7 +138,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.0.0-rc.1.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.0.0-rc.2.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -262,6 +262,60 @@ config:
 - `patrol.feishuWebhook`：只从设置读，永不打印、永不入账本；通知正文只有 `Upear SafeHarness: N FAIL / M WARN`。
 - 优先级：显式字段 > 预设 > 基础默认；`resolveConfig` 输出深冻结。
 
+### 4.1 语义 judge 的模型 URL 与 Key 怎么填
+
+`output.judge` 不自建 HTTP 客户端，它通过宿主的 `ctx.llm` 发一次 Chat 调用。因此 **URL 与 Key 不写在插件配置里**，而是填在 DSH 的模型服务商（provider）配置里；插件只填 `provider` + `model` 两个路由字段。
+
+**A. 复用聊天模型（最省事）**：桌面端 **设置 → 模型**（Settings → Models）里已经配好的服务商直接可用，插件里把 `output.judge.provider` / `model` 填成该服务商 id 与模型 id 即可。
+
+**B. 给 judge 单开一条服务商（推荐：用便宜/快的模型，独立配额）**：在同一个 profile 的 `cordis.patch.yml` 里给 `@deepseek-ai/dsh-llm-pi-ai` 增加一项：
+
+```yaml
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      judge:                                  # ← 这个名字就是插件里的 judge.provider
+        api: openai-completions               # 非内置目录的路由需要显式协议
+        baseURL: https://your-endpoint.example/v1
+        apiKeyEnv: SAFEHARNESS_JUDGE_API_KEY  # 只写"引用名"，不写 Key 本身
+        models:
+          - id: your-model-id
+            name: your-model-id
+```
+
+Key 本身放在下面任一位置，**永远不要写进 `cordis.patch.yml`、仓库或账本**：
+
+| 方式 | 位置 | 说明 |
+|---|---|---|
+| 凭据库（推荐） | `$DSH_HOME/.credentials.yaml`（权限 0600） | 一行 `SAFEHARNESS_JUDGE_API_KEY: sk-…`；设置页写入的 Key 也落在这里 |
+| 进程环境变量 | `SAFEHARNESS_JUDGE_API_KEY=…` | 启动前设置，优先级最高，本次运行有效 |
+| `.env` | `$DSH_HOME/.env` 或项目根 `.env` | 与 DSH 其它模型 Key 的放置方式一致 |
+
+插件侧只需要：
+
+```yaml
+output:
+  judge:
+    enabled: true
+    scope: flagged              # 只复核已被结构化规则命中的回答，省成本
+    provider: judge             # ← 上面 providers 里的名字
+    model: your-model-id
+    maxChars: 12000
+    timeoutMs: 6000
+```
+
+填完先自检，再开拦截：
+
+```text
+/safeharness judge            # 只看路由与 llm 服务是否就绪，不打模型、不花钱
+/safeharness judge probe      # 真打一次（一句 canary），只打印 status/verdict/耗时，不打印任何内容
+```
+
+`probe` 走的就是输出守卫将来要走的同一条路由，所以 `status=ok` 表示 URL、Key、模型 id 三者都通。失败时按状态给出原因：`status=error`（路由/凭据问题，宿主会报 `MISSING_CREDENTIAL` 或连接失败）、`status=timeout`、`status=bad_json`（模型没按 JSON 回答）、`status=unavailable`（这个 profile 没装 `llm` 服务）。
+
+失败语义不变：`observe`/`balanced` 记 WARN 放行；`hardened` 在 judge 不可用时**拒绝输出**，并且 `enabled: true` 却没填 `provider`/`model` 会直接拒绝加载。离线演示可把 `baseURL` 指向本仓库的假模型（`node scripts/fake-openai.mjs`，Key 填占位符），零成本跑通同一条链路。
+
 ---
 
 ## 5. 预设与失败语义
@@ -306,7 +360,7 @@ config:
 
 ```json
 {"v":1,"ts":"2026-11-11T01:47:20.963Z","seq":1,"kind":"plugin_loaded","decision":"ok",
- "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.0.0-rc.1",
+ "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.0.0-rc.2",
  "metrics":{"rule_count":20,"chain_count":3},"sha256":"…"}
 ```
 
@@ -328,7 +382,7 @@ config:
 | `safeharness_patrol` | 立即跑巡检（5 项），返回 findings、summary 与退出码 0/1/2 |
 | `safeharness_audit_query` | 读账本尾部（已脱敏），按 session/decision/kind 过滤，上限 500 条 |
 
-命令：`/safeharness status | posture | rules | audit [n] | patrol [check…]`。命令输出不进模型历史；`patrol` 首行是退出码。
+命令：`/safeharness status | posture | rules | audit [n] | patrol [check…] | judge [probe]`。命令输出不进模型历史；`patrol` 首行是退出码；`judge` 不带参数只看路由与 `llm` 服务是否就绪，`judge probe` 才会真打一次模型（只回报 status/verdict/耗时，不打印任何内容或凭据）。
 
 不变量（`@upear/dsh-safeharness/invariant` 与 `@deepseek-ai/dsh-invariants` 配合）在每次挂载时校验：规则集 hash 有对应账本记录、同步 guard 已注册、只读工具可回答、账本可写并读回、hardened 一致性。
 
@@ -406,7 +460,7 @@ plugins/dsh-safeharness/
 │  ├─ runtime.ts        运行时状态与共享话术
 │  └─ version.ts        版本（与 package.json 同步，测试锁定）
 ├─ rules/               inform.yaml（20 条）+ chains.yaml（3 条）
-├─ examples/            cordis.patch.example.yml
+├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）
 ├─ tests/               477 个用例（23 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
@@ -426,7 +480,7 @@ plugins/dsh-safeharness/
 
 ```bash
 pnpm build            # tsc -> lib/
-pnpm test             # vitest：23 个文件 / 477 个用例（474 pass + 3 skip）
+pnpm test             # vitest：25 个文件 / 499 个用例（内部含黄金语料；不含语料的公开克隆为 23 文件 / 482 用例 = 479 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 检查宿主包链接
 ```
@@ -442,7 +496,7 @@ node scripts/link-dsh.mjs --check   # 检查宿主包链接
 
 1. **运行期宿主包版本以 host 实际解析为准**：本机实测插件的 `@deepseek-ai/*` 裸导入会解析到 DSH bundle 内的副本（`dsh-tools`/`dsh-settings`/`cordis`/`schemastery` 为 `0.2.2-rc.1` / `4.1.0` / `3.19.0`），而不是 profile 里的构建期副本。因此本包不 import 任何可能漂移的具名导出；`safeharness_status.host` 会显示实际解析来源（`app-bundle` / `profile` / `mixed`）。
 2. **兼容门只有一个**：`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`。存在该字段时 DSH 只按它判断，不再逐条比对 peer 版本。
-3. **开发期安装是复制不是软链**：pnpm 把包复制进 profile；改代码后需 `remove` + `add`。HMR 重载在复制安装形态下**未验证**（结构上由 Cordis fiber 管理 disposer，并有挂载期不变量断言）。
+3. **安装形态决定改代码后的动作**：pnpm 默认把包复制进 profile（`file:` / tarball），改代码后需 `remove` + `add`；`link:` 安装则直接指向源码。**HMR 重载已在 `link:` 安装 + 非空 `hmr.root` 下实测**：连续两次改 `lib/` 都触发重挂载，`plugin_loaded` → `posture_report ok` → `invariant_probe seams=…,guard,…` 全部重现（内部证据，未随仓库分发）。注意重挂载有约 15–30 ms 的空窗，且生产部署应当关闭 HMR（`hardened` 的 `hmr_enabled` 姿态门禁会直接拒绝加载）。
 4. **`enforce-buffer` 的代价**：牺牲流式；超过 `bufferTimeoutMs`/`bufferMaxChars` 会降级为透传（记账但不拦截）。完全停滞的流由宿主超时负责。
 5. **语义 judge 是"附加信号"不是"误报消除器"**：它能拦住结构化规则漏掉的语义风险，但**不会**把已命中的回答改判为通过；临界误报要靠自定义规则或后续面解决。
 6. **审批桥 `policy` 只能粗粒度**：`approval/request` 不携带工具参数；`allowOnce` 与 `denyTools/denyTags` 同时命中时**授予优先**（不要同时写两边）。真实人工批准路径未做端到端验证。
@@ -450,10 +504,12 @@ node scripts/link-dsh.mjs --check   # 检查宿主包链接
 8. **巡检对账是近似的**：用自家账本的 `tool_asked` vs `approval_decided`（不解析 DSH session log），偏差 >10% 才 WARN。
 9. **Code Mode（PTC 执行器）**：0.2.2-rc.1 已移除 `tools.mode`；Code Mode = 启用 `tool-executor-ptc` 并停用 `tool-executor-native`（每个 scope 只能有一个执行器）。子调用会经过 `tools/pre-execute` 并被拒绝；注意 Windows 上 `bash` 工具不存在，场景用 `pwsh`。
 10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。
-11. **`/safeharness patrol` 的 UI 触发未验证**：headless 一次性会话没有命令通道，只有处理器单测；`safeharness_patrol` 工具已在真实 host 跑通。
-12. **飞书 webhook 未做真实联调**：按飞书 `{"msg_type":"text","content":{"text":…}}` JSON 信封发送，正文只有计数句；测试用注入 seam 断言零 payload。
+11. **`/safeharness patrol` 的 UI 触发未验证**：headless 一次性会话没有命令通道，只有处理器单测；`safeharness_patrol` 工具已在真实 host 跑通。`/safeharness judge probe` 同理：处理器与 judge 路由都有测试，但"在桌面端输入框里敲一次"这一步没有自动化。
+12. **飞书 webhook**：已用真实 HTTP 投递验证（本地 sink 收到 `{"msg_type":"text","content":{"text":"Upear SafeHarness: 1 FAIL / 0 WARN"}}`，账本 `patrol_report exit_code=1 notified=true`，内部证据（未随仓库分发））；真实飞书账号/群机器人未联调（需要真实 webhook URL）。
 13. **高熵令牌启发式的已知误报**：≥40 字符、≥3.5 bits/char 的"令牌"（含长路径片段，如 `@scope/pkg-name/lib/entry`）会被判为 `credential_high_entropy`。`balanced` 只记 WARN；`hardened` 会整条阻断工具结果 → 用 `results.blockOn: []` 或 `results.mode: warn` 缓解（规则文本需与 Python 侧保持一致，不单独改）。
 14. **输出面目前只覆盖回答**：不覆盖 compaction / session-title 等内部 LLM 调用（judge 请求本身有递归防护，但内部调用不送审）。
+15. **judge 的 URL/Key 属于宿主配置，不属于插件配置**：插件只携带 `provider`/`model` 路由，Key 由 DSH 凭据层按 `apiKeyEnv` 引用解析，插件既不读也不打印。换端点 = 改 profile 的 `llm-pi-ai.providers`，不需要改插件。
+16. **真实模型冒烟未做**：所有真实 host 会话都跑在确定性假模型上（无成本、无外网）；同一路由换成真实供应商后，行为差异（工具调用形态、流式分片、usage 上报）仍需一次冒烟。`/safeharness judge probe` 就是为此准备的自检入口。
 
 ---
 
