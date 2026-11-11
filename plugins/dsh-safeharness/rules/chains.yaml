@@ -1,0 +1,51 @@
+# ===========================================================================
+# Built-in trajectory (chain) rules: "tool A then tool B within max_gap calls".
+#
+# Shape follows rules_loader.py `_check_chain`:
+#   name (required, unique among chains) · first/then (tool-name regex) or
+#   first_tags/then_tags (max 16) · max_gap (integer >= 0; 0 means "any distance")
+#   · severity · category · reason.
+#
+# WHY name regexes and not tags: the semantic tag table is owned by the tool
+# guard (config `tools.tagOverrides`, e.g. bash|pwsh -> shell); a shipped chain
+# that depends on a tag an operator never configured would silently never match.
+# Name regexes keep these defaults self-contained and testable. Operators can add
+# tag-based chains in their own `rules.dir` files.
+#
+# WHY every rule below is conservative: chains only fire when the caller enables
+# trajectory tracking (config `tools.trajectory`), and each one pairs a
+# *sensitive read* with an *outbound or destructive write*, never two ordinary
+# development steps (e.g. `read` then `bash` is deliberately NOT a chain — it is
+# the normal coding loop and would deny every session).
+#
+# Regexes are matched case-insensitively against the tool name with `(?:^|_)` /
+# `(?:_|$)` boundaries so both `web_fetch` and `mcp__postgres_query` styles match.
+# ===========================================================================
+chain_rules:
+  # Secrets / credentials read, then anything that can leave the machine.
+  - name: chain_secret_read_then_egress
+    first: '(?:^|_)(?:secret|secrets|credential|credentials|token|apikey|api_key|password|vault|keychain)(?:_|$)'
+    then: '(?:^|_)(?:http|https|web|fetch|upload|post|send|curl|wget|mail|smtp|s3|bucket)(?:_|$)'
+    max_gap: 2
+    severity: critical
+    category: trajectory_chain
+    reason: 'secret/credential read followed by network egress'
+
+  # Database read, then outbound transfer (classic query-then-exfiltrate shape).
+  - name: chain_db_query_then_egress
+    first: '(?:^|_)(?:query|sql|db|database|postgres|mysql|sqlite|mongodb)(?:_|$)'
+    then: '(?:^|_)(?:http|https|web|fetch|upload|post|send|curl|wget|mail|smtp)(?:_|$)'
+    max_gap: 3
+    severity: critical
+    category: trajectory_chain
+    reason: 'database query followed by outbound transfer'
+
+  # Shell execution, then a destructive/privilege-changing statement. A human
+  # running "shell then DROP TABLE" is rare; an agent being walked into it is not.
+  - name: chain_shell_then_destructive_sql
+    first: '(?:^|_)(?:shell|bash|pwsh|powershell|exec|execute|run|spawn|subprocess)(?:_|$)'
+    then: '(?:^|_)(?:drop|truncate|delete|alter|grant|revoke|chmod|chown|rmtree|wipe|purge)(?:_|$)'
+    max_gap: 2
+    severity: high
+    category: trajectory_chain
+    reason: 'shell execution followed by a destructive or privilege-changing statement'

@@ -1,0 +1,50 @@
+# Example: mount @upear/dsh-safeharness into a DSH profile.
+#
+# Append this array to `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (or pass the
+# file to `dsh --profile <profile> --patch <this-file> "<task>"` for a one-off run).
+#
+# WHY `insert:` — an entry with only `id:` is a CONFIG OVERRIDE for an entry the
+# profile already has; a brand-new plugin must be inserted (M0 finding R22, the
+# `patch: entry "safeharness" not found` error).
+#
+# Choose ONE preset and override only the fields this deployment actually changes
+# (precedence: explicit field > preset > base default).
+
+- insert:
+    - id: safeharness
+      name: "@upear/dsh-safeharness"
+      config:
+        # observe  = record only (evaluation / shadow mode)
+        # balanced = input + tool enforcement, output warns (default)
+        # hardened = deny everywhere; refuses to load on a failed posture gate
+        preset: balanced
+        audit:
+          # empty = $DSH_HOME/safeharness/audit/ledger.ndjson
+          dir: ""
+        tools:
+          # Tool-name globs (only `*`), matched case-insensitively.
+          denyTools: ["bash", "pwsh"]
+          # askTools: ["mcp_*"]        # needs an approval answerer
+          # denyTags: ["shell"]         # semantic tags; see the README config section
+        # Output guard: `warn` records; `enforce-buffer` can replace a whole answer
+        # (cost: no streaming, bounded by bufferTimeoutMs / bufferMaxChars).
+        # output:
+        #   mode: enforce-buffer
+        #   judge:
+        #     enabled: true             # semantic review through the host's ctx.llm
+        #     scope: flagged            # flagged (default) | always
+        #     provider: deepseek
+        #     model: deepseek-chat
+        #     timeoutMs: 4000
+        # budget:
+        #   maxTokensPerTurn: 0         # 0 = off; >0 records budget_exceeded (warn)
+        # patrol:
+        #   healthUrls: []
+        #   feishuWebhook: ""           # never printed, never written to the ledger
+
+    # Optional but recommended in evaluation / hardened environments: the invariant
+    # companion asserts the plugin's facts on every mount.
+    - id: invariants
+      name: "@deepseek-ai/dsh-invariants"
+    - id: safeharness-invariant
+      name: "@upear/dsh-safeharness/invariant"

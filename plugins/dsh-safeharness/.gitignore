@@ -1,0 +1,12 @@
+# Build output (recreated by `pnpm build`)
+lib/
+
+# Local evidence directory: it carries host paths, machine-specific logs and
+# temporary tokens that must never enter the repository (see README §8).
+evidence/
+
+# Release tarballs are produced by `pnpm pack`
+*.tgz
+
+# Never commit installed dependencies
+node_modules/
