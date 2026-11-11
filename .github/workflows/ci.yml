@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # The host packages (@deepseek-ai/*) are devDependencies pinned to the exact
+      # versions this plugin was built against, so a clean runner needs no DSH
+      # installation to typecheck or run the tests.
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # tests/perf.test.ts asserts p99 budgets (sub-millisecond for the guard); shared
+      # CI runners are too noisy for those, so they stay a local gate. Everything
+      # else — rule engine, hooks, failure matrix, ledger, patrol, judge, fake-host
+      # end-to-end — runs here.
+      - run: pnpm exec vitest run --exclude tests/perf.test.ts

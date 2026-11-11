@@ -396,7 +396,11 @@ function judgeCallOf(ctx: Context, runtime: Runtime): ((prompt: string, options:
       system: prompt,
       messages: [createUserMessage({
         content: [{ type: 'text', text: prompt }],
-        source: { kind: 'plugin', plugin: '@upear/dsh-safeharness' },
+        // The published 0.2.2-rc.1 type surface omits `plugin` from the message
+        // source union, while the running host accepts it (verified: judge calls
+        // stream normally on the real host). The cast keeps the runtime provenance
+        // without pinning the build to one revision of those types.
+        source: { kind: 'plugin', plugin: '@upear/dsh-safeharness' } as never,
       })],
       maxTokens: options.maxTokens,
       signal: options.signal,

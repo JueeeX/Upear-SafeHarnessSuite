@@ -1,95 +1,131 @@
 {
-  "name": "@upear/dsh-safeharness",
-  "version": "1.0.0-rc.2",
-  "description": "Agent security suite for DeepSeek Harness: input/tool/output guards, evidence ledger, posture and patrol.",
-  "keywords": [
-    "deepseek-harness",
-    "dsh",
-    "cordis-plugin",
-    "agent-security",
-    "guardrails",
-    "prompt-injection",
-    "audit-log",
-    "safeharness"
-  ],
-  "author": "Juexiao <182746526+JueeeX@users.noreply.github.com> (https://github.com/JueeeX)",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh.git"
-  },
-  "homepage": "https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh#readme",
-  "bugs": {
-    "url": "https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh/issues"
-  },
-  "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
-    },
-    "./invariant": {
-      "types": "./lib/types/invariant.d.ts",
-      "default": "./lib/invariant.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "lib",
-    "rules",
-    "README.md"
-  ],
-  "license": "Apache-2.0",
-  "engines": {
-    "node": ">=24",
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/schemastery": "3.19.0",
-    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-commands": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-invariants": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-settings": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.1"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": true },
-    "@deepseek-ai/schemastery": { "optional": true },
-    "@deepseek-ai/dsh-agent": { "optional": true },
-    "@deepseek-ai/dsh-commands": { "optional": true },
-    "@deepseek-ai/dsh-invariants": { "optional": true },
-    "@deepseek-ai/dsh-llm": { "optional": true },
-    "@deepseek-ai/dsh-session": { "optional": true },
-    "@deepseek-ai/dsh-settings": { "optional": true },
-    "@deepseek-ai/dsh-system-prompt": { "optional": true },
-    "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/dsh-user-approval": { "optional": true }
-  },
-  "dependencies": {},
-  "devDependencies": {
-    "@types/node": "^24.10.1",
-    "typescript": "^5.9.3",
-    "vitest": "^3.2.7"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "clean": "node scripts/clean.mjs",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:golden": "vitest run tests/golden.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "link:dsh": "node scripts/link-dsh.mjs",
-    "prepack": "node scripts/clean.mjs && tsc -p tsconfig.json"
-  }
+    "name":  "@upear/dsh-safeharness",
+    "version":  "1.0.0-rc.3",
+    "description":  "Agent security suite for DeepSeek Harness: input/tool/output guards, evidence ledger, posture and patrol.",
+    "keywords":  [
+                     "deepseek-harness",
+                     "dsh",
+                     "cordis-plugin",
+                     "agent-security",
+                     "guardrails",
+                     "prompt-injection",
+                     "audit-log",
+                     "safeharness"
+                 ],
+    "author":  "Juexiao \u003c182746526+JueeeX@users.noreply.github.com\u003e (https://github.com/JueeeX)",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "git+https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh.git"
+                   },
+    "homepage":  "https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh#readme",
+    "bugs":  {
+                 "url":  "https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh/issues"
+             },
+    "type":  "module",
+    "main":  "lib/index.js",
+    "types":  "lib/types/index.d.ts",
+    "exports":  {
+                    ".":  {
+                              "types":  "./lib/types/index.d.ts",
+                              "default":  "./lib/index.js"
+                          },
+                    "./invariant":  {
+                                        "types":  "./lib/types/invariant.d.ts",
+                                        "default":  "./lib/invariant.js"
+                                    },
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "lib",
+                  "rules",
+                  "README.md"
+              ],
+    "license":  "Apache-2.0",
+    "engines":  {
+                    "node":  "\u003e=24",
+                    "dsh":  "\u003e=0.2.2-rc.1 \u003c0.3.0"
+                },
+    "peerDependencies":  {
+                             "@deepseek-ai/cordis":  "4.1.0",
+                             "@deepseek-ai/schemastery":  "3.19.0",
+                             "@deepseek-ai/dsh-agent":  "0.2.2-rc.1",
+                             "@deepseek-ai/dsh-commands":  "0.2.2-rc.1",
+                             "@deepseek-ai/dsh-invariants":  "0.1.0-rc.8",
+                             "@deepseek-ai/dsh-llm":  "0.2.2-rc.1",
+                             "@deepseek-ai/dsh-session":  "0.2.2-rc.1",
+                             "@deepseek-ai/dsh-settings":  "0.2.2-rc.1",
+                             "@deepseek-ai/dsh-system-prompt":  "0.2.2-rc.1",
+                             "@deepseek-ai/dsh-tools":  "0.2.2-rc.1",
+                             "@deepseek-ai/dsh-user-approval":  "0.2.2-rc.1"
+                         },
+    "peerDependenciesMeta":  {
+                                 "@deepseek-ai/cordis":  {
+                                                             "optional":  true
+                                                         },
+                                 "@deepseek-ai/schemastery":  {
+                                                                  "optional":  true
+                                                              },
+                                 "@deepseek-ai/dsh-agent":  {
+                                                                "optional":  true
+                                                            },
+                                 "@deepseek-ai/dsh-commands":  {
+                                                                   "optional":  true
+                                                               },
+                                 "@deepseek-ai/dsh-invariants":  {
+                                                                     "optional":  true
+                                                                 },
+                                 "@deepseek-ai/dsh-llm":  {
+                                                              "optional":  true
+                                                          },
+                                 "@deepseek-ai/dsh-session":  {
+                                                                  "optional":  true
+                                                              },
+                                 "@deepseek-ai/dsh-settings":  {
+                                                                   "optional":  true
+                                                               },
+                                 "@deepseek-ai/dsh-system-prompt":  {
+                                                                        "optional":  true
+                                                                    },
+                                 "@deepseek-ai/dsh-tools":  {
+                                                                "optional":  true
+                                                            },
+                                 "@deepseek-ai/dsh-user-approval":  {
+                                                                        "optional":  true
+                                                                    }
+                             },
+    "dependencies":  {
+
+                     },
+    "devDependencies":  {
+                            "@deepseek-ai/cordis":  "4.1.0",
+                            "@deepseek-ai/schemastery":  "3.19.0",
+                            "@deepseek-ai/dsh-agent":  "0.2.2-rc.1",
+                            "@deepseek-ai/dsh-commands":  "0.2.2-rc.1",
+                            "@deepseek-ai/dsh-invariants":  "0.1.0-rc.8",
+                            "@deepseek-ai/dsh-llm":  "0.2.2-rc.1",
+                            "@deepseek-ai/dsh-scope":  "0.2.2-rc.1",
+                            "@deepseek-ai/dsh-session":  "0.2.2-rc.1",
+                            "@deepseek-ai/dsh-settings":  "0.2.2-rc.1",
+                            "@deepseek-ai/dsh-system-prompt":  "0.2.2-rc.1",
+                            "@deepseek-ai/dsh-tools":  "0.2.2-rc.1",
+                            "@deepseek-ai/dsh-user-approval":  "0.2.2-rc.1",
+                            "@types/node":  "^24.10.1",
+                            "typescript":  "^5.9.3",
+                            "vitest":  "^3.2.7"
+                        },
+    "pnpm":  {
+                 "onlyBuiltDependencies":  [
+                                               "esbuild"
+                                           ]
+             },
+    "scripts":  {
+                    "build":  "tsc -p tsconfig.json",
+                    "clean":  "node scripts/clean.mjs",
+                    "test":  "vitest run",
+                    "test:watch":  "vitest",
+                    "test:golden":  "vitest run tests/golden.test.ts",
+                    "typecheck":  "tsc -p tsconfig.json --noEmit",
+                    "link:dsh":  "node scripts/link-dsh.mjs",
+                    "prepack":  "node scripts/clean.mjs \u0026\u0026 tsc -p tsconfig.json"
+                }
 }

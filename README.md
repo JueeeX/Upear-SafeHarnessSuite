@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.0.0-rc.2` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
+> 版本 `1.0.0-rc.3` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -124,7 +124,7 @@ pnpm test             # 477 个用例（23 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.0.0-rc.2.tgz（lib + rules + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.0.0-rc.3.tgz（lib + rules + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -138,7 +138,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.0.0-rc.2.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.0.0-rc.3.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -365,7 +365,7 @@ output:
 
 ```json
 {"v":1,"ts":"2026-11-11T01:47:20.963Z","seq":1,"kind":"plugin_loaded","decision":"ok",
- "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.0.0-rc.2",
+ "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.0.0-rc.3",
  "metrics":{"rule_count":20,"chain_count":3},"sha256":"…"}
 ```
 
@@ -484,11 +484,16 @@ plugins/dsh-safeharness/
 ## 10. 开发与测试
 
 ```bash
+pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # tsc -> lib/
 pnpm test             # vitest：25 个文件 / 499 个用例（内部含黄金语料；不含语料的公开克隆为 23 文件 / 482 用例 = 479 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
-node scripts/link-dsh.mjs --check   # 检查宿主包链接
+node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
+
+- **可独立构建**：`@deepseek-ai/cordis`、`schemastery`、`dsh-*` 等宿主包在 `devDependencies` 里按精确版本固定（npm 上已发布）；运行时它们仍由 DSH 进程提供，插件自身零运行时依赖。
+- **`dsh-invariants` 只用于编译**：它没有 `0.2.x` 发布线，因此 `peerDependencies` 与 `devDependencies` 固定为 `0.1.0-rc.8`（类型来源）；运行期用的是宿主 `ctx.invariants` 服务，不 import 该包。
+- **CI**：`.github/workflows/ci.yml` 在干净 runner 上跑 `pnpm install && pnpm build && pnpm test`（跳过对机器抖动敏感的 `tests/perf.test.ts`，性能预算在本机 `pnpm test` 里照常执行）。
 
 - **测试分布**：输入/工具/SQL/规则、五个钩子、账本与脱敏、姿态、巡检、预算、审批桥、judge、失败矩阵、性能预算、以及真实 DSH 会话的假模型回放（`scripts/fake-openai.mjs`）。
 - **Python↔TS 黄金一致性**：20 条 inform 规则与 SQL 判定在内部语料上 30/30 一致（内部验证，语料与 fixture 属内部资产，**不随本仓库分发**；因此 `pnpm test` 中的 3 个用例在缺少语料时跳过）。
@@ -514,7 +519,7 @@ node scripts/link-dsh.mjs --check   # 检查宿主包链接
 13. **高熵令牌启发式的已知误报**：≥40 字符、≥3.5 bits/char 的"令牌"（含长路径片段，如 `@scope/pkg-name/lib/entry`）会被判为 `credential_high_entropy`。`balanced` 只记 WARN；`hardened` 会整条阻断工具结果 → 用 `results.blockOn: []` 或 `results.mode: warn` 缓解（规则文本需与 Python 侧保持一致，不单独改）。
 14. **输出面目前只覆盖回答**：不覆盖 compaction / session-title 等内部 LLM 调用（judge 请求本身有递归防护，但内部调用不送审）。
 15. **judge 的 URL/Key 属于宿主配置，不属于插件配置**：插件只携带 `provider`/`model` 路由，Key 由 DSH 凭据层按 `apiKeyEnv` 引用解析，插件既不读也不打印。换端点 = 改 profile 的 `llm-pi-ai.providers`，不需要改插件。
-16. **真实模型冒烟未做**：所有真实 host 会话都跑在确定性假模型上（无成本、无外网）；同一路由换成真实供应商后，行为差异（工具调用形态、流式分片、usage 上报）仍需一次冒烟。`/safeharness judge probe` 就是为此准备的自检入口。
+16. **真实模型冒烟只做过一次最小会话**：用真实 OpenAI 兼容端点（`gpt-6-luna`）跑通一轮 observe：`usage_input=29280 / usage_output=26`、judge `status=ok`（`judge_ms=7319`）。不同供应商在工具调用形态、流式分片、usage 上报上的差异仍需各自冒烟；`/safeharness judge probe` 就是为此准备的自检入口。
 
 ---
 

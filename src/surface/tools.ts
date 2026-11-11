@@ -4,12 +4,21 @@
  * @module
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { JsonValue, ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { Runtime } from '../runtime.js'
 import type { PostureReport } from '../posture/report.js'
 import type { PatrolReport } from '../patrol/index.js'
 import type { AuditKind } from '../audit/types.js'
 import { VERSION } from '../version.js'
+
+/**
+ * JSON-serializable value.
+ *
+ * Declared here rather than imported: the published host types no longer export
+ * `JsonValue`, while the profile-tree copy still does. The structural shape is the
+ * one `defineTool` validates, so this alias compiles against both revisions.
+ */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
 /**
  * Assert a tool payload is lossless JSON.
