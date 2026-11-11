@@ -247,6 +247,8 @@ describe('OpenAI shape', () => {
       'judge-allow',
       'judge-block',
       'tool-call-patrol',
+      'tool-call-patrol-notify',
+      'tool-call-patrol-notify-usage',
       'usage',
     ])
   })
@@ -499,6 +501,8 @@ describe('scenario selection', () => {
       'text',
       'tool-call-bash',
       'tool-call-patrol',
+      'tool-call-patrol-notify',
+      'tool-call-patrol-notify-usage',
       'tool-call-three-parallel',
       'usage',
     ])

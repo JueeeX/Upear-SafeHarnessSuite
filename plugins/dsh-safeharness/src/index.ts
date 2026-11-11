@@ -25,13 +25,13 @@ import { Config, resolveConfig, type SafeHarnessConfig, type ResolvedConfig } fr
 import { createRuntime, type LoggerLike, type Runtime } from './runtime.js'
 import { installInputHook } from './hooks/input.js'
 import { installToolHooks } from './hooks/tools.js'
-import { installLlmHook } from './hooks/llm.js'
+import { installLlmHook, createJudgeFor } from './hooks/llm.js'
 import { installApprovalHook } from './hooks/approval.js'
 import { runPosture, enforceLoadTimePosture, type PostureProbe } from './posture/report.js'
 import { runPatrol, type PatrolProbe, type PatrolReport } from './patrol/index.js'
 import { statusTool, postureTool, auditQueryTool, patrolTool } from './surface/tools.js'
 import { registerPromptSection } from './surface/prompt.js'
-import { safeharnessCommand } from './surface/commands.js'
+import { safeharnessCommand, JUDGE_PROBE_TEXT, type JudgeCommandTarget } from './surface/commands.js'
 import { SAFEHARNESS_SERVICE, type HookFlags, type PluginHandle, type SafeHarnessService } from './service.js'
 import { sha256Hex } from './util/hash.js'
 import { VERSION } from './version.js'
@@ -473,7 +473,19 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   const commands = ctx.get('commands') as { register?: (definition: unknown) => () => void } | undefined
   if (commands !== undefined && typeof commands.register === 'function') {
     try {
-      commands.register(safeharnessCommand(runtime, posture, patrol))
+      // The diagnostic probe reuses the output guard's own judge handle, so a green
+      // `/safeharness judge probe` proves the configured provider/model/key really
+      // answer over the route the guard would use. Only status/verdict/latency are
+      // printed; the reviewed text and the credential are never surfaced.
+      const judgeHandle = createJudgeFor(ctx, runtime)
+      const judgeTarget: JudgeCommandTarget = {
+        state: judgeFact,
+        probe: () => judgeHandle.review(JUDGE_PROBE_TEXT, {
+          maxChars: 512,
+          timeoutMs: Math.max(1000, runtime.config.output.judge.timeoutMs),
+        }),
+      }
+      commands.register(safeharnessCommand(runtime, posture, patrol, judgeTarget))
       hooks.commands = true
     } catch (error) {
       runtime.internalError('commands', error)

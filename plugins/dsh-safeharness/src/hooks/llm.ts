@@ -58,13 +58,29 @@ interface ReviewOutcome {
 }
 
 /**
+ * Build the judge handle over this host's `ctx.llm` route.
+ *
+ * Exported so the composition root can also hand the same handle to the
+ * `/safeharness judge` diagnostic: a probe must travel the exact route the output
+ * guard would use, otherwise "it works" would prove nothing about interception.
+ * The handle is cheap (no state, no I/O) and safe to construct twice.
+ *
+ * @param ctx - plugin context; `ctx.get('llm')` is read on every call.
+ * @param runtime - shared config (judge route can change on settings reload).
+ * @returns a judge whose `available` is false when the profile composes no llm.
+ */
+export function createJudgeFor(ctx: Context, runtime: Runtime): Judge {
+  return createJudge(judgeCallOf(ctx, runtime))
+}
+
+/**
  * Install the model-stream listener.
  *
  * @param ctx - plugin context; the listener is disposed with the plugin fiber.
  * @param runtime - shared engine/ledger/state/config.
  */
 export function installLlmHook(ctx: Context, runtime: Runtime): void {
-  const judge = createJudge(judgeCallOf(ctx, runtime))
+  const judge = createJudgeFor(ctx, runtime)
   /** How many judge calls are in flight (D6 second line of defence). */
   let judgeDepth = 0
 

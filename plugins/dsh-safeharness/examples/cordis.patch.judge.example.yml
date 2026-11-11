@@ -1,0 +1,69 @@
+# Example: point the semantic judge at its own model endpoint (URL + key).
+#
+# The judge never opens its own HTTP connection: it asks the host's `ctx.llm` for
+# one Chat completion. So the endpoint and the credential belong to the LLM
+# provider configuration — the plugin only carries the `provider`/`model` route.
+#
+# This file shows the whole chain in one place:
+#
+#   1. a dedicated `judge` route in `@deepseek-ai/dsh-llm-pi-ai` (baseURL + apiKeyEnv),
+#   2. the plugin's judge config pointing at that route,
+#   3. where the key itself lives (never in this file).
+#
+# Apply it by appending to `$DSH_HOME/profiles/<profile>/cordis.patch.yml`, or for a
+# one-off run: `dsh --profile <profile> --patch <this-file> "<task>"`.
+#
+# A patch entry that only carries `id:` is a CONFIG OVERRIDE; a brand-new plugin
+# must be inserted (`- insert: [...]`). The provider override below targets the
+# entry the profile already has, so it needs no `insert:`.
+
+# ---- 1) Endpoint + credential REFERENCE -------------------------------------
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      judge:                                  # ← this id is `output.judge.provider`
+        api: openai-completions               # required for routes outside the shipped catalog
+        baseURL: https://your-endpoint.example/v1
+        apiKeyEnv: SAFEHARNESS_JUDGE_API_KEY  # a NAME, never the key
+        models:
+          - id: your-model-id
+            name: your-model-id
+        # Optional transport tuning:
+        # timeoutMs: 20000
+        # retryPolicy: { retries: 1 }
+
+# ---- 2) The plugin's judge route --------------------------------------------
+- insert:
+    - id: safeharness
+      name: "@upear/dsh-safeharness"
+      config:
+        preset: balanced
+        output:
+          mode: warn                          # enforce-buffer also covers the answer itself
+          judge:
+            enabled: true
+            scope: flagged                    # review only structurally flagged answers
+            provider: judge                   # ← matches the provider id above
+            model: your-model-id
+            maxChars: 12000
+            timeoutMs: 6000
+
+# ---- 3) Where the key lives (do NOT put it here) ----------------------------
+#
+# Pick one, highest precedence first:
+#
+#   a) launching environment:  $env:SAFEHARNESS_JUDGE_API_KEY = "sk-..."   (this run only)
+#   b) managed credentials:   $DSH_HOME/.credentials.yaml  (0600)           (survives restarts;
+#                              the desktop Settings → Models page writes here)
+#   c) $DSH_HOME/.env  or the project root .env
+#
+# Verify the chain before enforcing:
+#
+#   /safeharness judge          # route + whether this profile composes an llm service
+#   /safeharness judge probe    # one real canary call; prints status/verdict/latency,
+#                               # never content, never the credential
+#
+# If the key is missing the host fails the call with MISSING_CREDENTIAL and the
+# probe reports `status=error`; in `hardened`, a judge that cannot answer makes the
+# output guard refuse the answer instead of falling back to pass-through.

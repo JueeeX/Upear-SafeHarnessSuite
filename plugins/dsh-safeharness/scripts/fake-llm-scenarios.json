@@ -190,6 +190,53 @@
         { "delta": {}, "finish_reason": "tool_calls" }
       ]
     },
+    "tool-call-patrol-notify": {
+      "kind": "chat",
+      "description": "Call safeharness_patrol with the health and notify checks, then finish with text. Lets the Feishu notification path run end-to-end against a local sink (no account needed).",
+      "followUp": "text",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "type": "function",
+                "function": {
+                  "name": "safeharness_patrol",
+                  "arguments": "{\"include\":[\"health_probe\",\"notify\"]}"
+                }
+              }
+            ]
+          }
+        },
+        { "delta": {}, "finish_reason": "tool_calls" }
+      ]
+    },
+    "tool-call-patrol-notify-usage": {
+      "kind": "chat",
+      "description": "Same as tool-call-patrol-notify, but every call reports an OpenAI include_usage chunk and the follow-up call also reports usage. Two calls in one turn therefore accumulate 36 tokens, which is how a per-turn budget crossing gets exercised without a paid model.",
+      "followUp": "usage",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "type": "function",
+                "function": {
+                  "name": "safeharness_patrol",
+                  "arguments": "{\"include\":[\"health_probe\",\"notify\"]}"
+                }
+              }
+            ]
+          }
+        },
+        { "delta": {}, "finish_reason": "tool_calls" },
+        { "usage": { "prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18 } }
+      ]
+    },
     "usage": {
       "kind": "chat",
       "description": "Plain text reply plus an OpenAI include_usage final chunk and a finish_reason.",

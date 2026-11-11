@@ -8,6 +8,7 @@ import type { CommandDefinition, CommandResult } from '@deepseek-ai/dsh-commands
 import type { Runtime } from '../runtime.js'
 import type { PostureReport } from '../posture/report.js'
 import type { PatrolReport } from '../patrol/index.js'
+import type { JudgeResult } from '../judge/client.js'
 import { VERSION } from '../version.js'
 import { MAX_TRAIL } from '../state.js'
 
@@ -15,7 +16,40 @@ import { MAX_TRAIL } from '../state.js'
 export const COMMAND_NAME = 'safeharness'
 
 /** Subcommand help line shown for an unknown argument. */
-const USAGE = 'usage: /safeharness status | posture | rules | audit [n] | patrol [check...]'
+const USAGE = 'usage: /safeharness status | posture | rules | audit [n] | patrol [check...] | judge [probe]'
+
+/**
+ * The canary text a `/safeharness judge probe` sends.
+ *
+ * Deliberately tiny and unambiguous: the judge prompt already asks for a one-word
+ * JSON verdict, so a reachable route answers in a handful of tokens and the probe
+ * stays cheap. It never carries operator or session content.
+ */
+export const JUDGE_PROBE_TEXT = 'safeharness judge connectivity self-check'
+
+/**
+ * Read-only view of the judge for the operator command: current route plus a
+ * one-shot probe. `handler` never returns reviewed content, so a probe cannot
+ * leak through the command result.
+ */
+export interface JudgeCommandTarget {
+  /** Current judge facts (read live: a settings reload changes the route). */
+  state(): { enabled: boolean; scope: string; provider: string; model: string; available: boolean }
+  /** One real judge call over the production route; content never returned. */
+  probe(): Promise<JudgeResult>
+}
+
+/** One-line rendering of a probe result: status/verdict and sizes only. */
+function formatJudgeProbe(result: JudgeResult, route: string): string {
+  const labels = Object.entries(result.labels)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${value}`)
+  const metrics = Object.entries(result.metrics)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${value}`)
+  const bits = [`status=${result.status}`, `verdict=${result.verdict}`, `blocked=${result.blocked ? 'yes' : 'no'}`]
+  return [`judge probe: ${bits.join(' ')} route=${route}`, `  ${[...labels, ...metrics].join(' ') || '(no detail)'}`].join('\n')
+}
 
 /** Format one posture report as plain text. */
 function formatPosture(report: PostureReport): string {
@@ -39,17 +73,20 @@ function formatPatrol(report: PatrolReport): string {
  * @param runtime - shared runtime.
  * @param runPosture - runs the posture checks (owned by the composition root).
  * @param runPatrol - runs the patrol checks (owned by the composition root).
+ * @param judge - judge diagnostics target (optional: a profile with no `llm`
+ *   service, or a test that only exercises other subcommands, may omit it).
  * @returns the command definition to register.
  */
 export function safeharnessCommand(
   runtime: Runtime,
   runPosture: () => Promise<PostureReport>,
   runPatrol?: (options?: { include?: readonly string[] }) => Promise<PatrolReport>,
+  judge?: JudgeCommandTarget,
 ): CommandDefinition {
   return {
     name: COMMAND_NAME,
-    description: 'Inspect the security layer: status, posture, rules, audit tail, patrol.',
-    input: { hint: 'status | posture | rules | audit [n] | patrol [check...]' },
+    description: 'Inspect the security layer: status, posture, rules, audit tail, patrol, judge.',
+    input: { hint: 'status | posture | rules | audit [n] | patrol [check...] | judge [probe]' },
     // Operator diagnostics, not model input: keep it out of the model transcript.
     recordInput: true,
     async handler(invocation): Promise<CommandResult> {
@@ -110,6 +147,33 @@ export function safeharnessCommand(
             const include = rest.filter((part) => part.length > 0)
             const report = await runPatrol(include.length === 0 ? {} : { include })
             return { kind: 'success', text: formatPatrol(report) }
+          }
+          case 'judge': {
+            const live = judge?.state()
+            const route = `${runtime.config.output.judge.provider}/${runtime.config.output.judge.model}`
+            const state = [
+              `judge: ${runtime.config.output.judge.enabled ? `on scope=${runtime.config.output.judge.scope}` : 'off'} route=${route}`,
+              `  available: ${live?.available === true ? 'yes' : 'no'}${live?.available === true ? '' : ' (this profile composes no llm service)'}`,
+            ]
+            if (rest[0] !== 'probe') {
+              return {
+                kind: 'success',
+                text: [
+                  ...state,
+                  '  probe: /safeharness judge probe  (one real call over this route; prints status only)',
+                ].join('\n'),
+              }
+            }
+            if (judge === undefined || live === undefined) {
+              return { kind: 'error', text: 'judge probe: no judge handle in this build' }
+            }
+            if (!live.available) {
+              return { kind: 'error', text: 'judge probe: this profile composes no llm service, nothing to probe' }
+            }
+            // The canary travels the same `ctx.llm` route the output guard uses, so a
+            // green probe proves the configured provider/model/key actually answer.
+            const result = await judge.probe()
+            return { kind: result.status === 'ok' ? 'success' : 'error', text: formatJudgeProbe(result, route) }
           }
           default:
             return { kind: 'error', text: USAGE }
