@@ -18,6 +18,13 @@
 # entry the profile already has, so it needs no `insert:`.
 
 # ---- 1) Endpoint + credential REFERENCE -------------------------------------
+#
+# WARNING: a patch entry's `config` REPLACES the value composed below it — it is
+# not deep-merged. Overriding `llm-pi-ai` with only this new route makes every
+# provider already configured in the lower layers disappear (measured with
+# `--dump-config`: the existing `liao` route vanished). Either keep that provider
+# map here too, or add the route from the desktop Settings → Models page, which
+# writes through the settings namespace instead of the patch.
 - id: llm-pi-ai
   name: "@deepseek-ai/dsh-llm-pi-ai"
   config:
@@ -32,6 +39,12 @@
         # Optional transport tuning:
         # timeoutMs: 20000
         # retryPolicy: { retries: 1 }
+      # ... keep every provider the profile already had, e.g.:
+      # <existing-provider-id>:
+      #   apiKeyEnv: <EXISTING_KEY_ENV>
+      #   api: openai-completions
+      #   baseURL: https://...
+      #   models: [ ... ]
 
 # ---- 2) The plugin's judge route --------------------------------------------
 - insert:
