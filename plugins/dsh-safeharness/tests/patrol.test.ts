@@ -644,3 +644,69 @@ describe('patrol content discipline', () => {
     expect(sent[0]).not.toMatch(/SEKRET|https?:|ops\.internal|feishu/iu)
   })
 })
+
+// ---------------------------------------------------------------------------
+// notify — multiple channels
+// ---------------------------------------------------------------------------
+
+describe('patrol notify — multiple channels', () => {
+  /** A dirty-config harness with the given destinations. */
+  function multi(notify: NonNullable<SafeHarnessConfig['patrol']>['notify']): Harness {
+    return makeHarness({ config: { patrol: { minCount: 10, windowMinutes: 10, notify } } })
+  }
+
+  it('delivers to every channel, tallies failures by type and never leaks a URL', async () => {
+    const h = multi([
+      { type: 'dingtalk', webhook: 'https://a.example/ding' },
+      { type: 'wecom', webhook: 'https://b.example/wecom' },
+      { type: 'feishu', webhook: 'https://c.example/feishu' },
+    ])
+    await seedDenies(h, 10, NOW - MIN)
+    const calls: string[] = []
+    const fetchStub = vi.fn(async (url: string) => {
+      calls.push(url)
+      const failed = url.includes('b.example')
+      return { ok: !failed, status: failed ? 500 : 200 }
+    })
+    vi.stubGlobal('fetch', fetchStub)
+    try {
+      const report = await runPatrol(h.runtime, probeFor())
+      expect(calls).toHaveLength(3)
+      const notify = report.findings.find((item) => item.code === 'notify')
+      expect(notify?.severity).toBe('WARN')
+      expect(notify?.detail).toBe('notify_failed: 2/3 channels delivered; 1 failed (wecom: http_500)')
+      expect(report.notified).toBe(false)
+      for (const item of report.findings) expect(item.detail).not.toMatch(/https?:|a\.example|b\.example/u)
+
+      const records = await readLedger(h.runtime)
+      const patrolRecord = records.find((record) => record.kind === 'patrol_report')
+      expect(patrolRecord?.labels?.notified).toBe('false')
+      const serialized = JSON.stringify(records)
+      for (const forbidden of ['a.example', 'b.example', 'c.example', 'ding', 'wecom']) {
+        expect(serialized).not.toContain(forbidden)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('marks notified true only when every channel succeeded', async () => {
+    const h = multi([
+      { type: 'dingtalk', webhook: 'https://a.example/ding' },
+      { type: 'onebot', webhook: 'http://127.0.0.1:5700/', groupId: '7' },
+    ])
+    await seedDenies(h, 10, NOW - MIN)
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 204 })))
+    try {
+      const report = await runPatrol(h.runtime, probeFor())
+      const notify = report.findings.find((item) => item.code === 'notify')
+      expect(notify?.severity).toBe('OK')
+      expect(notify?.detail).toBe('notification sent (2/2 channels delivered)')
+      expect(report.notified).toBe(true)
+      const record = (await readLedger(h.runtime)).find((item) => item.kind === 'patrol_report')
+      expect(record?.labels?.notified).toBe('true')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})

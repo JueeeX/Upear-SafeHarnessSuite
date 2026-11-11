@@ -18,6 +18,7 @@
  * @module
  */
 import z from '@deepseek-ai/schemastery'
+import type { NotifyChannel, NotifyChannelType } from './notify/channels.js'
 
 /** Deployment posture preset. */
 export type PresetId = 'observe' | 'balanced' | 'hardened'
@@ -29,6 +30,28 @@ export type OutputMode = 'off' | 'warn' | 'enforce-buffer'
 export type ApprovalMode = 'delegate' | 'policy'
 /** When the semantic judge runs: only on structurally flagged output, or always. */
 export type JudgeScope = 'flagged' | 'always'
+
+/**
+ * One operator-written notification destination.
+ *
+ * Every field is optional at the schema layer so `resolveConfig` can report every
+ * problem at once; the resolved form (`NotifyChannel`) always has a type and a
+ * non-empty webhook.
+ */
+export interface NotifyChannelConfig {
+  type?: NotifyChannelType
+  webhook?: string
+  /** DingTalk signing secret; never logged. */
+  secret?: string
+  /** Extra request headers (a value here is treated as a credential). */
+  headers?: Record<string, string>
+  /** `generic` body template; `{{text}}` is replaced by the JSON-escaped sentence. */
+  body?: string
+  /** `onebot` group id. */
+  groupId?: string
+  /** `onebot` bearer token, when the bridge requires one. */
+  accessToken?: string
+}
 
 /** Raw (operator-supplied) config: every field optional, presets fill the rest. */
 export interface SafeHarnessConfig {
@@ -105,8 +128,10 @@ export interface SafeHarnessConfig {
     factor?: number
     minCount?: number
     healthUrls?: string[]
-    /** Read from settings only; never logged, never printed. */
+    /** Deprecated single-channel alias: one Feishu webhook. */
     feishuWebhook?: string
+    /** Notification destinations; overrides {@link feishuWebhook} when non-empty. */
+    notify?: NotifyChannelConfig[]
   }
   budget?: {
     maxTokensPerTurn?: number
@@ -203,7 +228,17 @@ export const Config: z<SafeHarnessConfig> = z.object({
     factor: z.number().description('Rate multiplier that counts as anomalous.'),
     minCount: z.number().description('Minimum denials before the rate can fail.'),
     healthUrls: keepAbsent(z.array(z.string())).description('HTTP endpoints probed by patrol.'),
-    feishuWebhook: z.string().description('Optional webhook; never logged.'),
+    feishuWebhook: z.string().description('Deprecated: one Feishu webhook; prefer patrol.notify. Never logged.'),
+    notify: keepAbsent(z.array(z.object({
+      type: z.union(['feishu', 'dingtalk', 'wecom', 'onebot', 'generic'] as const)
+        .description('Envelope family: feishu / dingtalk / wecom / onebot (QQ bridge) / generic.'),
+      webhook: z.string().description('Destination URL. Treated as a credential: never logged or printed.'),
+      secret: z.string().description('DingTalk signing secret. Never logged.'),
+      headers: z.any().description('Extra request headers for this channel (values are credentials).'),
+      body: z.string().description('generic: JSON body template; {{text}} is replaced by the sentence.'),
+      groupId: z.string().description('onebot: group id to post into.'),
+      accessToken: z.string().description('onebot: bearer token. Never logged.'),
+    }))).description('Notification destinations (one or more); overrides feishuWebhook.'),
   }).description('Patrol.'),
 
   budget: z.object({
@@ -262,7 +297,10 @@ export interface ResolvedConfig {
     readonly factor: number
     readonly minCount: number
     readonly healthUrls: readonly string[]
+    /** Kept for compatibility: the first Feishu route, or the resolved single channel. */
     readonly feishuWebhook: string
+    /** Normalised destinations (legacy `feishuWebhook` becomes one Feishu channel). */
+    readonly notify: readonly NotifyChannel[]
   }
   readonly budget: { readonly maxTokensPerTurn: number }
 }
@@ -341,6 +379,7 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
     minCount: 10,
     healthUrls: [],
     feishuWebhook: '',
+    notify: [],
   },
   budget: { maxTokensPerTurn: 0 },
 }
@@ -539,6 +578,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       minCount: nonNegative(patrol.minCount, 'patrol.minCount', problems, 10, { integer: true }),
       healthUrls: stringList(patrol.healthUrls, 'patrol.healthUrls', problems),
       feishuWebhook: typeof patrol.feishuWebhook === 'string' ? patrol.feishuWebhook : '',
+      notify: resolveNotifyChannels(patrol, problems),
     },
     budget: {
       maxTokensPerTurn: nonNegative(budget.maxTokensPerTurn, 'budget.maxTokensPerTurn', problems, 0, { integer: true }),
@@ -566,4 +606,85 @@ export function isEnforcing(mode: EnforcementMode | OutputMode): boolean {
 /** Whether a mode is disabled entirely. */
 export function isOff(mode: EnforcementMode | OutputMode): boolean {
   return mode === 'off'
+}
+
+/**
+ * Normalise `patrol.notify` into channels, falling back to the legacy single
+ * `feishuWebhook`.
+ *
+ * Validation never quotes a webhook: the problem text names the index and the field,
+ * so an invalid config cannot leak a bot token through an error message or a log.
+ */
+function resolveNotifyChannels(
+  patrol: { notify?: unknown; feishuWebhook?: unknown },
+  problems: string[],
+): readonly NotifyChannel[] {
+  const channels: NotifyChannel[] = []
+  const raw = patrol.notify
+  if (raw !== undefined && !Array.isArray(raw)) {
+    problems.push('patrol.notify must be an array of channel objects')
+  } else if (Array.isArray(raw)) {
+    raw.forEach((entry, index) => {
+      if (!isMergeableObject(entry)) {
+        problems.push(`patrol.notify[${index}] must be an object`)
+        return
+      }
+      const type = oneOf(
+        entry.type,
+        ['feishu', 'dingtalk', 'wecom', 'onebot', 'generic'] as const,
+        `patrol.notify[${index}].type`,
+        problems,
+      )
+      const webhook = typeof entry.webhook === 'string' ? entry.webhook.trim() : ''
+      if (webhook.length === 0) problems.push(`patrol.notify[${index}].webhook must be a non-empty URL`)
+      const secret = optionalString(entry.secret, `patrol.notify[${index}].secret`, problems)
+      const body = optionalString(entry.body, `patrol.notify[${index}].body`, problems)
+      const groupId = optionalString(entry.groupId, `patrol.notify[${index}].groupId`, problems)
+      const accessToken = optionalString(entry.accessToken, `patrol.notify[${index}].accessToken`, problems)
+      if (type === 'onebot' && (groupId === undefined || groupId.trim().length === 0)) {
+        problems.push(`patrol.notify[${index}].groupId is required for the onebot channel`)
+      }
+      const headers = headerMap(entry.headers, index, problems)
+      channels.push({
+        type,
+        webhook,
+        ...(secret === undefined ? {} : { secret }),
+        ...(body === undefined ? {} : { body }),
+        ...(groupId === undefined ? {} : { groupId }),
+        ...(accessToken === undefined ? {} : { accessToken }),
+        ...(headers === undefined ? {} : { headers }),
+      })
+    })
+  }
+  if (channels.length === 0) {
+    const legacy = typeof patrol.feishuWebhook === 'string' ? patrol.feishuWebhook.trim() : ''
+    if (legacy.length > 0) channels.push({ type: 'feishu', webhook: legacy })
+  }
+  return channels
+}
+
+/** Optional string field; a non-string value is a recorded problem. */
+function optionalString(value: unknown, path: string, problems: string[]): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'string') return value
+  problems.push(`${path} must be a string`)
+  return undefined
+}
+
+/** Validate an optional header map (every value must be a string). */
+function headerMap(value: unknown, index: number, problems: string[]): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined
+  if (!isMergeableObject(value)) {
+    problems.push(`patrol.notify[${index}].headers must be an object of strings`)
+    return undefined
+  }
+  const out: Record<string, string> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== 'string') {
+      problems.push(`patrol.notify[${index}].headers.${key} must be a string`)
+      continue
+    }
+    out[key] = item
+  }
+  return out
 }

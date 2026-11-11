@@ -1,7 +1,7 @@
 /**
  * Patrol (plan §6.10, T3.4): the external self-check that runs *outside* the
  * turn — denial-rate, health probes, posture drift, ledger reconciliation and
- * the optional Feishu notification.
+ * the optional multi-channel notification (Feishu / DingTalk / WeCom / OneBot / generic).
  *
  * Design rules, in priority order:
  *
@@ -26,6 +26,7 @@
  */
 import type { LedgerRecord } from '../audit/types.js'
 import type { Runtime } from '../runtime.js'
+import { deliverNotifications, summarizeDelivery, type NotifyResult } from '../notify/channels.js'
 
 /** Process exit codes (tool return value / command status, plan §6.10 #6). */
 export const PATROL_EXIT = { clean: 0, fail: 1, error: 2 } as const
@@ -72,7 +73,7 @@ export interface PatrolReport {
   readonly findings: readonly PatrolFinding[]
   readonly summary: PatrolSummary
   readonly exitCode: PatrolExitCode
-  /** Whether the Feishu notification was actually delivered. */
+  /** Whether every configured notification channel accepted the message. */
   readonly notified: boolean
   /** Set only when patrol itself failed (exit code 2); never raw error text. */
   readonly internalError?: string
@@ -134,18 +135,27 @@ async function defaultFetch(
 }
 
 /**
- * Default notification sink: POST the Feishu text-message envelope, fail on
- * non-2xx. The only variable content is the counts-only sentence built by
- * {@link notificationText}; the envelope keys are a constant.
+ * Delivered through the injected transport seam.
+ *
+ * Kept as a per-channel `(webhook, text)` callback so existing tests can observe the
+ * exact destination and sentence without building envelopes; the default path builds
+ * the provider-specific request in {@link deliverNotifications}.
  */
-async function defaultNotify(webhook: string, text: string): Promise<void> {
-  const response = await fetch(webhook, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ msg_type: 'text', content: { text } }),
-    signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
-  })
-  if (!response.ok) throw new Error('webhook rejected the notification')
+async function deliverWithOverride(
+  channels: readonly { readonly type: NotifyResult['type']; readonly webhook: string }[],
+  text: string,
+  impl: (webhook: string, text: string) => Promise<void>,
+): Promise<readonly NotifyResult[]> {
+  const results: NotifyResult[] = []
+  for (const channel of channels) {
+    try {
+      await impl(channel.webhook, text)
+      results.push({ type: channel.type, ok: true })
+    } catch {
+      results.push({ type: channel.type, ok: false, reason: 'network' })
+    }
+  }
+  return results
 }
 
 /** Read the injected clock once, refusing a non-finite value. */
@@ -460,24 +470,26 @@ export async function runPatrol(
 
   // --- notification -----------------------------------------------------------
   // Only a dirty report is worth waking an operator for. Delivery failure is a
-  // WARN by design: the evidence already exists in the report/ledger.
+  // WARN by design: the evidence already exists in the report/ledger. One channel
+  // failing must not hide another's success, so the finding carries the tally.
   let notified = false
   if (selected.includes('notify')) {
     const before = summarizePatrol(findings)
-    const webhook = patrol.feishuWebhook.trim()
-    if (webhook.length === 0) {
+    const channels = patrol.notify
+    if (channels.length === 0) {
       findings.push(finding('notify', 'SKIP', 'no webhook configured'))
     } else if (before.clean) {
       findings.push(finding('notify', 'SKIP', 'report is clean; no notification sent'))
     } else {
-      const notifyImpl = probe.notifyImpl ?? defaultNotify
-      try {
-        await notifyImpl(patrol.feishuWebhook, notificationText(before))
-        notified = true
-        findings.push(finding('notify', 'OK', 'notification sent'))
-      } catch {
-        findings.push(finding('notify', 'WARN', 'notify_failed: webhook delivery failed'))
-      }
+      const text = notificationText(before)
+      const results = probe.notifyImpl === undefined
+        ? await deliverNotifications(channels, text, { now, timeoutMs: NOTIFY_TIMEOUT_MS })
+        : await deliverWithOverride(channels, text, probe.notifyImpl)
+      const tally = summarizeDelivery(results)
+      notified = results.length > 0 && results.every((item) => item.ok)
+      findings.push(notified
+        ? finding('notify', 'OK', `notification sent (${tally})`)
+        : finding('notify', 'WARN', `notify_failed: ${tally}`))
     }
   }
 
