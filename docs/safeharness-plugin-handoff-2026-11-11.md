@@ -22,7 +22,7 @@
 | 桌面端插件 | 已装 `1.1.1`（profile `desktop`，tarball 安装），会话在跑，judge 路由 `liao/gpt-6-luna` |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = `8cd0088`，tags `v1.0.0-rc.1…rc.4`、`v1.0.0`、`v1.1.0`、`v1.1.1` |
 | 本地仓库 | `F:\AgentSecurity\Upear`，`main` = `89b1289`（**比公开仓库多一个未发布 commit**：T5.1 第 1 步 sidecar 传输层） |
-| 测试 | 本地 `pnpm test` = **28 文件 / 564 用例**全绿；公开克隆 25 文件 / 538（其中 3 例缺内部语料会 skip）；CI 剔除 perf → 24 文件 / 530（527 pass + 3 skip） |
+| 测试 | 本地 `pnpm test` = **29 文件 / 573 用例**全绿；公开克隆 25 文件 / 538（其中 3 例缺内部语料会 skip）；CI 剔除 perf → 24 文件 / 530（527 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（94 KB，任务卡 §9 + 风险/决策 §12，**必须随进展更新**） |
 | 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库） |
 | 下一步 | T5.1 第 2 步（Python sidecar 脚本 + 引擎异步化 + 配置开关），详见 §11 |
@@ -194,7 +194,7 @@ F:\AgentSecurity\Upear\
 cd F:\AgentSecurity\Upear\plugins\dsh-safeharness
 pnpm install          # 宿主包已是 devDependencies，干净机器不需要装 DSH
 pnpm build            # tsc -> lib/
-pnpm test             # 28 文件 / 564 用例（本机全绿）
+pnpm test             # 29 文件 / 573 用例（本机全绿）
 pnpm exec vitest run tests/sidecar.test.ts     # 单文件
 pnpm typecheck        # tsc --noEmit
 pnpm pack --pack-destination ./dist            # 产物 upear-dsh-safeharness-<ver>.tgz
@@ -270,17 +270,20 @@ node plugins/dsh-safeharness/scripts/fake-openai.mjs --port 18080 --scenario too
 3. `pnpm pack --pack-destination ./dist`，把 tgz 复制到 `C:\Users\xiaojue\.dsh\plugin-tarballs\`。
 4. **干净 profile 冷启动验收**（照 §9.3 那套：复制 `headless` 模板 → `dsh plugin add file:<tgz>` → 冷启动 → 看账本 `plugin_loaded plugin_version=<ver>` + `posture ok` + 一次攻击拦截 + 一次 patrol + 卸载后无账本）。
 5. 本地 commit（只 add 插件文件 + 计划文档）。
-6. 公开仓库发布：
+6. 公开仓库发布（**不要手工挑文件**）：
    ```powershell
    cd F:\AgentSecurity\Upear
    git worktree add F:\AgentSecurity\_pub-ga --detach dsh/main
-   # 按 §4.3 白名单复制改动文件到 worktree（路径相对 plugin 根）
+   cd plugins\dsh-safeharness
+   node scripts/publish-public.mjs --check                      # 先看计划：哪些会发、哪些被拒、被拒原因
+   node scripts/publish-public.mjs --target F:\AgentSecurity\_pub-ga
    git -C F:\AgentSecurity\_pub-ga add -A
    git -C F:\AgentSecurity\_pub-ga commit -m "…"
    git -C F:\AgentSecurity\_pub-ga push dsh HEAD:main
    git -C F:\AgentSecurity\_pub-ga tag -a v<ver> -m "…"; git -C F:\AgentSecurity\_pub-ga push dsh v<ver>
    git worktree remove F:\AgentSecurity\_pub-ga --force
    ```
+   「哪些文件不许发」现在是**代码**：`scripts/publish-public.mjs` 的 `PUBLISH_TOP`（顶层白名单）与 `NEVER_PUBLISH`（内部资产拒绝清单：`evidence/`、`lib/`、`dist/`、`*.tgz`、`.env`、`tests/acceptance-m2.test.ts`、`tests/corpus.ts`、`tests/golden.test.ts`、`tests/fixtures/golden.json`、`tests/fixtures/benign*.json`、`scripts/gen_golden.py`）。`tests/publish-guard.test.ts`（8 例）在 `pnpm test` 里守着这份计划：任何内部资产被选中就红。新加的 `src/*.ts`、`tests/*.test.ts` 会被自动纳入，不需要改脚本。
 7. 查 CI（无需 gh）：
    ```powershell
    Invoke-RestMethod -Uri 'https://api.github.com/repos/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh/actions/runs?per_page=1' -Headers @{ 'User-Agent'='dsh-agent' }
@@ -410,7 +413,7 @@ cd F:\AgentSecurity\Upear
 git log --oneline -3                       # 期望 HEAD=89b1289（含未发布 sidecar 传输）
 git rev-parse dsh/main                     # 期望 8cd0088（公开仓 1.1.1）
 cd plugins\dsh-safeharness
-pnpm build; pnpm test                      # 期望 28 文件 / 564 全绿
+pnpm build; pnpm test                      # 期望 29 文件 / 573 全绿
 Get-Content C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\package.json | ConvertFrom-Json | % version   # 期望 1.1.1
 Get-Content C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson | Measure-Object | % Count   # 约 800+ 行，链连续
 ```

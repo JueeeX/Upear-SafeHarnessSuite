@@ -120,7 +120,7 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # tsc -> lib/
-pnpm test             # 521 个用例（26 个文件）
+pnpm test             # 573 个用例（29 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
@@ -539,7 +539,7 @@ plugins/dsh-safeharness/
 ├─ rules/               inform.yaml（20 条）+ chains.yaml（3 条）
 ├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml / cordis.patch.notify.example.yml
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）
-├─ tests/               477 个用例（23 个文件）
+├─ tests/               573 个用例（29 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -558,7 +558,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # tsc -> lib/
-pnpm test             # vitest：27 个文件 / 555 个用例（内部含黄金语料与失败矩阵；公开仓库 25 文件 / 538，其中 3 例在没有内部语料时跳过。CI 另剔除 tests/perf.test.ts → 24 文件 / 530 = 527 pass + 3 skip）
+pnpm test             # vitest：29 个文件 / 573 个用例（内部含黄金语料与失败矩阵；公开仓库当前版本 1.1.1 为 25 文件 / 538，其中 3 例在没有内部语料时跳过。CI 另剔除 tests/perf.test.ts → 24 文件 / 530 = 527 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -566,6 +566,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 - **可独立构建**：`@deepseek-ai/cordis`、`schemastery`、`dsh-*` 等宿主包在 `devDependencies` 里按精确版本固定（npm 上已发布）；运行时它们仍由 DSH 进程提供，插件自身零运行时依赖。
 - **`dsh-invariants` 只用于编译**：它没有 `0.2.x` 发布线，因此 `peerDependencies` 与 `devDependencies` 固定为 `0.1.0-rc.8`（类型来源）；运行期用的是宿主 `ctx.invariants` 服务，不 import 该包。
 - **CI**：`.github/workflows/ci.yml` 在干净 runner 上跑 `pnpm install && pnpm build && pnpm test`（跳过对机器抖动敏感的 `tests/perf.test.ts`，性能预算在本机 `pnpm test` 里照常执行）。
+- **公开树发布**：`node scripts/publish-public.mjs --target <worktree>`。哪些文件能发、哪些永远不发，写在脚本的 `PUBLISH_TOP` / `NEVER_PUBLISH` 里（内部语料、golden fixture、`evidence/`、构建产物、tarball 一律拒绝）；`tests/publish-guard.test.ts` 守着这份计划，`--check` 只打印计划、`--check --target <dir>` 只扫目标目录有没有泄漏。
 
 - **测试分布**：输入/工具/SQL/规则、五个钩子、账本与脱敏、姿态、巡检、预算、审批桥、judge、失败矩阵、性能预算、以及真实 DSH 会话的假模型回放（`scripts/fake-openai.mjs`）。
 - **Python↔TS 黄金一致性**：20 条 inform 规则与 SQL 判定在内部语料上 30/30 一致（内部验证，语料与 fixture 属内部资产，**不随本仓库分发**；因此 `pnpm test` 中的 3 个用例在缺少语料时跳过）。
