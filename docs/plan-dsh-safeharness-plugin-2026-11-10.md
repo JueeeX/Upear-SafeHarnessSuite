@@ -847,7 +847,8 @@ pnpm test:golden        # 一致性
 
 ### M5（可选）
 
-- [ ] T5.1 `SecurityEngine` 的 Python sidecar 实现（复用本仓引擎与语料，进程边界 + fail-closed）
+- [~] T5.1 `SecurityEngine` 的 Python sidecar 实现（复用本仓引擎与语料，进程边界 + fail-closed）
+  **第 1 步已完成**（2026-11-11）：进程边界与传输 —— `src/engine/sidecar.ts` + `tests/sidecar.test.ts`(9) + `tests/helpers/fake-sidecar.mjs`；JSON-lines 协议、id 关联并发、每请求超时、崩溃 fail-closed、脏行容忍、stderr 只计数不保留、零回声、SIGTERM→SIGKILL。尚未接进引擎（计划 §6.14 的接口是同步的，sidecar 必须异步化才能接；下一步见 `evidence/M5-sidecar.md` §3）
 - [x] T5.2 LLM 辅助规则起草工具（草稿不落地，PUT/设置才生效）
   证据：`evidence/M5-drafting.md` + `tests/draft.test.ts`(29) + `examples/cordis.patch.draft.example.yml` → 工具 `safeharness_draft_rule` 与 `/safeharness draft [--chain]`；只返回经 loader 校验的 YAML（`applied:false`），不写文件、不重载；起草请求带 `DRAFT_REQUEST_MARK` 跳过评审与预算；1.1.0 tarball 在干净 profile 冷启动通过。未验证：真实模型起草（需桌面端升级后手敲一次）
 - [ ] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）
