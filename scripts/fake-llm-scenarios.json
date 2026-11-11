@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "docs": [
+    "Scenario table for scripts/fake-openai.mjs. Data only: add a scripted case here instead of editing the server.",
+    "A scenario is one of three kinds:",
+    "  kind=chat  -> 200, scripted `chunks`. In `stream:true` mode each chunk becomes one `data:` SSE frame; in",
+    "                `stream:false` mode the deltas are folded into one OpenAI message. A chunk carrying `usage`",
+    "                emits the OpenAI include_usage final chunk (choices:[]).",
+    "  kind=error -> the HTTP status in `status` (default 500) plus the OpenAI-style `error` body.",
+    "  kind=hang  -> the request is accepted and never answered (timeout / fail-closed tests). No timer is",
+    "                created, and the socket is destroyed by close().",
+    "A `chat` delta is verbatim OpenAI Chat Completions: {role}, {content}, {tool_calls:[{index,type,function:{name,arguments}}]}.",
+    "`function.arguments` is ALWAYS a JSON string (never an object).",
+    "Tool-call ids are generated per request as `call_fake_<seq>_<index>` unless a chunk pins `id`.",
+    "Optional `followUp: <name>`: a chat scenario is only served while the request history carries NO `role:tool`",
+    "message; once a tool result is present the followUp scenario answers instead. This keeps a scripted tool-call",
+    "turn from looping forever (the model would otherwise keep re-asking for the same call) and stays deterministic:",
+    "the branch is a pure function of the request history. `scenario_served` in the request log shows the branch.",
+    "Override any scenario per request with a trigger token in the last user message: [[scenario:NAME]]."
+  ],
+  "trigger": { "open": "[[scenario:", "close": "]]" },
+  "created": 1767225600,
+  "defaultModel": "fake-model",
+  "models": ["fake-model"],
+  "defaultScenario": "text",
+  "judgeTrigger": "[safeharness-judge]",
+  "judgeScenario": "judge-allow",
+  "scenarios": {
+    "text": {
+      "kind": "chat",
+      "description": "Plain assistant text: role delta, two content deltas, finish_reason=stop.",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        { "delta": { "content": "Hello from " } },
+        { "delta": { "content": "the fake model." } },
+        { "delta": {}, "finish_reason": "stop" }
+      ]
+    },
+    "tool-call-bash": {
+      "kind": "chat",
+      "description": "One tool_calls delta invoking bash with a destructive command (balanced preset should deny via tags/chain).",
+      "followUp": "text",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "type": "function",
+                "function": {
+                  "name": "bash",
+                  "arguments": "{\"command\":\"rm -rf /tmp/x\"}"
+                }
+              }
+            ]
+          }
+        },
+        { "delta": {}, "finish_reason": "tool_calls" }
+      ]
+    },
+    "tool-call-three-parallel": {
+      "kind": "chat",
+      "description": "Three tool_calls in one response (bash + web_fetch + todo_write), one delta per call, indices 0-2.",
+      "followUp": "text",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "type": "function",
+                "function": {
+                  "name": "bash",
+                  "arguments": "{\"command\":\"rm -rf /tmp/x\"}"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 1,
+                "type": "function",
+                "function": {
+                  "name": "web_fetch",
+                  "arguments": "{\"url\":\"https://example.invalid\"}"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 2,
+                "type": "function",
+                "function": {
+                  "name": "todo_write",
+                  "arguments": "{\"todos\":[]}"
+                }
+              }
+            ]
+          }
+        },
+        { "delta": {}, "finish_reason": "tool_calls" }
+      ]
+    },
+    "code-mode": {
+      "kind": "chat",
+      "followUp": "text",
+      "description": "call run_code and, inside the program, dispatch a denied shell tool. Uses `tools.pwsh` because this host is Windows (bash-sandbox is disabled there); the plugin denies pwsh by name, so the sub-dispatch must still surface as tool_denied.",
+      "note": "The task brief assumed {\"code\":\"await bash({command:'echo hi'})\"}. The real dsh-tools schema requires `description` too and mounts every tool under the `tools` global, so the scripted program uses await tools.pwsh(...). On 0.2.2-rc.1 Code Mode is the PTC tool executor, not a tools.mode value.",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "type": "function",
+                "function": {
+                  "name": "run_code",
+                  "arguments": "{\"code\":\"await tools.pwsh({ command: 'echo hi', description: 'echo hi' })\\nreturn 'ok'\",\"description\":\"Echo hi through the shell tool in code mode\"}"
+                }
+              }
+            ]
+          }
+        },
+        { "delta": {}, "finish_reason": "tool_calls" }
+      ]
+    },
+    "error-500": {
+      "kind": "error",
+      "status": 500,
+      "description": "HTTP 500 with an OpenAI-style error body (no stream).",
+      "error": {
+        "message": "fake-openai: scripted server error (scenario error-500)",
+        "type": "server_error",
+        "param": null,
+        "code": "fake_server_error"
+      }
+    },
+    "hang": {
+      "kind": "hang",
+      "description": "Accept the request and never respond, for timeout / fail-closed tests. close() destroys the socket."
+    },
+    "judge-allow": {
+      "kind": "chat",
+      "description": "The safeharness semantic judge's verdict: allow. Served only when the request's last user message carries the [safeharness-judge] marker (table.judgeScenario/judgeTrigger).",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        { "delta": { "content": "{\"verdict\":\"allow\"}" } },
+        { "delta": {}, "finish_reason": "stop" }
+      ]
+    },
+    "judge-block": {
+      "kind": "chat",
+      "description": "The safeharness semantic judge's verdict: block. Use with --judge-scenario judge-block to prove enforce-buffer replaces the answer.",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        { "delta": { "content": "{\"verdict\":\"block\",\"reason\":\"credential leak\"}" } },
+        { "delta": {}, "finish_reason": "stop" }
+      ]
+    },
+    "tool-call-patrol": {
+      "kind": "chat",
+      "description": "Call the plugin's read-only safeharness_patrol tool, then finish with text once the tool result exists.",
+      "followUp": "text",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        {
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "type": "function",
+                "function": {
+                  "name": "safeharness_patrol",
+                  "arguments": "{\"include\":[\"audit_rate\"]}"
+                }
+              }
+            ]
+          }
+        },
+        { "delta": {}, "finish_reason": "tool_calls" }
+      ]
+    },
+    "usage": {
+      "kind": "chat",
+      "description": "Plain text reply plus an OpenAI include_usage final chunk and a finish_reason.",
+      "chunks": [
+        { "delta": { "role": "assistant" } },
+        { "delta": { "content": "Budgeted reply." } },
+        { "delta": {}, "finish_reason": "stop" },
+        { "usage": { "prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18 } }
+      ]
+    }
+  }
+}

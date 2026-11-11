@@ -1,0 +1,150 @@
+# ===========================================================================
+# Built-in prompt-injection deny rules (safeharness).
+#
+# SOURCE OF TRUTH: the Python engine's `_DEFAULT_PATTERNS`
+# (src/safeharness/policies/inform.py, positions 0..19, read-only reference).
+# Every `pattern` below is the *same regex text* the Python engine compiles with
+# re.IGNORECASE, ported verbatim. The patterns are SINGLE-QUOTED on purpose: YAML must
+# NOT decode `\uXXXX` — those backslashes are regex escapes and have to reach
+# `new RegExp(source, 'iu')` unchanged. Do not "helpfully" rewrite them to CJK
+# literals and do not double-escape them.
+#
+# Severity mapping (documented choice):
+#   * critical - positions 0,1,2,4,5: the "ignore/disregard previous
+#     instructions", "system prompt override" and "forget everything" families,
+#     i.e. pure instruction override. Highest confidence; these are the only
+#     patterns allowed to deny outright on the input surface.
+#   * high     - every other position (3, 6..13 English families; 14..19 CJK
+#     families), matching the Python engine's family table.
+#
+# Category mapping (same families):
+#   instruction-override     0,1,2,3,4,5,17,18
+#   prompt-injection         7,8,9        (filter/safety bypass, forged headers)
+#   identity-impersonation   6,10,11,12,13,14,15,16
+#   hidden-command           19
+#
+# `reason` is a short operator-facing label (ledger/status only); it must never
+# quote the matched text. action is deny for all of them (the only action v1
+# supports, matching rules_loader.py `_ACTIONS`).
+# ===========================================================================
+rules:
+  - name: inform_00
+    pattern: 'ignore\s*(?:all\s*)?(?:previous|prior|earlier|above)\s*(?:instructions?|rules?|prompts?)'
+    severity: critical
+    category: instruction-override
+    action: deny
+    reason: 'instruction override (ignore prior directives)'
+  - name: inform_01
+    pattern: 'disregard\s*(?:all\s*)?(?:previous|prior|earlier|above)'
+    severity: critical
+    category: instruction-override
+    action: deny
+    reason: 'instruction override (disregard prior directives)'
+  - name: inform_02
+    pattern: 'system prompt override'
+    severity: critical
+    category: instruction-override
+    action: deny
+    reason: 'instruction override (system prompt)'
+  - name: inform_03
+    pattern: 'you must now'
+    severity: high
+    category: instruction-override
+    action: deny
+    reason: 'instruction override (new directive)'
+  - name: inform_04
+    pattern: 'forget everything'
+    severity: critical
+    category: instruction-override
+    action: deny
+    reason: 'instruction override (memory wipe)'
+  - name: inform_05
+    pattern: 'override.*(?:policy|instruction)'
+    severity: critical
+    category: instruction-override
+    action: deny
+    reason: 'instruction override (policy/prompt)'
+  - name: inform_06
+    pattern: 'act as.*(?:admin|root|sudo)'
+    severity: high
+    category: identity-impersonation
+    action: deny
+    reason: 'privilege claim (act as admin role)'
+  - name: inform_07
+    pattern: 'bypass.*(?:filter|restriction|guardrail)'
+    severity: high
+    category: prompt-injection
+    action: deny
+    reason: 'guardrail bypass attempt'
+  - name: inform_08
+    pattern: '\[\s*(?:SYSTEM[\s_-]?UPDATE|ORCHESTRATOR|EMERGENCY[\s_-]?PROTOCOL)\s*\]'
+    severity: high
+    category: prompt-injection
+    action: deny
+    reason: 'forged privileged header'
+  - name: inform_09
+    pattern: 'bypass\s+(?:all\s+)?(?:safety|security)\s+checks?'
+    severity: high
+    category: prompt-injection
+    action: deny
+    reason: 'security-check bypass attempt'
+  - name: inform_10
+    pattern: '(?:impersonate|pretend\s+to\s+be|pose\s+as|roleplay\s+as|assume\s+the\s+role\s+of).{0,24}\b(?:admin(?:istrator)?|root|superuser|sysadmin|operator|supervisor|system)\b'
+    severity: high
+    category: identity-impersonation
+    action: deny
+    reason: 'impersonation of privileged role'
+  - name: inform_11
+    pattern: '\byou\s+are\s+(?:now\s+)?(?:the\s+)?(?:admin|administrator|root|sysadmin|operator)\b'
+    severity: high
+    category: identity-impersonation
+    action: deny
+    reason: 'privilege claim (admin identity)'
+  - name: inform_12
+    pattern: '\bI\s+am\s+(?:the\s+)?(?:admin(?:istrator)?|root|sysadmin|superuser|operator|supervisor)\b'
+    severity: high
+    category: identity-impersonation
+    action: deny
+    reason: 'privilege claim (self as admin)'
+  - name: inform_13
+    pattern: '\bsudo\s+[a-z][\w.-]*'
+    severity: high
+    category: identity-impersonation
+    action: deny
+    reason: 'direct sudo invocation'
+  - name: inform_14
+    pattern: '(?:\u5192\u5145|\u4f2a\u88c5\u6210|\u5047\u626e|\u626e\u6f14|\u5047\u88c5\u662f|\u81ea\u79f0).{0,12}(?:\u7ba1\u7406\u5458|\u7cfb\u7edf\u7ba1\u7406\u5458|\u8fd0\u7ef4|\u4e3b\u7ba1|root|\u8d85\u7ea7\u7528\u6237)'
+    severity: high
+    category: identity-impersonation
+    action: deny
+    reason: '冒充/假扮特权角色'
+  - name: inform_15
+    pattern: '\u6211\u662f.{0,8}(?:\u7ba1\u7406\u5458|\u7cfb\u7edf\u7ba1\u7406\u5458|\u8d85\u7ea7\u7ba1\u7406\u5458|\u8fd0\u7ef4\u4e3b\u7ba1|root)'
+    severity: high
+    category: identity-impersonation
+    action: deny
+    reason: '自称管理员身份'
+  - name: inform_16
+    pattern: '(?:\u4ee5|\u7528).{0,8}(?:\u7ba1\u7406\u5458|root|\u8fd0\u7ef4|\u4e3b\u7ba1|\u8d85\u7ea7\u7528\u6237).{0,6}(?:\u8eab\u4efd|\u6743\u9650|\u8d26\u53f7).{0,10}(?:\u6267\u884c|\u8fd0\u884c|\u67e5\u8be2|\u767b\u5f55|\u64cd\u4f5c|\u91cd\u542f|\u5220\u9664)'
+    severity: high
+    category: identity-impersonation
+    action: deny
+    reason: '以管理员身份执行操作'
+  - name: inform_17
+    pattern: '(?:\u5ffd\u7565|\u7121\u8996|\u65e0\u89c6|\u8df3\u8fc7|\u5fd8\u8bb0|\u4e0d\u8981\u9075\u5b88).{0,16}(?:\u4e4b\u524d|\u6b64\u524d|\u5148\u524d|\u539f\u6709|\u4e0a\u8ff0).{0,16}(?:\u6307\u4ee4|\u89c4\u5219|\u898f\u5247|\u63d0\u793a\u8bcd|\u63d0\u793a\u8a5e|\u7cfb\u7edf\u63d0\u793a|\u5b89\u5168\u7b56\u7565)'
+    severity: high
+    category: instruction-override
+    action: deny
+    reason: '忽略/覆盖先前指令'
+  - name: inform_18
+    pattern: '(?:\u8986\u76d6|\u66ff\u6362|\u66ff\u63db|\u6539\u5199|\u7ed5\u8fc7|\u7e5e\u904e|\u5173\u95ed|\u95dc\u9589|\u7981\u7528).{0,16}(?:\u7cfb\u7edf\u63d0\u793a|\u5b89\u5168\u7b56\u7565|\u5b89\u5168\u89c4\u5219|\u9650\u5236|\u9632\u62a4|\u9632\u8b77|\u62a4\u680f|\u8b77\u6b04)'
+    severity: high
+    category: instruction-override
+    action: deny
+    reason: '覆盖/绕过系统提示或安全策略'
+  - name: inform_19
+    pattern: '(?:\u6267\u884c|\u57f7\u884c).{0,8}(?:\u9690\u85cf|\u96b1\u85cf|\u79d8\u5bc6).{0,8}(?:\u6307\u4ee4|\u547d\u4ee4)'
+    severity: high
+    category: hidden-command
+    action: deny
+    reason: '执行隐藏/秘密指令'
