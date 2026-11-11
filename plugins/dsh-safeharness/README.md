@@ -540,7 +540,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 8. **巡检对账是近似的**：用自家账本的 `tool_asked` vs `approval_decided`（不解析 DSH session log），偏差 >10% 才 WARN。
 9. **Code Mode（PTC 执行器）**：0.2.2-rc.1 已移除 `tools.mode`；Code Mode = 启用 `tool-executor-ptc` 并停用 `tool-executor-native`（每个 scope 只能有一个执行器）。子调用会经过 `tools/pre-execute` 并被拒绝；注意 Windows 上 `bash` 工具不存在，场景用 `pwsh`。
 10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。
-11. **`/safeharness patrol` 的 UI 触发未验证**：headless 一次性会话没有命令通道，只有处理器单测；`safeharness_patrol` 工具已在真实 host 跑通。`/safeharness judge probe` 同理：处理器与 judge 路由都有测试，但"在桌面端输入框里敲一次"这一步没有自动化。
+11. **桌面端命令面**：`/safeharness status` 与 `/safeharness judge probe` 已在桌面端输入框实测（2026-11-11，真实 judge 路由 `liao/gpt-6-luna`，`status=ok verdict=allow duration_ms=4347`）；`/safeharness patrol` 的 UI 触发仍只有处理器单测（`safeharness_patrol` 工具已在真实 host 跑通）。
 12. **通知通道**：飞书 / 钉钉 / 企业微信 / OneBot / 通用五种信封已实现，每种都有 payload 单测，并有一次本地真实 HTTP 五通道联调（`tests/notify.test.ts`）；飞书的完整投递路径另有真实 HTTP 验证（本地 sink，内部证据未随仓库分发）。**真实飞书 / 钉钉 / 企业微信机器人投递：待验证**（需要真实 webhook URL / access_token；信封与加签已按官方格式单测，并有本地真实 HTTP 五通道联调）。配好任意一个真实通道后，制造一次 FAIL 巡检即可确认。
 13. **高熵令牌启发式的已知误报**：≥40 字符、≥3.5 bits/char 的"令牌"（含长路径片段，如 `@scope/pkg-name/lib/entry`）会被判为 `credential_high_entropy`。`balanced` 只记 WARN；`hardened` 会整条阻断工具结果 → 用 `results.blockOn: []` 或 `results.mode: warn` 缓解（规则文本需与 Python 侧保持一致，不单独改）。
 14. **输出面目前只覆盖回答**：不覆盖 compaction / session-title 等内部 LLM 调用（judge 请求本身有递归防护，但内部调用不送审）。
