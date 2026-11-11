@@ -93,10 +93,10 @@ describe('M4: hardened load gate leaves no partial wiring (R36)', () => {
 })
 
 describe('M4: published package shape', () => {
-  it('reports the release-candidate version everywhere', () => {
-    // The exact rc number moves per release; the invariant is that the built
-    // runtime stamp, the manifest and the README all name the same candidate.
-    expect(VERSION).toMatch(/^1\.0\.0-rc\.\d+$/u)
+  it('reports the release version everywhere', () => {
+    // Pre-1.0.0-final releases are `1.0.0-rc.N`; the invariant is that the built
+    // runtime stamp, the manifest and the README all name the same release.
+    expect(VERSION).toMatch(/^1\.0\.0(-rc\.\d+)?$/u)
     expect(manifest()['version']).toBe(VERSION)
     const readme = readFileSync(join(pluginRoot, 'README.md'), 'utf8')
     expect(readme).toContain(`版本 \`${VERSION}\``)

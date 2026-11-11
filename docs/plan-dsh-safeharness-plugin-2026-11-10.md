@@ -1043,6 +1043,22 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | D11 | 加载门禁顺序：`plugin_loaded` → posture → `provide` → 监听器/工具/提示词 | R36：门禁失败必须“什么都没装上”。先写 `plugin_loaded` 是为了让拒绝原因本身留在证据里（否则只剩 stderr） |
 | D12 | 配置 schema 的数组统一包 `z.transform(inner, identity)` | R37：schemastery 对缺失数组填 `[]`，会把预设默认值误当操作者覆盖。transform-identity 是唯一既保留“缺失语义”又不改变对外类型/JSON Schema 形状的写法（实测 `z.any()` 也会丢键） |
 
+### 12.8 rc.2 → 1.0.0 收尾（2026-11-11）
+
+| # | 事项 | 实测事实 | 处理与影响 |
+|---|---|---|---|
+| R38 | 通知只有飞书一种 | 用户不用飞书，明确要钉钉/企业微信/多通道 | `1.0.0-rc.4` 改为 `patrol.notify` 0..N 通道（feishu / dingtalk / wecom / onebot / generic），每通道独立 3 s 超时，`notified` 仅当全部成功；旧 `patrol.feishuWebhook` 保留为一条 feishu 通道 |
+| R39 | 真实 IM 投递无法自证 | 2026-11-11 用户暂时无法提供 webhook / access_token | 按用户要求标记**待验证**：`evidence/GA-verification.md` §0/§4、`CHANGELOG.md`、README §11 第 12 条三处口径一致；已有五种信封/钉钉加签/多通道隔离单测 + 本地真实 HTTP 五通道联调 |
+| R40 | 公开仓库原先必须"先装 DSH 才能 build" | `@deepseek-ai/dsh-invariants` 无 0.2.x 线；已发布的 `dsh-tools` 未声明 `@deepseek-ai/dsh-scope` | 宿主包进 `devDependencies`（精确版本）+ 显式补 `dsh-scope`；`1.0.0-rc.3` 起干净克隆 `pnpm install && pnpm build && pnpm test` 可跑，CI 绿 |
+| R41 | headless 验收里 `[[scenario:…]]` 标记失效 | headless 每轮结束会额外发一次"会话标题"请求（`tools=0`，最后一条用户消息原样带入），标记被它消费，主循环仍走默认 `text` | 假模型场景一律用服务端 `--scenario`；写入 `evidence/GA-tarball-1.0.0.md` §4，避免后来者重复踩 |
+
+### 12.9 决策记录（GA）
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D13 | 四项"部署环境/人工操作"未验证项**不阻塞** `1.0.0` | 四项（真实 IM 投递、真实人工审批、桌面端命令 UI、跨 turn 预算）都需要他人环境或点击操作；本地等价证明已具备（单测 + 本地真实 HTTP + 真实模型冒烟 + tarball 全链路）。把"未验证"写进 CHANGELOG/README/证据三处，比压着不发更诚实 |
+| D14 | GA 只转版本号，不加功能 | rc.4 之后不再动代码，保证 tarball 验收（21 条账本、`version=1.0.0`）对应的就是公开发布的字节 |
+
 ---
 
 ## 13. Day-0 接手清单（逐条执行，不要跳）
