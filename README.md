@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.0.0-rc.3` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
+> 版本 `1.0.0-rc.4` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -66,7 +66,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 | `approval/request` | 审批桥粗粒度判定：`allowOnce` 一次性授予 → 复用 deny 列表 → 其余 delegate；`delegate` 也写审计对，供巡检对账 | 授予 / 拒绝 / 委托 |
 | 系统提示词 | 在工具引导区（`order: 190`）注入 ≤300 字符的部署约束条款，**不含**规则正文、数量、阈值 | — |
 | 只读工具 / 命令 | 4 个 `safeharness_*` 工具 + `/safeharness` 命令，供模型与操作者自查 | — |
-| 姿态 / 巡检 | 加载时姿态门禁（可配 `failOn`）、5 项外部巡检与退出码（0/1/2）、可选飞书通知 | 拒绝加载 / FAIL |
+| 姿态 / 巡检 | 加载时姿态门禁（可配 `failOn`）、5 项外部巡检与退出码（0/1/2）、可选多通道通知（飞书 / 钉钉 / 企业微信 / OneBot / 通用 webhook） | 拒绝加载 / FAIL |
 | 预算 | 每轮 `input+output` token 累计，越限只记一条 `budget_exceeded`（不拦截） | — |
 
 ### 2.1 输入防线
@@ -94,7 +94,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 
 - **审计**：单行 JSON、哈希链（`prev_sha256`）、按字段名脱敏、按大小轮转；只存哈希与长度，不存原文（详见 §6）。
 - **姿态**（9 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。
-- **巡检**（5 项）：`audit_rate`（拒绝速率异常）、`health_probe`（GET 探针）、`config_drift`（与上次姿态报告对比）、`ledger_reconcile`（`tool_asked` vs `approval_decided` 对账）、`notify`（可选飞书）。退出码 `0` 干净、`1` 有 FAIL、`2` 巡检自身出错；巡检函数**从不抛异常**。
+- **巡检**（5 项）：`audit_rate`（拒绝速率异常）、`health_probe`（GET 探针）、`config_drift`（与上次姿态报告对比）、`ledger_reconcile`（`tool_asked` vs `approval_decided` 对账）、`notify`（可选，多个通道）。退出码 `0` 干净、`1` 有 FAIL、`2` 巡检自身出错；巡检函数**从不抛异常**。
 - **预算**：`budget.maxTokensPerTurn > 0` 时按轮累计，越限只 warn（一个回合只记一条）。
 
 ---
@@ -124,7 +124,7 @@ pnpm test             # 477 个用例（23 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.0.0-rc.3.tgz（lib + rules + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.0.0-rc.4.tgz（lib + rules + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -138,7 +138,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.0.0-rc.3.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.0.0-rc.4.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -246,7 +246,13 @@ config:
     factor: 5
     minCount: 10
     healthUrls: []
-    feishuWebhook: ""                      # 只从设置读，永不打印、永不写账本
+    notify:                                 # 0..N 个通道；URL/secret 永不打印、永不写账本
+      - { type: dingtalk, webhook: "https://oapi.dingtalk.com/robot/send?access_token=…", secret: "…" }
+      - { type: wecom,    webhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" }
+      - { type: feishu,   webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/…" }
+      - { type: onebot,   webhook: "http://127.0.0.1:5700/", groupId: "123456", accessToken: "…" }
+      - { type: generic,  webhook: "https://your-bot.example/hook", body: "{\"text\":\"{{text}}\"}" }
+    # 兼容旧字段：feishuWebhook: "…"        # 等价于一条 feishu 通道
   budget: { maxTokensPerTurn: 0 }          # 0 = 关闭；>0 时每轮越限记 budget_exceeded
 ```
 
@@ -259,7 +265,7 @@ config:
 - `output.judge`：不自建 HTTP 客户端，走宿主 `ctx.llm`；不可用时按预设降级（hardened 拒绝输出）。
 - `approval.mode: policy`：只做粗粒度判定；`approval/request` 不携带工具参数，**不要**把它当第二套策略引擎。`allowOnce` 与 deny 列表同时命中时**授予优先**（部署方不要同时写两边）。
 - `posture.failOn`：列出的 code 一旦 FAIL 即拒绝加载（建议只在 hardened 开启）。
-- `patrol.feishuWebhook`：只从设置读，永不打印、永不入账本；通知正文只有 `Upear SafeHarness: N FAIL / M WARN`。
+- `patrol.notify`：0..N 个通知通道（见 §4.2）；通道 URL、签名 secret、bearer token 都按凭据处理，永不打印、永不入账本；通知正文只有 `Upear SafeHarness: N FAIL / M WARN`。旧的 `patrol.feishuWebhook` 仍可用，等价于一条 `feishu` 通道。
 - 优先级：显式字段 > 预设 > 基础默认；`resolveConfig` 输出深冻结。
 
 ### 4.1 语义 judge 的模型 URL 与 Key 怎么填
@@ -321,6 +327,26 @@ output:
 
 失败语义不变：`observe`/`balanced` 记 WARN 放行；`hardened` 在 judge 不可用时**拒绝输出**，并且 `enabled: true` 却没填 `provider`/`model` 会直接拒绝加载。离线演示可把 `baseURL` 指向本仓库的假模型（`node scripts/fake-openai.mjs`，Key 填占位符），零成本跑通同一条链路。
 
+### 4.2 通知通道（飞书 / 钉钉 / 企业微信 / OneBot / 通用）
+
+巡检只在**报告不干净**（有 FAIL 或 WARN）时发通知，正文固定是计数句 `Upear SafeHarness: N FAIL / M WARN`，可以同时配多个通道。
+
+| `type` | 请求体 | 额外字段 |
+|---|---|---|
+| `feishu` | `{"msg_type":"text","content":{"text":…}}` | — |
+| `dingtalk` | `{"msgtype":"text","text":{"content":…}}` | `secret`：填了就按 HMAC-SHA256(`${时间戳}\n${secret}`) 把 `timestamp`/`sign` 追加到 URL |
+| `wecom` | `{"msgtype":"text","text":{"content":…}}` | — |
+| `onebot` | `{"action":"send_group_msg","params":{"group_id":…,"message":…},"echo":"safeharness"}` | `groupId`（必填）、`accessToken`（可选，Bearer） |
+| `generic` | 默认 `{"text":…}`；可用 `body` 模板，`{{text}}` 替换为 JSON 转义后的正文 | `headers`（自定义请求头，值按凭据处理） |
+
+行为约定：
+
+- **多通道**：数组里每个通道都会尝试，每个通道 3 s 超时，一个失败不影响其它通道。
+- **`notified` 语义**：只有"全部通道成功"才是 `true`；部分失败记一条 `notify` WARN，详情形如 `notify_failed: 2/3 channels delivered; 1 failed (wecom: http_500)`，只含通道类型与粗略原因。
+- **账本零泄漏**：URL、secret、token、响应体都不进账本；`patrol_report` 只记 `exit_code` 与 `notified`。
+- **QQ**：官方 QQ 机器人需要 appid/token 与 msg_id 流程，不是"贴 webhook"就能用，因此没有原生适配；自建 OneBot（go-cqhttp / NapCat 等）用 `onebot`，其它 HTTP 机器人用 `generic`。
+- **兼容**：`patrol.feishuWebhook` 保留为旧字段，等价于一条 `feishu` 通道；两者同时存在时以 `notify` 为准。
+
 ---
 
 ## 5. 预设与失败语义
@@ -365,7 +391,7 @@ output:
 
 ```json
 {"v":1,"ts":"2026-11-11T01:47:20.963Z","seq":1,"kind":"plugin_loaded","decision":"ok",
- "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.0.0-rc.3",
+ "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.0.0-rc.4",
  "metrics":{"rule_count":20,"chain_count":3},"sha256":"…"}
 ```
 
@@ -465,7 +491,7 @@ plugins/dsh-safeharness/
 │  ├─ runtime.ts        运行时状态与共享话术
 │  └─ version.ts        版本（与 package.json 同步，测试锁定）
 ├─ rules/               inform.yaml（20 条）+ chains.yaml（3 条）
-├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml
+├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml / cordis.patch.notify.example.yml
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）
 ├─ tests/               477 个用例（23 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
@@ -486,7 +512,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # tsc -> lib/
-pnpm test             # vitest：25 个文件 / 499 个用例（内部含黄金语料；不含语料的公开克隆为 23 文件 / 482 用例 = 479 pass + 3 skip）
+pnpm test             # vitest：26 个文件 / 521 个用例（内部含黄金语料；不含语料的公开克隆为 23 文件 / 504 用例 = 501 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -515,7 +541,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 9. **Code Mode（PTC 执行器）**：0.2.2-rc.1 已移除 `tools.mode`；Code Mode = 启用 `tool-executor-ptc` 并停用 `tool-executor-native`（每个 scope 只能有一个执行器）。子调用会经过 `tools/pre-execute` 并被拒绝；注意 Windows 上 `bash` 工具不存在，场景用 `pwsh`。
 10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。
 11. **`/safeharness patrol` 的 UI 触发未验证**：headless 一次性会话没有命令通道，只有处理器单测；`safeharness_patrol` 工具已在真实 host 跑通。`/safeharness judge probe` 同理：处理器与 judge 路由都有测试，但"在桌面端输入框里敲一次"这一步没有自动化。
-12. **飞书 webhook**：已用真实 HTTP 投递验证（本地 sink 收到 `{"msg_type":"text","content":{"text":"Upear SafeHarness: 1 FAIL / 0 WARN"}}`，账本 `patrol_report exit_code=1 notified=true`，内部证据（未随仓库分发））；真实飞书账号/群机器人未联调（需要真实 webhook URL）。
+12. **通知通道**：飞书 / 钉钉 / 企业微信 / OneBot / 通用五种信封已实现，每种都有 payload 单测，并有一次本地真实 HTTP 五通道联调（`tests/notify.test.ts`）；飞书的完整投递路径另有真实 HTTP 验证（本地 sink，内部证据未随仓库分发）。**真实飞书 / 钉钉 / 企业微信机器人未联调**（都需要真实 webhook URL；钉钉的加签逻辑已按官方算法单测）。
 13. **高熵令牌启发式的已知误报**：≥40 字符、≥3.5 bits/char 的"令牌"（含长路径片段，如 `@scope/pkg-name/lib/entry`）会被判为 `credential_high_entropy`。`balanced` 只记 WARN；`hardened` 会整条阻断工具结果 → 用 `results.blockOn: []` 或 `results.mode: warn` 缓解（规则文本需与 Python 侧保持一致，不单独改）。
 14. **输出面目前只覆盖回答**：不覆盖 compaction / session-title 等内部 LLM 调用（judge 请求本身有递归防护，但内部调用不送审）。
 15. **judge 的 URL/Key 属于宿主配置，不属于插件配置**：插件只携带 `provider`/`model` 路由，Key 由 DSH 凭据层按 `apiKeyEnv` 引用解析，插件既不读也不打印。换端点 = 改 profile 的 `llm-pi-ai.providers`，不需要改插件。

@@ -1,0 +1,42 @@
+# Example: patrol notification channels (Feishu / DingTalk / WeCom / OneBot / generic).
+#
+# A dirty patrol (any FAIL or WARN) sends one counts-only sentence:
+#   Upear SafeHarness: N FAIL / M WARN
+# to every configured channel. Each channel gets its own 3 s deadline; a failure in
+# one does not stop the others, and `notified` is true only when all succeeded.
+#
+# SECRETS: `webhook`, `secret` and `accessToken` are credentials. They are never
+# logged, printed or written to the audit ledger. Prefer putting this block in the
+# plugin's settings (Settings → Plugins → SafeHarness) rather than a shared file.
+
+- insert:
+    - id: safeharness
+      name: "@upear/dsh-safeharness"
+      config:
+        preset: balanced
+        patrol:
+          # Any subset of the five families, in any order. Remove what you do not use.
+          notify:
+            # Feishu / Lark custom bot
+            - type: feishu
+              webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx"
+            # DingTalk custom robot; `secret` enables the HMAC-SHA256 signature
+            - type: dingtalk
+              webhook: "https://oapi.dingtalk.com/robot/send?access_token=xxxxxxxx"
+              secret: "SECxxxxxxxx"
+            # WeCom (企业微信) group robot
+            - type: wecom
+              webhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx"
+            # Self-hosted QQ bridge speaking OneBot v11 HTTP (go-cqhttp / NapCat …)
+            - type: onebot
+              webhook: "http://127.0.0.1:5700/"
+              groupId: "123456789"
+              # accessToken: "…"       # only if the bridge requires one
+            # Anything else that accepts a small JSON POST
+            - type: generic
+              webhook: "https://your-bot.example/hook"
+              body: '{"text":"{{text}}","channel":"ops"}'
+              # headers: { "Authorization": "Bearer …" }
+
+          # Legacy one-liner still works and is equivalent to a single feishu channel:
+          # feishuWebhook: "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx"

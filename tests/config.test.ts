@@ -161,3 +161,51 @@ describe('resolveConfig — validation', () => {
     expect(() => resolveConfig({ preset: 'balanced', output: { judge: { enabled: true } } })).not.toThrow()
   })
 })
+
+describe('resolveConfig — notification channels', () => {
+  it('turns the legacy feishuWebhook into one Feishu channel', () => {
+    const config = resolveConfig({ patrol: { feishuWebhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/X' } })
+    expect(config.patrol.notify).toEqual([{ type: 'feishu', webhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/X' }])
+  })
+
+  it('normalises multiple typed channels and lets notify override the legacy field', () => {
+    const config = resolveConfig({
+      patrol: {
+        feishuWebhook: 'https://legacy.example/x',
+        notify: [
+          { type: 'dingtalk', webhook: 'https://oapi.dingtalk.com/robot/send?access_token=T', secret: 'S' },
+          { type: 'wecom', webhook: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=K' },
+          { type: 'onebot', webhook: 'http://127.0.0.1:5700/', groupId: '42', accessToken: 'TOK' },
+          { type: 'generic', webhook: 'https://bot.example/x', body: '{"t":"{{text}}"}', headers: { 'X-Key': 'V' } },
+        ],
+      },
+    })
+    expect(config.patrol.notify.map((item) => item.type)).toEqual(['dingtalk', 'wecom', 'onebot', 'generic'])
+    expect(config.patrol.notify[0]).toMatchObject({ secret: 'S' })
+    expect(config.patrol.notify[2]).toMatchObject({ groupId: '42', accessToken: 'TOK' })
+    expect(config.patrol.notify[3]).toMatchObject({ body: '{"t":"{{text}}"}', headers: { 'X-Key': 'V' } })
+    expect(Object.isFrozen(config.patrol.notify)).toBe(true)
+  })
+
+  it('rejects unknown channel types without quoting the webhook', () => {
+    try {
+      resolveConfig({ patrol: { notify: [{ type: 'slack' as never, webhook: 'https://x.example/SEKRET-TOKEN' }] } })
+      throw new Error('expected a ConfigError')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError)
+      expect((error as ConfigError).message).toContain('notify[0].type')
+      expect((error as ConfigError).message).not.toContain('SEKRET-TOKEN')
+    }
+  })
+
+  it('requires a webhook and, for onebot, a group id', () => {
+    expect(() => resolveConfig({ patrol: { notify: [{ type: 'feishu', webhook: '' }] } })).toThrow(/notify\[0\]\.webhook/u)
+    expect(() => resolveConfig({ patrol: { notify: [{ type: 'onebot', webhook: 'http://127.0.0.1:5700/' }] } })).toThrow(/groupId/u)
+  })
+
+  it('rejects a non-string header value', () => {
+    expect(() => resolveConfig({
+      patrol: { notify: [{ type: 'generic', webhook: 'https://x.example/y', headers: { A: 1 as never } }] },
+    })).toThrow(/headers\.A/u)
+  })
+})

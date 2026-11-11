@@ -1,6 +1,6 @@
 {
     "name":  "@upear/dsh-safeharness",
-    "version":  "1.0.0-rc.3",
+    "version":  "1.0.0-rc.4",
     "description":  "Agent security suite for DeepSeek Harness: input/tool/output guards, evidence ledger, posture and patrol.",
     "keywords":  [
                      "deepseek-harness",
