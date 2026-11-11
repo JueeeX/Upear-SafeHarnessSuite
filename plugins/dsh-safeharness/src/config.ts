@@ -136,6 +136,20 @@ export interface SafeHarnessConfig {
   budget?: {
     maxTokensPerTurn?: number
   }
+  draft?: {
+    /** Enable the drafting tool and `/safeharness draft`. Drafts are never applied. */
+    enabled?: boolean
+    /** Drafting provider route; empty reuses `output.judge.provider`. */
+    provider?: string
+    /** Drafting model id; empty reuses `output.judge.model`. */
+    model?: string
+    /** Description characters sent to the model. */
+    maxChars?: number
+    /** Drafting deadline in milliseconds. */
+    timeoutMs?: number
+    /** Completion budget for one draft. */
+    maxTokens?: number
+  }
 }
 
 /**
@@ -244,6 +258,15 @@ export const Config: z<SafeHarnessConfig> = z.object({
   budget: z.object({
     maxTokensPerTurn: z.number().description('Per-turn token budget; 0 disables.'),
   }).description('Budget guard.'),
+
+  draft: z.object({
+    enabled: z.boolean().description('Enable LLM-assisted rule drafting (tool + command); drafts are never applied.'),
+    provider: z.string().description('Drafting provider route; empty reuses the judge route.'),
+    model: z.string().description('Drafting model id; empty reuses the judge route.'),
+    maxChars: z.number().description('Description characters sent to the drafting model.'),
+    timeoutMs: z.number().description('Drafting deadline; on expiry the draft fails, nothing is applied.'),
+    maxTokens: z.number().description('Completion budget for one draft.'),
+  }).description('LLM-assisted rule drafting (draft only).'),
 })
 
 /** One posture finding's severity vocabulary (mirrors the Python patrol). */
@@ -303,6 +326,16 @@ export interface ResolvedConfig {
     readonly notify: readonly NotifyChannel[]
   }
   readonly budget: { readonly maxTokensPerTurn: number }
+  readonly draft: {
+    readonly enabled: boolean
+    /** Empty means "reuse `output.judge.provider`". */
+    readonly provider: string
+    /** Empty means "reuse `output.judge.model`". */
+    readonly model: string
+    readonly maxChars: number
+    readonly timeoutMs: number
+    readonly maxTokens: number
+  }
 }
 
 /**
@@ -382,6 +415,10 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
     notify: [],
   },
   budget: { maxTokensPerTurn: 0 },
+  // Drafting is opt-in per invocation (a tool call or `/safeharness draft`), so it can
+  // stay enabled by default without spending anything at load time. The route falls
+  // back to the judge's provider/model when left empty.
+  draft: { enabled: true, provider: '', model: '', maxChars: 500, timeoutMs: 20000, maxTokens: 400 },
 }
 
 /** Recursively-partial helper for the override tables. */
@@ -507,6 +544,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
   const posture = merged.posture ?? {}
   const patrol = merged.patrol ?? {}
   const budget = merged.budget ?? {}
+  const draft = merged.draft ?? {}
 
   const tagOverrides = Array.isArray(tools.tagOverrides)
     ? tools.tagOverrides.filter((item): item is { pattern: string; tags: string[] } => {
@@ -582,6 +620,14 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     },
     budget: {
       maxTokensPerTurn: nonNegative(budget.maxTokensPerTurn, 'budget.maxTokensPerTurn', problems, 0, { integer: true }),
+    },
+    draft: {
+      enabled: typeof draft.enabled === 'boolean' ? draft.enabled : true,
+      provider: typeof draft.provider === 'string' ? draft.provider : '',
+      model: typeof draft.model === 'string' ? draft.model : '',
+      maxChars: positive(draft.maxChars, 'draft.maxChars', problems, 500),
+      timeoutMs: positive(draft.timeoutMs, 'draft.timeoutMs', problems, 20000),
+      maxTokens: positive(draft.maxTokens, 'draft.maxTokens', problems, 400),
     },
   }
 

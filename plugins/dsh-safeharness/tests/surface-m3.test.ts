@@ -245,7 +245,7 @@ describe('composition root wiring', () => {
     const { host } = createFakeHost({ config: { preset: 'balanced' } })
     await apply(host.ctx as never, { preset: 'balanced', audit: { dir: tempDir() } })
     const names = [...host.tools.keys()].sort()
-    expect(names).toEqual(['safeharness_audit_query', 'safeharness_patrol', 'safeharness_posture', 'safeharness_status'])
+    expect(names).toEqual(['safeharness_audit_query', 'safeharness_draft_rule', 'safeharness_patrol', 'safeharness_posture', 'safeharness_status'])
     expect(host.listeners.get('approval/request')?.length).toBe(1)
     const status = await invoke(host.tools.get('safeharness_status')?.definition)
     expect((status.seams as Record<string, boolean>).approval).toBe(true)

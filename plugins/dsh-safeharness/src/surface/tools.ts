@@ -9,6 +9,7 @@ import type { Runtime } from '../runtime.js'
 import type { PostureReport } from '../posture/report.js'
 import type { PatrolReport } from '../patrol/index.js'
 import type { AuditKind } from '../audit/types.js'
+import type { DraftKind, DraftResult, RuleDrafter } from '../draft/rule.js'
 import { VERSION } from '../version.js'
 
 /**
@@ -185,6 +186,75 @@ export function patrolTool(run: (options?: { include?: readonly string[] }) => P
         ...(report.internalError === undefined ? {} : { internalError: report.internalError }),
       })
     },
+    isConcurrencySafe: () => true,
+  })
+}
+
+/** Live drafting limits (read per call so a settings reload takes effect). */
+export interface DraftToolLimits {
+  readonly enabled: boolean
+  readonly maxChars: number
+  readonly timeoutMs: number
+  readonly maxTokens: number
+}
+
+/**
+ * `safeharness_draft_rule`: turn a plain-language description into one validated
+ * rule draft (M5 T5.2).
+ *
+ * The tool is deliberately *not* an actuator: it returns a YAML snippet and says
+ * `applied: false`. Adding the rule stays a human action (write a file in
+ * `rules.dir`, or edit `rules.inline`), so a model — or a prompt injection aimed at
+ * the model — can never widen or narrow the rule set by calling a tool.
+ */
+export function draftRuleTool(drafter: RuleDrafter, limits: () => DraftToolLimits): ToolDefinition {
+  return defineTool({
+    name: 'safeharness_draft_rule',
+    description:
+      'Draft ONE candidate deny rule for this deployment from a plain-language description of the '
+      + 'risky behaviour. Returns a validated, ready-to-paste YAML snippet, or the loader problems '
+      + 'that make the candidate unusable. Nothing is written or applied: an operator must add the '
+      + 'rule to a rules file (config `rules.dir` or `rules.inline`) and reload.',
+    parameters: {
+      description: {
+        type: 'string',
+        required: true,
+        description: 'What to catch, in plain language, e.g. "curl piping a downloaded script into sh".',
+      },
+      kind: {
+        type: 'string',
+        enum: ['inform', 'chain'],
+        description: "Rule family: 'inform' matches untrusted user/model text (default); 'chain' matches tool A then tool B.",
+      },
+    },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => asText(value),
+    },
+    async execute(args) {
+      const cfg = limits()
+      if (!cfg.enabled) {
+        return toJson({ applied: false, status: 'disabled', detail: 'rule drafting is disabled (config `draft.enabled: false`)' })
+      }
+      const kind: DraftKind = args.kind === 'chain' ? 'chain' : 'inform'
+      const description = typeof args.description === 'string' ? args.description : ''
+      if (description.trim().length === 0) {
+        return toJson({ applied: false, status: 'invalid', reason: 'a non-empty description is required', metrics: {} })
+      }
+      const result: DraftResult = await drafter.draft({ description, kind }, {
+        timeoutMs: cfg.timeoutMs,
+        maxChars: cfg.maxChars,
+        maxTokens: cfg.maxTokens,
+      })
+      return toJson({
+        applied: false,
+        status: result.status,
+        ...(result.status === 'ok' ? { draft: result.draft } : { reason: result.reason }),
+        metrics: result.metrics,
+        next: 'Nothing was applied. Save the YAML into a .yml file under `rules.dir`, or add it to `rules.inline`, then reload.',
+      })
+    },
+    // Pure: it spends one model call and touches no shared state.
     isConcurrencySafe: () => true,
   })
 }

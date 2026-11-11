@@ -848,7 +848,8 @@ pnpm test:golden        # 一致性
 ### M5（可选）
 
 - [ ] T5.1 `SecurityEngine` 的 Python sidecar 实现（复用本仓引擎与语料，进程边界 + fail-closed）
-- [ ] T5.2 LLM 辅助规则起草工具（草稿不落地，PUT/设置才生效）
+- [x] T5.2 LLM 辅助规则起草工具（草稿不落地，PUT/设置才生效）
+  证据：`evidence/M5-drafting.md` + `tests/draft.test.ts`(29) + `examples/cordis.patch.draft.example.yml` → 工具 `safeharness_draft_rule` 与 `/safeharness draft [--chain]`；只返回经 loader 校验的 YAML（`applied:false`），不写文件、不重载；起草请求带 `DRAFT_REQUEST_MARK` 跳过评审与预算；1.1.0 tarball 在干净 profile 冷启动通过。未验证：真实模型起草（需桌面端升级后手敲一次）
 - [ ] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）
 
 ### 9.1 dev profile 的 patch 行
