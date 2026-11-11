@@ -268,7 +268,9 @@ config:
 
 **A. 复用聊天模型（最省事）**：桌面端 **设置 → 模型**（Settings → Models）里已经配好的服务商直接可用，插件里把 `output.judge.provider` / `model` 填成该服务商 id 与模型 id 即可。
 
-**B. 给 judge 单开一条服务商（推荐：用便宜/快的模型，独立配额）**：在同一个 profile 的 `cordis.patch.yml` 里给 `@deepseek-ai/dsh-llm-pi-ai` 增加一项：
+**B. 给 judge 单开一条服务商（推荐：用便宜/快的模型，独立配额）**：在桌面端 **设置 → 模型** 里新增一条路由并填 `base URL` 与 `key`（设置页会把 key 写进凭据库，不覆盖 profile），然后在插件里把 `output.judge.provider` / `model` 指向它。
+
+如果坚持手写 profile patch，给 `@deepseek-ai/dsh-llm-pi-ai` 增加一项：
 
 ```yaml
 - id: llm-pi-ai
@@ -283,6 +285,9 @@ config:
           - id: your-model-id
             name: your-model-id
 ```
+
+> ⚠️ patch 条目的 `config` 是**整段替换**，不是深合并：实测只手写 `judge` 会让原来的 `liao` 等 provider 从合成树里消失，主对话模型随之不可用。手写 patch 时**必须把已有 providers 一起抄进来**；只想新增路由就用设置页。
+
 
 Key 本身放在下面任一位置，**永远不要写进 `cordis.patch.yml`、仓库或账本**：
 
