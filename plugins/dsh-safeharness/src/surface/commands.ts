@@ -71,10 +71,14 @@ function formatDraft(result: DraftResult): string {
   if (result.status !== 'ok') {
     return [`draft: ${result.status} (nothing applied)`, `  ${result.reason}`, `  ${metrics}`].join('\n')
   }
+  const warnings = result.draft.warnings.length === 0
+    ? []
+    : ['  warnings:', ...result.draft.warnings.map((warning) => `    - ${warning}`)]
   return [
     `draft: ok (nothing applied)`,
     `  ${result.draft.summary}`,
     `  ${metrics}`,
+    ...warnings,
     '  next: save the YAML below into a .yml file under `rules.dir` (or add it to `rules.inline`) and reload',
     result.draft.yaml.trimEnd(),
   ].join('\n')
