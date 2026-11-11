@@ -389,6 +389,8 @@ draft:
 
 `enabled: false` 一键关掉：工具返回 `status: disabled`、命令报错，都不产生调用。
 
+慢供应商可把 `timeoutMs` 调到 30000：超时只返回 `status: timeout`（什么都没落盘、规则集不变），模型或人可以直接重试。
+
 ---
 
 ## 5. 预设与失败语义
