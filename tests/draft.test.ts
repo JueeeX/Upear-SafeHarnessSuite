@@ -262,6 +262,58 @@ describe('rule drafter: the draft is validated with the loader gate', () => {
   })
 })
 
+describe('rule drafter: shape warnings for drafts that would catch almost nothing', () => {
+  it('warns about an anchored literal (the measured /safeharness draft curl case)', async () => {
+    const payload = informPayload({ name: 'deny_curl', pattern: '^curl$', reason: 'Blocks the requested curl command.' })
+    const result = await drafterFor(payload).draft({ description: 'curl', kind: 'inform' }, LIMITS)
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') throw new Error('unreachable')
+    expect(result.draft.warnings.length).toBeGreaterThanOrEqual(2)
+    expect(result.draft.warnings.join(' ')).toContain('one literal string')
+    expect(result.draft.warnings.join(' ')).toContain('6 characters')
+  })
+
+  it('warns about a pattern that matches a single token without separation', async () => {
+    const result = await drafterFor(informPayload({ pattern: 'curl.*' })).draft({ description: 'x', kind: 'inform' }, LIMITS)
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') throw new Error('unreachable')
+    expect(result.draft.warnings.join(' ')).toContain('single token')
+  })
+
+  it('stays quiet for a pattern with real structure', async () => {
+    const result = await drafterFor(informPayload()).draft({ description: 'x', kind: 'inform' }, LIMITS)
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') throw new Error('unreachable')
+    expect(result.draft.warnings).toEqual([])
+  })
+
+  it('warns when a chain leg is one literal tool name', async () => {
+    const result = await drafterFor(chainPayload({ first: 'query_db', then: 'http_post' }))
+      .draft({ description: 'x', kind: 'chain' }, LIMITS)
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') throw new Error('unreachable')
+    expect(result.draft.warnings.join(' ')).toContain("'first' leg")
+    expect(result.draft.warnings.join(' ')).toContain("'then' leg")
+  })
+
+  it('prints the warnings in the command output', async () => {
+    const { runtime } = createFakeHost()
+    const drafter = drafterFor(informPayload({ name: 'deny_curl', pattern: '^curl$' }))
+    const command = safeharnessCommand(runtime, async () => ({
+      ranAt: new Date().toISOString(),
+      findings: [],
+      summary: { fail: 0, warn: 0, ok: 0, skip: 0, clean: true },
+    }), undefined, undefined, {
+      enabled: true,
+      draft: (description, kind) => drafter.draft({ description, kind }, LIMITS),
+    }) as unknown as { handler: (invocation: unknown) => Promise<CommandResult> }
+    const result = await command.handler({ rawInput: 'draft curl' })
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('warnings:')
+    expect(result.text).toContain('one literal string')
+  })
+})
+
 describe('safeharness_draft_rule tool', () => {
   it('returns the draft with applied:false and never the description', async () => {
     const tool = draftRuleTool(drafterFor(informPayload()), () => ({

@@ -84,6 +84,12 @@ const NESTED_QUANTIFIER = /\([^()]*[+*}][^()]*\)[+*{]/u
 /** Regex sources must stay on one line: YAML and the audit trail both hate embedded newlines. */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/u
 
+/** Characters that make a source a *pattern* rather than one literal string. */
+const META_CHARS = /[\\^$.|?*+()[\]{}]/u
+
+/** A pattern shorter than this is almost always a precise match, not a detector. */
+const NARROW_PATTERN_CHARS = 12
+
 /** What the drafter needs from the live rule set (name collisions are errors, not shadows). */
 export interface DraftDeps {
   /** Names already loaded; a draft that reuses one would silently shadow it. */
@@ -129,6 +135,16 @@ export interface RuleDraft {
   readonly yaml: string
   /** One-line human summary, e.g. `inform rule 'foo' [high] category (pattern 42 chars)`. */
   readonly summary: string
+  /**
+   * Deterministic quality warnings about *shape*, never a verdict on semantics.
+   *
+   * The loader gate only proves "this rule would load"; it cannot prove "this rule
+   * catches what the operator meant". The one failure mode we can detect cheaply is
+   * a pattern that is really an exact match — `^curl$` loads fine and matches
+   * almost nothing — so the tool says that out loud instead of letting the operator
+   * discover it in production.
+   */
+  readonly warnings: readonly string[]
 }
 
 /** The outcome of one drafting attempt. Never contains the description or prompt. */
@@ -175,7 +191,9 @@ const INSTRUCTION =
   'Chain rule JSON: {"name":"snake_case","first":"tool-name regex","then":"tool-name regex","max_gap":0,' +
   '"severity":"critical|high|medium|low|info","category":"kebab-case","reason":"one line <=120 chars"}\n' +
   'Regex sources are compiled with flags "iu": no (?i)/inline global flags, no lookbehind, no nested quantifiers, ' +
-  'at most 300 characters, and prefer specific phrases over broad ones. The rule must match the malicious text, not benign text.'
+  'at most 300 characters, and prefer specific phrases over broad ones. The rule must match the malicious text, not benign text. ' +
+  'Match the phrasing an attacker would write around the risky action: do NOT anchor a pattern to one bare tool name (e.g. ^curl$), ' +
+  'because that only matches a message consisting of exactly that word.'
 
 /** Separator between the instruction and the delimited request block. */
 const SEPARATOR = '\n---\n'
@@ -230,6 +248,58 @@ function checkRegexField(label: string, source: string | undefined): string | un
 /** Quote one YAML scalar with single quotes (the only style the loader needs). */
 function yamlScalar(value: string): string {
   return `'${value.replace(/'/gu, "''")}'`
+}
+
+/**
+ * True when a regex source is really one literal string (`curl`, `^curl$`): no
+ * metacharacter survives once the optional anchors are removed.
+ */
+function looksLikeLiteral(source: string): boolean {
+  const body = source.replace(/^\^/u, '').replace(/\$$/u, '')
+  return body.length > 0 && !META_CHARS.test(body)
+}
+
+const NO_SEPARATION = /[ \t]/u
+const HAS_ESCAPED_SPACE = /\\s/u
+const HAS_ALTERNATION = /\|/u
+const HAS_CLASS = /\[/u
+
+/**
+ * Shape warnings for an inform rule.
+ *
+ * Deterministic, cheap and deliberately about *shape* only: the loader gate already
+ * proves the rule would load, these say "it would load and catch almost nothing",
+ * which is exactly what a model produces when the description is one word
+ * (measured: `/safeharness draft curl` → `^curl$`).
+ */
+function informWarnings(pattern: string): string[] {
+  const warnings: string[] = []
+  const literal = looksLikeLiteral(pattern)
+  if (literal) {
+    warnings.push('pattern is one literal string (no metacharacters): it matches that exact text only, not the phrasing around it')
+  }
+  if (pattern.length < NARROW_PATTERN_CHARS) {
+    warnings.push(`pattern is only ${pattern.length} characters: very narrow, most variants will slip through`)
+  }
+  if (!literal && !NO_SEPARATION.test(pattern) && !HAS_ESCAPED_SPACE.test(pattern) && !HAS_ALTERNATION.test(pattern) && !HAS_CLASS.test(pattern)) {
+    warnings.push('pattern has no word separation or alternation: it likely matches a single token')
+  }
+  return warnings
+}
+
+/** Shape warnings for a chain rule's two legs. */
+function chainWarnings(first: string | undefined, then: string | undefined): string[] {
+  const warnings: string[] = []
+  const legs: readonly { readonly label: string; readonly source: string | undefined }[] = [
+    { label: 'first', source: first },
+    { label: 'then', source: then },
+  ]
+  for (const leg of legs) {
+    if (leg.source !== undefined && looksLikeLiteral(leg.source)) {
+      warnings.push(`'${leg.label}' leg is one literal tool name: tool names vary (query vs mcp__postgres_query); prefer a fragment or alternation`)
+    }
+  }
+  return warnings
 }
 
 /** Render a complete rule-file body for the given draft. */
@@ -359,6 +429,7 @@ function validateDraft(
         reason,
         yaml: renderYaml(kind, { name, severity, category, reason, first: raw.first, then: raw.then, maxGap }),
         summary: `chain rule '${name}' [${severity}] ${category} (first ${raw.first?.length ?? 0} chars, then ${raw.then?.length ?? 0} chars, gap ${maxGap})`,
+        warnings: chainWarnings(raw.first, raw.then),
       },
     }
   }
@@ -392,6 +463,7 @@ function validateDraft(
       reason,
       yaml: renderYaml(kind, { name, severity, category, reason, pattern: raw.pattern }),
       summary: `inform rule '${name}' [${severity}] ${category} (pattern ${raw.pattern.length} chars)`,
+      warnings: informWarnings(raw.pattern),
     },
   }
 }
