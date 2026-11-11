@@ -32,6 +32,7 @@ import { foundSomething, OUTPUT_BLOCK_TEXT } from '../runtime.js'
 import { contentDigest } from '../util/hash.js'
 import { ReasonCode, type Decision } from '../engine/types.js'
 import { createJudge, JUDGE_REQUEST_MARK, type Judge, type JudgeResult, type JudgeStatus } from '../judge/client.js'
+import { createRuleDrafter, DRAFT_REQUEST_MARK, type RuleDrafter } from '../draft/rule.js'
 
 /** Characters of assistant text we keep for post-stream scanning. */
 export const MAX_OUTPUT_SCAN_CHARS = 128 * 1024
@@ -85,8 +86,8 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
   let judgeDepth = 0
 
   ctx.on('llm/stream', async function* (options: GenerateOptions, next: () => AsyncIterable<StreamChunk>) {
-    // The judge's own request: never reviewed, never judged (D6).
-    if (isJudgeRequest(options)) {
+    // Auxiliary calls (judge, rule drafting): never reviewed, never judged (D6).
+    if (isJudgeRequest(options) || isDraftRequest(options)) {
       yield* next()
       return
     }
@@ -372,6 +373,70 @@ async function* refusalChunks(usage: TokenUsage | undefined): AsyncGenerator<Str
 function isJudgeRequest(options: unknown): boolean {
   if (options === null || typeof options !== 'object') return false
   return (options as Record<symbol, unknown>)[JUDGE_REQUEST_MARK] === true
+}
+
+/** Whether this request is a rule-drafting call (marker set by {@link draftCallOf}). */
+export function isDraftRequest(options: unknown): boolean {
+  if (options === null || typeof options !== 'object') return false
+  return (options as Record<symbol, unknown>)[DRAFT_REQUEST_MARK] === true
+}
+
+/**
+ * Build the rule drafter over this host's `ctx.llm` route (M5 T5.2).
+ *
+ * The drafter is a *producer of text*, never a producer of state: it validates the
+ * model's JSON with the loader's own gate and returns a paste-ready snippet. The
+ * composition root hands the same handle to the tool and to `/safeharness draft`,
+ * so the command and the model see exactly one implementation.
+ *
+ * @param ctx - plugin context; `ctx.get('llm')` is read on every call.
+ * @param runtime - shared config (the drafting route can change on settings reload).
+ * @returns a drafter whose `available` is false when the profile composes no llm.
+ */
+export function createDrafterFor(ctx: Context, runtime: Runtime): RuleDrafter {
+  return createRuleDrafter(draftCallOf(ctx, runtime), {
+    // Collisions are refused rather than shadowed: an operator pasting a draft must
+    // not silently lose a rule they already rely on.
+    existingNames: () => runtime.engine.ruleset.rules.map((rule) => rule.id),
+  })
+}
+
+/**
+ * Build the drafting model call from `ctx.llm` (same rationale as the judge: use the
+ * host's LLM service, never our own HTTP client).
+ *
+ * The route is `draft.provider`/`draft.model` when set and the judge route otherwise:
+ * most deployments already have exactly one auxiliary route configured, and forcing
+ * operators to repeat it would only create a second thing to get wrong.
+ */
+function draftCallOf(
+  ctx: Context,
+  runtime: Runtime,
+): ((prompt: string, options: { signal: AbortSignal; maxTokens: number }) => AsyncIterable<{ type: string; text?: string }>) | undefined {
+  const service = ctx.get('llm') as { stream?: (options: unknown) => AsyncIterable<StreamChunk> } | undefined
+  const dispatch = service?.stream?.bind(service)
+  if (dispatch === undefined) return undefined
+  return (prompt, options) => {
+    const draft = runtime.config.draft
+    const judge = runtime.config.output.judge
+    const provider = draft.provider.trim() === '' ? judge.provider : draft.provider
+    const model = draft.model.trim() === '' ? judge.model : draft.model
+    const request = {
+      provider,
+      model,
+      system: prompt,
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: prompt }],
+        // Same cast as the judge (the published type surface omits `plugin`); the
+        // running host accepts it and the provenance is worth keeping.
+        source: { kind: 'plugin', plugin: '@upear/dsh-safeharness' } as never,
+      })],
+      maxTokens: options.maxTokens,
+      signal: options.signal,
+      [DRAFT_REQUEST_MARK]: true,
+    }
+    return dispatch(request) as AsyncIterable<StreamChunk>
+  }
 }
 
 /**

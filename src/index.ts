@@ -25,13 +25,13 @@ import { Config, resolveConfig, type SafeHarnessConfig, type ResolvedConfig } fr
 import { createRuntime, type LoggerLike, type Runtime } from './runtime.js'
 import { installInputHook } from './hooks/input.js'
 import { installToolHooks } from './hooks/tools.js'
-import { installLlmHook, createJudgeFor } from './hooks/llm.js'
+import { installLlmHook, createJudgeFor, createDrafterFor } from './hooks/llm.js'
 import { installApprovalHook } from './hooks/approval.js'
 import { runPosture, enforceLoadTimePosture, type PostureProbe } from './posture/report.js'
 import { runPatrol, type PatrolProbe, type PatrolReport } from './patrol/index.js'
-import { statusTool, postureTool, auditQueryTool, patrolTool } from './surface/tools.js'
+import { statusTool, postureTool, auditQueryTool, patrolTool, draftRuleTool } from './surface/tools.js'
 import { registerPromptSection } from './surface/prompt.js'
-import { safeharnessCommand, JUDGE_PROBE_TEXT, type JudgeCommandTarget } from './surface/commands.js'
+import { safeharnessCommand, JUDGE_PROBE_TEXT, type JudgeCommandTarget, type DraftCommandTarget } from './surface/commands.js'
 import { SAFEHARNESS_SERVICE, type HookFlags, type PluginHandle, type SafeHarnessService } from './service.js'
 import { sha256Hex } from './util/hash.js'
 import { VERSION } from './version.js'
@@ -460,11 +460,20 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     sessions: runtime.budget.size,
   })
   const facts = { judge: judgeFact, budget: budgetFact }
+  // Rule drafting (M5 T5.2): one auxiliary call, validated with the loader's own gate,
+  // returned as text. It is wired to both the model-facing tool and `/safeharness draft`
+  // so there is exactly one implementation of "what a draft means".
+  const drafter = createDrafterFor(ctx, runtime)
+  const draftLimits = (): { enabled: boolean; maxChars: number; timeoutMs: number; maxTokens: number } => {
+    const draft = runtime.config.draft
+    return { enabled: draft.enabled, maxChars: draft.maxChars, timeoutMs: draft.timeoutMs, maxTokens: draft.maxTokens }
+  }
   for (const definition of [
     statusTool(runtime, startedAt, surface, hooks as unknown as Record<string, boolean>, facts),
     postureTool(posture),
     patrolTool(patrol),
     auditQueryTool(runtime),
+    draftRuleTool(drafter, draftLimits),
   ]) {
     ctx.tools.register(definition)
     handle.registeredTools.push(definition.name)
@@ -485,7 +494,18 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
           timeoutMs: Math.max(1000, runtime.config.output.judge.timeoutMs),
         }),
       }
-      commands.register(safeharnessCommand(runtime, posture, patrol, judgeTarget))
+      const draftTarget: DraftCommandTarget = {
+        // Read live, so flipping `draft.enabled` in settings takes effect without a reload.
+        get enabled() {
+          return runtime.config.draft.enabled
+        },
+        draft: (description, kind) => drafter.draft({ description, kind }, {
+          timeoutMs: runtime.config.draft.timeoutMs,
+          maxChars: runtime.config.draft.maxChars,
+          maxTokens: runtime.config.draft.maxTokens,
+        }),
+      }
+      commands.register(safeharnessCommand(runtime, posture, patrol, judgeTarget, draftTarget))
       hooks.commands = true
     } catch (error) {
       runtime.internalError('commands', error)

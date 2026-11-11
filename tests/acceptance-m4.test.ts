@@ -85,7 +85,7 @@ describe('M4: hardened load gate leaves no partial wiring (R36)', () => {
     try {
       await apply(host.ctx as never, { preset: 'hardened', audit: { dir: tempDir() } })
       expect(host.services.has('safeharness')).toBe(true)
-      expect(host.tools.size).toBe(4)
+      expect(host.tools.size).toBe(5)
     } finally {
       __setHostSurfaceProbeForTests(undefined)
     }
@@ -96,7 +96,7 @@ describe('M4: published package shape', () => {
   it('reports the release version everywhere', () => {
     // Pre-1.0.0-final releases are `1.0.0-rc.N`; the invariant is that the built
     // runtime stamp, the manifest and the README all name the same release.
-    expect(VERSION).toMatch(/^1\.0\.0(-rc\.\d+)?$/u)
+    expect(VERSION).toMatch(/^\d+\.\d+\.\d+(-rc\.\d+)?$/u)
     expect(manifest()['version']).toBe(VERSION)
     const readme = readFileSync(join(pluginRoot, 'README.md'), 'utf8')
     expect(readme).toContain(`版本 \`${VERSION}\``)

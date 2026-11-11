@@ -1,0 +1,52 @@
+# LLM-assisted rule drafting (M5 T5.2) — example patch entry.
+#
+# Paste this under the `config:` of the `safeharness` entry in your profile's
+# cordis.patch.yml (or edit the same fields in Settings → Plugins → SafeHarness).
+#
+# What it enables:
+#   * the model-facing tool `safeharness_draft_rule`
+#   * the operator command `/safeharness draft <what to catch> [--chain]`
+#
+# Both do ONE auxiliary model call and return a *draft*: a validated, ready-to-paste
+# YAML snippet plus `applied: false`. Nothing is written and the rule set is not
+# reloaded — a human has to put the rule into a rules file and reload. That is the
+# whole safety story: a model (or a prompt injection aimed at one) cannot change the
+# rule set by calling a tool.
+
+draft:
+  enabled: true
+
+  # Route for the drafting call. Leave both empty to reuse the judge route
+  # (`output.judge.provider` / `output.judge.model`) — the usual setup, since most
+  # deployments already have exactly one auxiliary route configured.
+  provider: ""
+  model: ""
+
+  # Characters of the operator description sent to the model. The description is
+  # wrapped in a nonce-delimited block and declared to be data, not instructions.
+  maxChars: 500
+
+  # Wall-clock budget for one draft. On expiry the tool reports `timeout` and
+  # nothing is produced (it never falls back to a guessed rule).
+  timeoutMs: 20000
+
+  # Completion budget for one draft (the JSON for one rule is tiny).
+  maxTokens: 400
+
+# The drafted rule still has to be installed by hand. Either drop the YAML into a
+# file under `rules.dir`:
+#
+#   rules:
+#     dir: "C:/Users/<you>/.dsh/safeharness/rules"
+#     watch: true
+#
+# ...or paste it into inline rules:
+#
+#   rules:
+#     inline:
+#       - name: draft_curl_pipe_shell
+#         pattern: 'curl\s+-[a-z]+\s*\|\s*(?:sh|bash)'
+#         severity: high
+#         category: remote-code-execution
+#         action: deny
+#         reason: 'curl piped into a shell'
