@@ -20,8 +20,8 @@
 | 当前版本 | `1.7.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
 | 桌面端插件 | 运行 **1.6.0**（用户 2026-11-12 截图确认）。**1.7.0 已发布待装**：退出 DSH（含托盘）→ `plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.7.0）→ 重启；升级后看设置 → 内置插件 → SafeHarness 的五标签、跨重启工作区/对话筛选与设置页 |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = **`024b02e`**，tag **`v1.6.0`** 指向同一提交（`5f694d8` 是 1.5.0）。CI：推送成功；本机 `api.github.com` 超时，runs 状态未读，需要时在网页确认 |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.6.0 功能提交 `3cd6727`、1.5.0 `971898f`、1.4.0 `cb3c1f8`、1.3.0 `96a4913`、发布清单修正 `39db2db`（`github` 备份远端同步 main 与 v1.2.0–v1.6.0 标签） |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = **`f9acbd5`**，tag **`v1.7.0`** 指向同一提交（`024b02e` 是 1.6.0）。CI：推送成功；本机 `api.github.com` 超时，runs 状态未读，需要时在网页确认 |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.7.0 功能提交 `414ca60`、1.6.0 功能 `3cd6727` 与文档修正 `7f854f2`、1.5.0 `971898f`、1.4.0 `cb3c1f8`、1.3.0 `96a4913`；`github` 备份远端同步 main 与 v1.2.0–v1.7.0 标签 |
 | 测试 | 本机 `pnpm test` = **41 文件 / 688 用例**全绿（新增面板设置 9、状态持久化 3、面板历史 1、路由设置 5）；公开树 38 文件 / 670（667 pass + 3 skip），CI 剔除 perf 后 37 文件 / 662（659 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 §12.10、1.2.1 §12.11、1.2.2 §12.12） |
 | 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 见 `evidence/R42-sql-scan-convergence.md`，1.3.0 见 `evidence/1.3.0-panel.md`，1.4.0 见 `evidence/1.4.0-panel-patrol.md`，1.5.0 见 `evidence/1.5.0-panel-detail.md`，1.6.0 见 `evidence/1.6.0-panel-workbench.md`，1.7.0 见 `evidence/1.7.0-panel-workbench.md` 与五张截图） |
