@@ -425,6 +425,7 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 24. **改 sidecar 相关代码后必须重跑 `tests/sidecar-parity.test.ts`**（本机有 Python 时）：它是"两个引擎同判"的唯一守门人；改了 `composeInputDecision`、规则 seq 或 sidecar 的匹配方式而 parity 仍绿，才算没破坏语义。
 25. **0.2.2-rc.1 的 settings 不是命名空间注册**：`ctx.settings.register(ns, schema)` 在这个宿主上不存在（那是 0.1.0-rc.5 的 API），设置页是 `SettingsForms` 从插件 `Config` 的 `.volatile()` 字段**自动**生成的。改设置相关代码只照 0.1.0 类型源写会得到"永远 false 的 seam"，且不会有任何报错。
 26. **`.volatile()` 的值是 box，不是原值**：宿主解析出的配置里，volatile 字段是 `{ get(), [Symbol.for('cosmokit.volatile.write')] }`。任何消费前必须 `unwrapVolatile`（本仓 `config.ts` 在 `resolveConfig` 入口统一做）；不要 `typeof value === 'string'` 直接判，否则会把它当成"类型错误"。schema 里给 volatile 数值字段补 `.min()`/`.step()`，保证设置页写入不会制造下次启动无法加载的配置。
+27. **`safeharness-headless` profile 里是 M3 时代的 0.3.0 副本，不是 link**：拿它做当前版本冒烟会得到 `plugin_loaded v=0.3.0`、`seams` 无 `settings` 的假结论（1.2.1 实现期间踩过一次）。冒烟一律「复制 `headless` 模板 → `dsh plugin add file:<tgz>` → 新 profile」。同理，`dsh plugin add` 前必须删掉复制来的 `node_modules` 与 `pnpm-lock.yaml`，否则 pnpm 会因虚拟 store 位置变化直接失败。
 
 ---
 
