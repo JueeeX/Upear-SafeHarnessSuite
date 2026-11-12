@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url'
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import { createEngine } from './engine/index.js'
+import { createEngine, type Engine } from './engine/index.js'
+import { createSidecarEngine, type SidecarEngine } from './engine/sidecar-engine.js'
+import { Sidecar, SidecarError } from './engine/sidecar.js'
 import type { RuleSet } from './engine/types.js'
 import { tryLoadRuleSet } from './engine/rules.js'
 import { resolveLedgerDir } from './audit/paths.js'
@@ -320,8 +322,37 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     rulesetHash: ruleset.hash,
   })
 
-  // 4) Engine + runtime.
-  const engine = createEngine(ruleset, cfg)
+  // 4) Engine + runtime. The optional Python sidecar serves ONLY the asynchronous
+  // input path (§6.14): `tools.guard` is IO-free, so the built-in engine stays
+  // authoritative for every synchronous surface and is the fallback when the child
+  // is unavailable. A failed start does not throw here: posture reports
+  // `engine_sidecar_unavailable` and `posture.failOn` decides whether that blocks
+  // the load (hardened) or degrades to the built-in engine (observe/balanced).
+  let sidecarEngine: SidecarEngine | undefined
+  if (cfg.engine.kind === 'sidecar') {
+    const client = new Sidecar({
+      command: cfg.engine.command,
+      args: cfg.engine.args,
+      cwd: cfg.engine.cwd.length > 0 ? cfg.engine.cwd : undefined,
+      timeoutMs: cfg.engine.timeoutMs,
+      startTimeoutMs: cfg.engine.startTimeoutMs,
+    })
+    const candidate = createSidecarEngine({
+      builtin: createEngine(ruleset, cfg),
+      sidecar: client,
+      timeoutMs: cfg.engine.timeoutMs,
+      logger,
+    })
+    try {
+      await candidate.prepare()
+      sidecarEngine = candidate
+    } catch (error) {
+      const code = error instanceof SidecarError ? error.code : 'sidecar_error'
+      logger.error(`safeharness: python input engine unavailable (${code}); posture will report it`)
+      sidecarEngine = candidate
+    }
+  }
+  const engine: Engine = sidecarEngine ?? createEngine(ruleset, cfg)
   const runtime = createRuntime({ config: cfg, engine, ledger, logger })
 
   const hooks: HookFlags = {
@@ -360,6 +391,9 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     // Approval policy has no session-free reader; the check reports SKIP until a
     // session exists (recorded as a known limitation in the M1 evidence).
     approvalPolicy: () => undefined,
+    engine: () => (sidecarEngine === undefined
+      ? { kind: 'builtin' as const, status: 'ready' as const }
+      : { kind: 'sidecar' as const, status: sidecarEngine.sidecarStatus, rulesStale: sidecarEngine.rulesStale }),
   }
 
   await ledger.append('plugin_loaded', {
@@ -370,6 +404,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     labels: {
       version: VERSION,
       host_surface: summarizeOrigin(surface),
+      engine: sidecarEngine === undefined ? 'builtin' : 'sidecar',
       // The four packages whose identity actually decides compatibility; short
       // enough to stay a label (the ledger hashes anything over 256 chars).
       ...surfaceLabels(surface),
@@ -384,7 +419,12 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     } catch (error) {
       // Either a failOn gate hit (rethrow: refuse load) or the report itself
       // failed (observation surface: warn and continue).
-      if (error instanceof Error && error.message.startsWith('safeharness: refusing to load')) throw error
+      if (error instanceof Error && error.message.startsWith('safeharness: refusing to load')) {
+        // Nothing of ours may stay active on a refused load, and that includes the
+        // child process the engine gate just complained about.
+        await sidecarEngine?.stop()
+        throw error
+      }
       runtime.internalError('posture:onLoad', error)
     }
   }
@@ -402,6 +442,8 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
 
   // Everything below is owned by the fiber: disposers are managed by Cordis.
   ctx.effect(() => () => {
+    // Stop the child first: after `ledger.close()` its records would be dropped.
+    void sidecarEngine?.stop()
     void ledger.close()
   }, 'safeharness:teardown')
 
@@ -459,7 +501,25 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     limit: runtime.budget.limitValue,
     sessions: runtime.budget.size,
   })
-  const facts = { judge: judgeFact, budget: budgetFact }
+  const engineFact = (): {
+    kind: 'builtin' | 'sidecar'
+    status: string
+    rulesStale: boolean
+    pending: number
+    badLines: number
+    lastError?: string
+  } => {
+    const lastError = sidecarEngine?.lastError
+    return {
+      kind: sidecarEngine === undefined ? 'builtin' : 'sidecar',
+      status: sidecarEngine === undefined ? 'ready' : sidecarEngine.sidecarStatus,
+      rulesStale: sidecarEngine === undefined ? false : sidecarEngine.rulesStale,
+      pending: sidecarEngine === undefined ? 0 : sidecarEngine.sidecarStats.pending,
+      badLines: sidecarEngine === undefined ? 0 : sidecarEngine.sidecarStats.badLines,
+      ...(lastError === undefined ? {} : { lastError }),
+    }
+  }
+  const facts = { judge: judgeFact, budget: budgetFact, engine: engineFact }
   // Rule drafting (M5 T5.2): one auxiliary call, validated with the loader's own gate,
   // returned as text. It is wired to both the model-facing tool and `/safeharness draft`
   // so there is exactly one implementation of "what a draft means".

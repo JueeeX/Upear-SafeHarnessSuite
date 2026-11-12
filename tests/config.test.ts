@@ -26,6 +26,7 @@ describe('resolveConfig — host-validated config (R37)', () => {
       'approval_never',
       'hmr_enabled',
       'plugin_version_mismatch',
+      'engine_sidecar_unavailable',
     ])
     expect(config.results.blockOn).toEqual(['credential_leak', 'injection_marker'])
   })
@@ -71,7 +72,32 @@ describe('resolveConfig — preset expansion', () => {
       'hmr_enabled',
       // §7 row 10: a hardened deployment must refuse the load on a host version mismatch.
       'plugin_version_mismatch',
+      // 1.2.0: an explicitly configured Python engine must be running.
+      'engine_sidecar_unavailable',
     ])
+  })
+
+  it('the input engine defaults to builtin and needs a command only for the sidecar', () => {
+    const builtin = resolveConfig({ preset: 'balanced' })
+    expect(builtin.engine).toEqual({
+      kind: 'builtin',
+      command: '',
+      args: [],
+      cwd: '',
+      timeoutMs: 1500,
+      startTimeoutMs: 10000,
+    })
+    const sidecar = resolveConfig({
+      engine: { kind: 'sidecar', command: 'C:/Python314/python.exe', args: ['-u', 'sidecar.py'] },
+    })
+    expect(sidecar.engine.kind).toBe('sidecar')
+    expect(sidecar.engine.args).toEqual(['-u', 'sidecar.py'])
+
+    // Half-configured engines are a load-time error, not a dead engine on turn 1.
+    expect(() => resolveConfig({ engine: { kind: 'sidecar' } })).toThrow(/engine\.command/u)
+    expect(() => resolveConfig({ engine: { kind: 'sidecar', command: '   ' } })).toThrow(/engine\.command/u)
+    expect(() => resolveConfig({ engine: { kind: 'nope' as never } })).toThrow(/engine\.kind/u)
+    expect(() => resolveConfig({ engine: { timeoutMs: 0 } })).toThrow(/engine\.timeoutMs/u)
   })
 
   it('an explicit field beats the preset', () => {

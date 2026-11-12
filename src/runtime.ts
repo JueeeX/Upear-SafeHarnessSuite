@@ -121,6 +121,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
     reconfigure(next: ResolvedConfig): void {
       currentConfig = next
+      // Detection thresholds that live in config (input.maxChars, tool/result
+      // limits) must follow a settings write; the engine ignores what it does not use.
+      runtime.engine.reconfigure?.(next)
       // A hot update may change the per-turn limit without recreating the guard.
       runtime.budget.setLimit(next.budget.maxTokensPerTurn)
     },

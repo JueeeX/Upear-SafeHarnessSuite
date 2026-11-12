@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.1.1` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.2.0` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -120,11 +120,11 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # tsc -> lib/
-pnpm test             # 521 个用例（26 个文件）
+pnpm test             # 597 个用例（33 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.1.1.tgz（lib + rules + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.2.0.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -138,7 +138,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.1.1.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.2.0.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -211,6 +211,13 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 ```yaml
 config:
   preset: balanced                        # observe | balanced | hardened
+  engine:                                 # 1.2.0：可选 Python 输入引擎（默认 builtin）
+    kind: builtin                         # builtin | sidecar
+    command: ""                           # sidecar 时的可执行文件，例如 C:/Python314/python.exe
+    args: []                              # 例如 ["-u", "…/scripts/safeharness_sidecar.py", "--framework", "…/src"]
+    cwd: ""
+    timeoutMs: 1500                       # 单次输入判定超时
+    startTimeoutMs: 10000                 # 握手超时
   rules: { dir: "", watch: true, inline: [] }
   input: { mode: enforce, maxChars: 60000 }
   tools:
@@ -274,6 +281,7 @@ config:
 - `posture.failOn`：列出的 code 一旦 FAIL 即拒绝加载（建议只在 hardened 开启）。
 - `patrol.notify`：0..N 个通知通道（见 §4.2）；通道 URL、签名 secret、bearer token 都按凭据处理，永不打印、永不入账本；通知正文只有 `Upear SafeHarness: N FAIL / M WARN`。旧的 `patrol.feishuWebhook` 仍可用，等价于一条 `feishu` 通道。
 - `draft`：LLM 辅助规则起草（§4.3）。它只发一次辅助模型调用、返回**草稿**，不改规则集、不写文件；`provider`/`model` 留空时复用 `output.judge` 的路由。
+- `engine`：可选 Python 输入引擎（§4.4）。缺省 `builtin` 就是 1.1.x 的行为；`sidecar` 只接管输入面，工具面/结果面/输出面仍是内置引擎。
 - 优先级：显式字段 > 预设 > 基础默认；`resolveConfig` 输出深冻结。
 
 ### 4.1 语义 judge 的模型 URL 与 Key 怎么填
@@ -392,6 +400,42 @@ draft:
 
 慢供应商可把 `timeoutMs` 调到 30000：超时只返回 `status: timeout`（什么都没落盘、规则集不变），模型或人可以直接重试。
 
+### 4.4 可选 Python 输入引擎（sidecar，1.2.0）
+
+默认引擎是纯 TypeScript（`engine.kind: builtin`，没有 Python 依赖）。需要"用本仓 SafeHarness 的 Python 实现来判输入"时，可以切到 sidecar：插件会拉起一个子进程，通过 stdin/stdout 的 JSON-lines 协议问它"这段文本命中了哪些规则、是不是危险 SQL"。
+
+```yaml
+engine:
+  kind: sidecar
+  command: C:/Python314/python.exe
+  args:
+    - -u
+    - F:/AgentSecurity/Upear/plugins/dsh-safeharness/scripts/safeharness_sidecar.py
+    - --framework
+    - F:/AgentSecurity/Upear/src        # 让 subprocess 能 import safeharness.policies
+  timeoutMs: 1500
+  startTimeoutMs: 10000
+```
+
+**它做什么**：`agent/pre-step` 的输入判定改由 Python 引擎回答；Python 的 `inspect_sql` 是危险 SQL 的权威实现，信息面（哪条规则命中）由子进程返回、`Decision` 仍由 TS 侧合成，所以账本语义不随引擎变化。
+
+**它不做什么**：工具名/标签/参数、工具结果扫描、输出正则、链式轨迹都还是内置引擎——`tools.guard` 是同步无 IO 的硬约束（R3），子进程服务不了它。`input.maxChars` 的截断也在 TS 侧完成后再发送。
+
+**规则同源**：插件在握手时把当前规则集（名称 + 正则源）通过 `set_rules` 下发，子进程全部接受才算就绪；规则热更新后，在子进程确认新规则集之前，异步输入路径直接拒绝（`sidecar_rules_stale`），不会用旧规则判新输入却记新规则集的 hash。子进程返回了本规则集没有的规则名 → `sidecar_unknown_rule`，同样拒绝。
+
+**一致性**：内置引擎与 Python 引擎对同一批内部攻击语料逐条返回相同 `Decision`（`tests/sidecar-parity.test.ts`，需要本机 Python 与框架源码，公开仓库不含该测试）。
+
+**不可用时的语义**（`engine_sidecar_unavailable` 姿态 code）：
+
+| 预设 | 子进程起不来 / 中途死亡 | 姿态 |
+|---|---|---|
+| `observe` / `balanced` | 记 WARN + 回落内置引擎（攻击照拦，账本 `labels.engine: builtin` + `engine_error`） | FAIL（配置了却没跑起来） |
+| `hardened` | **拒绝输入**（`input_engine_unavailable`），即使 `input.mode: warn`；加载期不可用则**拒绝加载** | FAIL + `failOn` 门禁 |
+
+**已知取舍**：Python 的 `InformPolicy` 在匹配前会做 `NFKC` / 零宽字符 / HTML 注释清理，而内置引擎不做；sidecar 刻意**只跑同一批正则、不做这套清理**，否则两个引擎会对同一规则集给出不同结论（账本 hash 相同、判定不同）。想要更强的规范化能力，应作为下一版显式的引擎语义变更，而不是 sidecar 的隐藏副作用。
+
+**要求**：本机 Python（实测 3.14.7）+ 本仓 `src/safeharness` 源码可 import。tarball 里带 `scripts/safeharness_sidecar.py`，但 Python 框架本身不打包——`--framework` 指向你的仓库 checkout。
+
 ---
 
 ## 5. 预设与失败语义
@@ -407,7 +451,7 @@ draft:
 | 输出 | warn | warn | warn（可显式开 `enforce-buffer` 整条拦截） |
 | 审批桥 | delegate | delegate | policy |
 | 审计 `required` | false | **true** | true |
-| 姿态门禁 `failOn` | 空 | 空（只报告） | `sandbox_danger_full_access` / `approval_never` / `hmr_enabled` / `plugin_version_mismatch` |
+| 姿态门禁 `failOn` | 空 | 空（只报告） | `sandbox_danger_full_access` / `approval_never` / `hmr_enabled` / `plugin_version_mismatch` / `engine_sidecar_unavailable` |
 | 规则加载失败 | 记录 + 空规则集继续 | **拒绝加载** | 拒绝加载 |
 
 失败语义（fail-closed）：
@@ -423,6 +467,8 @@ draft:
 | 启用 judge 但 `ctx.get('llm')` 不存在 | 跳过 judge | 跳过 judge + WARN | **拒绝加载** |
 | `ctx.commands` 不存在 | 跳过命令 | 同 | 同 |
 | 同步 guard 内异常 | — | deny | deny |
+| Python 引擎（sidecar）不可用 | WARN + 回落内置引擎 | WARN + 回落内置引擎 | **拒绝输入**；加载期不可用则拒绝加载 |
+| 规则热更新后子进程未确认新规则集 | 回落内置引擎 | 回落内置引擎 | 拒绝输入直到确认 |
 | 插件被停用 | 无保护（外部巡检兜底） | 同 | 同 |
 | DSH 版本不匹配 | WARN | WARN | 拒绝加载 |
 
@@ -436,7 +482,7 @@ draft:
 
 ```json
 {"v":1,"ts":"2026-11-11T01:47:20.963Z","seq":1,"kind":"plugin_loaded","decision":"ok",
- "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.1.1",
+ "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.2.0",
  "metrics":{"rule_count":20,"chain_count":3},"sha256":"…"}
 ```
 
@@ -526,10 +572,11 @@ plugins/dsh-safeharness/
 │  ├─ index.ts          apply()：按序装配所有面；硬门禁最先执行（失败不留半装配）
 │  ├─ config.ts         schemastery 配置 + 三档预设 + resolveConfig（深冻结）
 │  ├─ engine/           纯函数检测内核：input / tool / sql / rules / types（无 DSH import）
+│  ├─ engine/           纯判定引擎：rules/input/sql/tool + sidecar 传输与 sidecar-engine
 │  ├─ hooks/            DSH 事件薄层：input / tools / llm / approval / context
 │  ├─ judge/            语义 judge 内核（零依赖，超时/坏 JSON/空回答处理）
 │  ├─ patrol/           外部巡检（5 项，永不抛异常）
-│  ├─ posture/          姿态检查（9 项）
+│  ├─ posture/          姿态检查（10 项）
 │  ├─ audit/            账本：NDJSON 哈希链、脱敏、轮转、路径解析
 │  ├─ surface/          只读工具、命令、系统提示词条款
 │  ├─ budget.ts         每轮 token 预算
@@ -537,9 +584,9 @@ plugins/dsh-safeharness/
 │  ├─ runtime.ts        运行时状态与共享话术
 │  └─ version.ts        版本（与 package.json 同步，测试锁定）
 ├─ rules/               inform.yaml（20 条）+ chains.yaml（3 条）
-├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml / cordis.patch.notify.example.yml
-├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）
-├─ tests/               477 个用例（23 个文件）
+├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml / cordis.patch.notify.example.yml / cordis.patch.sidecar.example.yml
+├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
+├─ tests/               597 个用例（33 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -558,7 +605,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # tsc -> lib/
-pnpm test             # vitest：27 个文件 / 555 个用例（内部含黄金语料与失败矩阵；公开仓库 25 文件 / 538，其中 3 例在没有内部语料时跳过。CI 另剔除 tests/perf.test.ts → 24 文件 / 530 = 527 pass + 3 skip）
+pnpm test             # vitest：33 个文件 / 597 个用例（内部含黄金语料、sidecar 一致性与失败矩阵）。公开树 30 文件 / 579（576 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 29 文件 / 571（568 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -566,9 +613,10 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 - **可独立构建**：`@deepseek-ai/cordis`、`schemastery`、`dsh-*` 等宿主包在 `devDependencies` 里按精确版本固定（npm 上已发布）；运行时它们仍由 DSH 进程提供，插件自身零运行时依赖。
 - **`dsh-invariants` 只用于编译**：它没有 `0.2.x` 发布线，因此 `peerDependencies` 与 `devDependencies` 固定为 `0.1.0-rc.8`（类型来源）；运行期用的是宿主 `ctx.invariants` 服务，不 import 该包。
 - **CI**：`.github/workflows/ci.yml` 在干净 runner 上跑 `pnpm install && pnpm build && pnpm test`（跳过对机器抖动敏感的 `tests/perf.test.ts`，性能预算在本机 `pnpm test` 里照常执行）。
+- **公开树发布**：`node scripts/publish-public.mjs --target <worktree>`。哪些文件能发、哪些永远不发，写在脚本的 `PUBLISH_TOP` / `NEVER_PUBLISH` 里（内部语料、golden fixture、`evidence/`、构建产物、tarball 一律拒绝）；`tests/publish-guard.test.ts` 守着这份计划，`--check` 只打印计划、`--check --target <dir>` 只扫目标目录有没有泄漏。
 
 - **测试分布**：输入/工具/SQL/规则、五个钩子、账本与脱敏、姿态、巡检、预算、审批桥、judge、失败矩阵、性能预算、以及真实 DSH 会话的假模型回放（`scripts/fake-openai.mjs`）。
-- **Python↔TS 黄金一致性**：20 条 inform 规则与 SQL 判定在内部语料上 30/30 一致（内部验证，语料与 fixture 属内部资产，**不随本仓库分发**；因此 `pnpm test` 中的 3 个用例在缺少语料时跳过）。
+- **Python↔TS 黄金一致性**：20 条 inform 规则与 SQL 判定在内部语料上 30/30 一致（内部验证，语料与 fixture 属内部资产，**不随本仓库分发**；因此 `pnpm test` 中的 3 个用例在缺少语料时跳过）。1.2.0 起另有 sidecar 一致性测试：内置引擎与真实 Python 引擎对同一批语料逐条比对 `Decision`（同样需要内部语料与本机 Python，公开树不包含）。
 - **本地假模型全链路**（无需真实 Key）：`scripts/fake-openai.mjs` 是 OpenAI Chat Completions 兼容的 SSE 服务器，可脚本化 text / 工具调用 / 并行工具 / Code Mode / 500 / 长挂起 / judge 判决等场景；请求日志只记 sha256 与长度，不记 prompt 与 Key。
 - `scripts/session-dump.mjs` 只读解析 DSH 的 `.jsonl.zstd` 会话日志（多帧 zstd），用于本机排查；会话日志含真实对话内容，**只用于本机诊断，不要提交或贴到 issue**。
 
@@ -593,6 +641,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 15. **judge 的 URL/Key 属于宿主配置，不属于插件配置**：插件只携带 `provider`/`model` 路由，Key 由 DSH 凭据层按 `apiKeyEnv` 引用解析，插件既不读也不打印。换端点 = 改 profile 的 `llm-pi-ai.providers`，不需要改插件。
 16. **真实模型冒烟只做过一次最小会话**：用真实 OpenAI 兼容端点（`gpt-6-luna`）跑通一轮 observe：`usage_input=29280 / usage_output=26`、judge `status=ok`（`judge_ms=7319`）。不同供应商在工具调用形态、流式分片、usage 上报上的差异仍需各自冒烟；`/safeharness judge probe` 就是为此准备的自检入口。
 17. **规则起草只是"草稿"**：模型给的正则可能过宽（误杀）也可能过窄（漏检），插件只保证"结构与语法能过 loader 门"，不保证语义正确。`1.1.1` 起会对**明显过窄的形状**（纯字面量、短于 12 字符、单词元、chain 字面工具名）给出 `warnings`，但那仍然只是形状判断，最终要靠人看。起草需要一条可用的辅助路由（默认复用 judge 路由）；路由不可用时工具返回 `unavailable`，不会退回本地启发式，也不会静默生成一条看起来能用的规则。
+18. **Python sidecar 是可选增强，不是默认路径**：需要本机 Python 与 `src/safeharness` 可 import；只接管输入面，不接管 `tools.guard`（同步无 IO 约束）。规则热更新后到子进程确认前的输入会被拒绝（hardened）或回落内置引擎（observe/balanced）。它刻意不做 Python `InformPolicy` 的 NFKC/零宽清理，以保持与内置引擎判定一致；不做这一点是**显式取舍**，见 §4.4。子进程超时只让当次请求失败、不会自动重启；连续超时会让输入面持续降级，此时应看 `safeharness_status.engine` 与姿态 code。
 
 ---
 

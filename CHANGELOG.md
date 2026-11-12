@@ -1,6 +1,21 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.2.0 — 2026-11-12
+
+新增功能（M5 T5.1 第 2 步）：**可选的 Python 输入引擎**（sidecar）。默认仍是内置 TypeScript 引擎，行为与 1.1.1 完全一致；只有显式配置 `engine.kind: sidecar` 才启用。
+
+- 新配置段 `engine`：`kind`（`builtin` 默认 / `sidecar`）、`command`、`args`、`cwd`、`timeoutMs`（默认 1500）、`startTimeoutMs`（默认 10000）。`kind: sidecar` 但 `command` 为空 → 加载期拒绝（不留到第一个用户回合才炸）。
+- 新脚本 `scripts/safeharness_sidecar.py`：JSON-lines 协议（`health` / `set_rules` / `inspect_sql` / `inform_match` / `evaluate_input` / `shutdown`），危险 SQL 由本仓 Python 的 `inspect_sql` 判定；`--framework` 指向仓库 `src/` 以导入 `safeharness.policies`。只读、无网络、无凭据。
+- **只接管输入面**：`tools.guard` 的同步无 IO 契约不变，工具/结果/输出/链式轨迹仍是内置引擎；`input.maxChars` 截断在 TS 侧完成后才发送。
+- **判定合成留在 TS**：子进程只返回"哪条规则命中 / 是否危险 SQL"，`Decision`（severity/category/reason code/排序）由 `composeInputDecision` 合成，切换引擎不改变账本语义。
+- **规则同源**：握手时下发当前规则集（名称 + 正则源），全部接受才算就绪；规则热更新后到确认前，异步输入路径拒绝（`sidecar_rules_stale`）。子进程报出本规则集没有的规则名 → `sidecar_unknown_rule`。
+- **失败语义**：observe/balanced 记录一次 `input_engine_unavailable` 并回落内置引擎（攻击照拦，账本 `labels.engine: builtin` + `engine_error`）；hardened 拒绝输入，加载期不可用则拒绝加载。新增姿态 code `engine_sidecar_unavailable`（10 项），hardened 的 `failOn` 含它。
+- 传输层加固：子进程事件代际守卫（重启后旧 child 的 exit 不会毒化新握手）、stdout 单行上限（超限杀进程）、在途请求上限（`sidecar_overloaded`）。
+- 顺带修复：配置热更新后内置引擎的 `input.maxChars` / 工具 / 结果阈值不再陈旧（`Engine.reconfigure`）。
+- 测试：新增 `tests/sidecar.test.ts`（13）、`tests/sidecar-engine.test.ts`（7）、`tests/sidecar-hook.test.ts`（4）、`tests/sidecar-apply.test.ts`（3）、`tests/sidecar-parity.test.ts`（1，内部，需本机 Python；内置与真实 Python 引擎对内部语料逐条同判）；全套 **33 文件 / 597 用例**。发布白名单新增 `scripts/safeharness_sidecar.py`（tarball 必须带它），一致性测试加入 `NEVER_PUBLISH`。
+
+未验证（与 1.1.1 相同口径）：真实 IM 投递、真实人工审批；sidecar 只在 Windows + Python 3.14.7 冒烟，未在 Linux/macOS 验证。
 ## 1.1.1 — 2026-11-11
 
 小修：给规则草稿加**形状警告**（shape warnings），其余行为不变。

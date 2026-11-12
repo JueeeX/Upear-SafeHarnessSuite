@@ -22,6 +22,15 @@ import type { NotifyChannel, NotifyChannelType } from './notify/channels.js'
 
 /** Deployment posture preset. */
 export type PresetId = 'observe' | 'balanced' | 'hardened'
+
+/**
+ * Which implementation judges the input surface.
+ *
+ * `builtin` (the default) is the pure TypeScript engine. `sidecar` adds an
+ * asynchronous decision path served by a Python child process; it never changes
+ * the synchronous surfaces (`tools.guard` stays IO-free).
+ */
+export type EngineKind = 'builtin' | 'sidecar'
 /** Enforcement mode for one detection surface. */
 export type EnforcementMode = 'off' | 'warn' | 'enforce'
 /** Output surface mode; `enforce-buffer` trades streaming for a veto window. */
@@ -56,6 +65,23 @@ export interface NotifyChannelConfig {
 /** Raw (operator-supplied) config: every field optional, presets fill the rest. */
 export interface SafeHarnessConfig {
   preset?: PresetId
+  /**
+   * Optional Python input engine. Absent means `builtin`, i.e. the behaviour of
+   * every release before 1.2.0 is unchanged.
+   */
+  engine?: {
+    kind?: EngineKind
+    /** Executable to spawn (required for `sidecar`, e.g. `C:/Python314/python.exe`). */
+    command?: string
+    /** Arguments (e.g. `['-u','scripts/safeharness_sidecar.py']`). */
+    args?: string[]
+    /** Working directory of the child. */
+    cwd?: string
+    /** Per-input deadline in milliseconds. */
+    timeoutMs?: number
+    /** Handshake deadline in milliseconds. */
+    startTimeoutMs?: number
+  }
   rules?: {
     /** Extra rule directory. Empty means "the rules shipped inside the package". */
     dir?: string
@@ -174,6 +200,15 @@ function keepAbsent<S>(inner: S): S {
 export const Config: z<SafeHarnessConfig> = z.object({
   preset: z.union(['observe', 'balanced', 'hardened'] as const)
     .description('Deployment posture preset: observe / balanced / hardened.'),
+  engine: z.object({
+    kind: z.union(['builtin', 'sidecar'] as const)
+      .description('Input engine: built-in TypeScript (default) or the optional Python sidecar.'),
+    command: z.string().description('Executable to spawn; required when kind is sidecar.'),
+    args: keepAbsent(z.array(z.string())).description('Arguments for the sidecar command.'),
+    cwd: z.string().description('Working directory for the sidecar process.'),
+    timeoutMs: z.number().description('Per-input deadline in milliseconds.'),
+    startTimeoutMs: z.number().description('Handshake deadline in milliseconds.'),
+  }).description('Optional Python input engine (async input path only).'),
   rules: z.object({
     dir: z.string().description('Extra rule directory; empty means the packaged rules.'),
     watch: z.boolean().description('Recompile rules when a rule file changes.'),
@@ -275,6 +310,14 @@ export type { PostureSeverity } from './engine/types.js'
 /** Fully resolved config: every field present, deep-frozen, safe to share. */
 export interface ResolvedConfig {
   readonly preset: PresetId
+  readonly engine: {
+    readonly kind: EngineKind
+    readonly command: string
+    readonly args: readonly string[]
+    readonly cwd: string
+    readonly timeoutMs: number
+    readonly startTimeoutMs: number
+  }
   readonly rules: {
     readonly dir: string
     readonly watch: boolean
@@ -373,7 +416,15 @@ const PRESET_OVERRIDES: Record<PresetId, DeepPartial<SafeHarnessConfig>> = {
     // version mismatch; the gate is `posture.failOn`, so the code must be in this list
     // even though the preset table only lists the deployment-posture codes.
     posture: {
-      failOn: ['sandbox_danger_full_access', 'approval_never', 'hmr_enabled', 'plugin_version_mismatch'],
+      failOn: [
+        'sandbox_danger_full_access',
+        'approval_never',
+        'hmr_enabled',
+        'plugin_version_mismatch',
+        // Opt-in sidecar only: when the operator configured the Python engine it
+        // must be running, otherwise the hardened load gate refuses.
+        'engine_sidecar_unavailable',
+      ],
     },
   },
 }
@@ -384,6 +435,9 @@ const PRESET_OVERRIDES: Record<PresetId, DeepPartial<SafeHarnessConfig>> = {
  */
 const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
   preset: 'balanced',
+  // 1.2.0 keeps `builtin` as the factory default: enabling the sidecar is an
+  // explicit operator choice that adds a Python dependency.
+  engine: { kind: 'builtin', command: '', args: [], cwd: '', timeoutMs: 1500, startTimeoutMs: 10000 },
   rules: { dir: '', watch: true, inline: [] },
   input: { mode: 'enforce', maxChars: 60000 },
   tools: {
@@ -529,6 +583,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     raw,
   ) as SafeHarnessConfig
 
+  const engine = merged.engine ?? {}
   const rules = merged.rules ?? {}
   if (typeof rules.dir !== 'string') problems.push('rules.dir must be a string')
   const inline = rules.inline ?? []
@@ -556,8 +611,24 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     }).map((item) => ({ pattern: item.pattern, tags: stringList(item.tags, 'tools.tagOverrides[].tags', problems) }))
     : (problems.push('tools.tagOverrides must be an array'), [])
 
+  const engineKind = oneOf(engine.kind, ['builtin', 'sidecar'] as const, 'engine.kind', problems)
+  const engineCommand = typeof engine.command === 'string' ? engine.command.trim() : ''
+  // Refuse a half-configured engine at load time: `kind: sidecar` with no command
+  // would otherwise only surface as a dead engine on the first user turn.
+  if (engineKind === 'sidecar' && engineCommand === '') {
+    problems.push('engine.command is required when engine.kind is sidecar')
+  }
+
   const resolved: ResolvedConfig = {
     preset,
+    engine: {
+      kind: engineKind,
+      command: engineCommand,
+      args: stringList(engine.args, 'engine.args', problems),
+      cwd: typeof engine.cwd === 'string' ? engine.cwd : '',
+      timeoutMs: positive(engine.timeoutMs, 'engine.timeoutMs', problems, 1500),
+      startTimeoutMs: positive(engine.startTimeoutMs, 'engine.startTimeoutMs', problems, 10000),
+    },
     rules: {
       dir: typeof rules.dir === 'string' ? rules.dir : '',
       watch: typeof rules.watch === 'boolean' ? rules.watch : true,

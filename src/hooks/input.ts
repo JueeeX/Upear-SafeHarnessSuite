@@ -5,12 +5,29 @@
  * A denial closes the whole turn — the seam has no reason channel — so only
  * high-confidence structural rules are allowed to reach this surface, and the
  * model never learns which rule fired (generic wording only).
+ *
+ * Optional Python engine (`engine.kind: 'sidecar'`, M5 T5.1): when the engine
+ * exposes `evaluateInputAsync`, that path is used and a failure is handled by
+ * preset — observe/balanced fall back to the built-in engine (recorded once per
+ * cause), hardened denies. Fallback is never silent: the ledger labels the record
+ * with `engine` and, on failure, `engine_error`.
  * @module
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import { SidecarError } from '../engine/sidecar.js'
+import type { Decision } from '../engine/types.js'
+import { ReasonCode } from '../engine/types.js'
 import { foundSomething, type Runtime } from '../runtime.js'
 import { agentIdOf, sessionIdOf, userInputText } from './context.js'
+
+/** Decision used when the hardened preset cannot get input judged at all. */
+const ENGINE_UNAVAILABLE_DECISION: Decision = {
+  kind: 'deny',
+  reasonCode: ReasonCode.InputEngineUnavailable,
+  ruleIds: [],
+  reason: 'the input engine is unavailable',
+}
 
 /**
  * Install the input guard listener.
@@ -19,6 +36,49 @@ import { agentIdOf, sessionIdOf, userInputText } from './context.js'
  * @param runtime - shared engine/ledger/state.
  */
 export function installInputHook(ctx: Context, runtime: Runtime): void {
+  /** Failure codes already reported; one ledger line per distinct cause, not per turn. */
+  const reported = new Set<string>()
+
+  /** Record one engine failure (first occurrence per code) without any content. */
+  const reportEngineFailure = (code: string): void => {
+    runtime.counters.internalErrors += 1
+    if (reported.has(code)) return
+    reported.add(code)
+    runtime.logger.error(`safeharness: input engine unavailable (${code}); see posture`)
+    runtime.audit('error', {
+      decision: 'warn',
+      reason_code: ReasonCode.InputEngineUnavailable,
+      labels: { engine: 'sidecar', engine_error: code },
+      preset: runtime.config.preset,
+    })
+  }
+
+  /**
+   * Ask the configured engine for a decision.
+   *
+   * @returns the decision plus whether enforcement must proceed even in `warn`
+   *   mode (hardened + unavailable engine) and the sidecar failure code, if any.
+   */
+  const judge = async (text: string): Promise<{ decision: Decision; blocked: boolean; sidecarError?: string }> => {
+    const evaluateAsync = runtime.engine.evaluateInputAsync
+    if (typeof evaluateAsync !== 'function') {
+      return { decision: runtime.engine.evaluateInput(text), blocked: false }
+    }
+    try {
+      return { decision: await evaluateAsync.call(runtime.engine, text), blocked: false }
+    } catch (error) {
+      const code = error instanceof SidecarError ? error.code : 'sidecar_error'
+      reportEngineFailure(code)
+      if (runtime.config.preset === 'hardened') {
+        // Fail-closed: an engine that cannot judge must never become "allow".
+        return { decision: ENGINE_UNAVAILABLE_DECISION, blocked: true, sidecarError: code }
+      }
+      // observe/balanced: the built-in engine is always available, so keep
+      // inspecting rather than dropping the control entirely.
+      return { decision: runtime.engine.evaluateInput(text), blocked: false, sidecarError: code }
+    }
+  }
+
   ctx.on('agent/pre-step', async (payload, next): Promise<PreStepDecision> => {
     const sessionId = sessionIdOf(payload.agent)
     const agentId = agentIdOf(payload.agent)
@@ -40,8 +100,15 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
       const text = userInputText(payload.messages)
       if (text.length === 0) return next()
 
-      const decision = runtime.engine.evaluateInput(text)
+      const { decision, blocked, sidecarError } = await judge(text)
       const hit = foundSomething(decision)
+      // Only label when the sidecar is configured: the built-in path's ledger lines
+      // keep their pre-1.2.0 shape.
+      const engineLabels = runtime.config.engine.kind !== 'sidecar'
+        ? undefined
+        : sidecarError === undefined
+          ? { engine: 'sidecar' }
+          : { engine: 'builtin', engine_error: sidecarError }
       const base = {
         ...runtime.sessionFields(sessionId, agentId),
         reason_code: decision.reasonCode,
@@ -49,6 +116,7 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
         severity: decision.severity,
         category: decision.category,
         detail_chars: text.length,
+        ...(engineLabels === undefined ? {} : { labels: engineLabels }),
       }
 
       if (!hit) {
@@ -57,7 +125,7 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
         return next()
       }
 
-      if (mode === 'enforce') {
+      if (mode === 'enforce' || blocked) {
         // Evidence first: an enforcement decision that cannot be recorded is not
         // taken (§7 "账本不可写 → deny").
         if (!runtime.ledgerPermitsEnforcement()) {

@@ -18,6 +18,8 @@ export const ReasonCode = {
   InputRule: 'input_rule_hit',
   InputSql: 'input_sql_dangerous',
   InputTooLong: 'input_truncated',
+  /** The configured input engine could not judge (sidecar down / stale rules). */
+  InputEngineUnavailable: 'input_engine_unavailable',
   // tool surface
   ToolName: 'tool_denied_by_name',
   ToolTag: 'tool_denied_by_tag',
@@ -228,6 +230,14 @@ export interface PostureEnv {
   readonly hmrEnabled?: boolean
   /** DSH package versions the plugin expects vs. the ones actually resolved. */
   readonly versionMismatch?: readonly string[]
+  /** Configured input engine and its live status (1.2.0 optional Python sidecar). */
+  readonly engine?: {
+    readonly kind: 'builtin' | 'sidecar'
+    /** Transport lifecycle when `kind` is `sidecar`; `idle`/`failed` are not usable. */
+    readonly status: 'idle' | 'starting' | 'ready' | 'failed' | 'stopped'
+    /** True when the child has not yet accepted the live rule set. */
+    readonly rulesStale?: boolean
+  }
   /** Ledger health snapshot. */
   readonly ledger?: {
     readonly writable: boolean
@@ -253,6 +263,16 @@ export interface SecurityEngine {
   readonly chainCount: number
   /** Judge input rules and dangerous SQL over concatenated user text. */
   evaluateInput(text: string): Decision
+  /**
+   * Optional asynchronous input judgement.
+   *
+   * Only an engine that talks to a child process (the Python sidecar) implements
+   * this. The synchronous `evaluateInput` above stays the contract: `tools.guard`
+   * must never do IO, and every caller that cannot await keeps the built-in path.
+   * Rejections mean "the engine could not judge"; the hook decides fail-closed
+   * semantics by preset.
+   */
+  evaluateInputAsync?(text: string): Promise<Decision>
   /** Judge one tool call against names, tags, argument shapes and the trail. */
   evaluateTool(view: ToolView, session: SessionView): Decision
   /** Judge one tool result for leaks / injection markers. */

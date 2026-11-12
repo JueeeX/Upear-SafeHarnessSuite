@@ -14,6 +14,7 @@ function healthyEnv(): PostureEnv {
     approvalPolicy: 'ask',
     hmrEnabled: false,
     versionMismatch: [],
+    engine: { kind: 'builtin', status: 'ready' },
     rules: { loaded: true, hash: 'a'.repeat(64), ruleCount: 20 },
     ledger: { writable: true, chainOk: true, lastWriteAt: Date.now() },
   }
@@ -46,6 +47,7 @@ describe('runPostureChecks', () => {
       'output_guard_off',
       'judge_unavailable',
       'plugin_version_mismatch',
+      'engine_sidecar_unavailable',
     ])
   })
 
@@ -125,6 +127,33 @@ describe('runPostureChecks', () => {
     const env: PostureEnv = { ...healthyEnv(), versionMismatch: ['dsh-tools 1 != 2'] }
     expect(find(env, 'balanced', 'plugin_version_mismatch')?.severity).toBe('WARN')
     expect(find(env, 'hardened', 'plugin_version_mismatch')?.severity).toBe('FAIL')
+  })
+
+  it('the built-in engine is OK and an unprobed engine is SKIP, never OK', () => {
+    expect(find(healthyEnv(), 'balanced', 'engine_sidecar_unavailable')?.severity).toBe('OK')
+    const unprobed: PostureEnv = { ...healthyEnv(), engine: undefined }
+    expect(find(unprobed, 'balanced', 'engine_sidecar_unavailable')?.severity).toBe('SKIP')
+  })
+
+  it('a configured sidecar that is not ready (or has stale rules) is a FAIL', () => {
+    for (const env of [
+      { ...healthyEnv(), engine: { kind: 'sidecar' as const, status: 'failed' as const } },
+      { ...healthyEnv(), engine: { kind: 'sidecar' as const, status: 'idle' as const } },
+      { ...healthyEnv(), engine: { kind: 'sidecar' as const, status: 'ready' as const, rulesStale: true } },
+    ]) {
+      expect(find(env, 'balanced', 'engine_sidecar_unavailable')?.severity).toBe('FAIL')
+    }
+    const ready = { ...healthyEnv(), engine: { kind: 'sidecar' as const, status: 'ready' as const } }
+    expect(find(ready, 'balanced', 'engine_sidecar_unavailable')?.severity).toBe('OK')
+  })
+
+  it('the engine gate is part of the hardened failOn list and only fires on FAIL', () => {
+    const config = resolveConfig({ preset: 'hardened' })
+    const down: PostureEnv = { ...healthyEnv(), engine: { kind: 'sidecar', status: 'failed' } }
+    expect(failOnHits(config, runPostureChecks(config, down))).toContain('engine_sidecar_unavailable')
+    // Built-in deployments are unaffected by the new gate code.
+    const builtin: PostureEnv = { ...healthyEnv(), engine: { kind: 'builtin', status: 'ready' } }
+    expect(failOnHits(config, runPostureChecks(config, builtin))).toEqual([])
   })
 
   it('never exposes a secret-looking value in a detail string', () => {
