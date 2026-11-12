@@ -1,6 +1,15 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.8.1 — 2026-11-12
+
+高熵误报修复，为 `results.mode: enforce` 上线做准备：**纯十六进制摘要与长路径片段不再被判成凭据**。
+
+- **问题（R35 的后果）**：高熵启发式只要"≥40 字符、≥3.5 bits/char"就报 `credential_high_entropy`。真实账本里 `safeharness_status`（含 64 位 ruleset 哈希）、`safeharness_audit_query`（含 sha256 链哈希）、`git log`（40 位 commit id）以及 Code Mode 堆栈里的 `@scope/pkg/lib/...` 路径片段都会被命中。`balanced` 只记 WARN 时还能忍；一旦把 `results.mode` 改成 `enforce`，这些**正常工具结果会被整条替换成拦截回执**，等于把插件自己的诊断入口也封了。
+- **修复**：新增形状闸门 `isCredentialShapedToken()`——只有**同时含小写、大写和数字**、**不是纯 hex**、且**不是 Windows 路径**（`C:/...` / `file:///C:/...`）的令牌才进入熵计算。哈希是 hex（含大小写混排的 hex 也仍然排除），路径片段通常全小写，Node 报错里的 `file:///C:/Users/.../x.mjs` 带盘符，三者都在熵计算前被跳过；长度（40）与熵阈值（3.5）保持不变，带前缀的真实密钥（`sk-…` / `Bearer` / PEM / `password=`）仍由各自的形态规则命中。
+- **取舍**：全小写且无前缀的 40+ 字符随机串不再由高熵启发式兜底（仍可能被 `credential_assignment` 命中）；这是为了换取"正常结果不被误拦"。
+- **测试**：`tests/tool.test.ts` 的 R35 已知误报改为断言放行；新增纯 hex（sha256 / git id）、大小写混排 hex、Windows 文件 URL 三个回归用例。全套 **41 文件 / 697 用例**（公开树 38 / 679；CI 37 / 671）。
+- **配置建议**：修好误报后桌面 profile 才把 `results.mode` 设为 `enforce`（`balanced` 的 `blockOn` 已含 `credential_leak`）。真实宿主验证见 `evidence/1.8.1-results-enforce.md`。
 ## 1.8.0 — 2026-11-12
 
 自定义模型 + 账本导出：**面板里可以直接添加任意 OpenAI / Anthropic 兼容端点（URL + Key + 协议 + 模型）并一键设为评审路由**，同时补齐 T5.3 最后一项可选项"账本片段导出"。
