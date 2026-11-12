@@ -1,0 +1,36 @@
+# ===========================================================================
+# Optional Python input engine (1.2.0).
+#
+# The default engine is the built-in TypeScript one; this patch switches the INPUT
+# surface only to the Python child process. Tool/result/output surfaces stay on the
+# built-in engine (`tools.guard` is synchronous and IO-free by contract).
+#
+# Preconditions:
+#   * a Python executable that can import the SafeHarness framework
+#     (`--framework` points at the repository's `src/` checkout);
+#   * `command`/`args` are absolute paths on this machine (forward slashes work on
+#     Windows).
+#
+# Fail-closed semantics: observe/balanced fall back to the built-in engine and
+# record the failure once; hardened refuses the load at startup and denies input
+# if the child dies later (`posture.failOn` includes `engine_sidecar_unavailable`).
+# ===========================================================================
+- insert:
+    - id: safeharness
+      name: "@upear/dsh-safeharness"
+      config:
+        preset: balanced
+        engine:
+          kind: sidecar
+          command: C:/Python314/python.exe
+          args:
+            - -u
+            - F:/AgentSecurity/Upear/plugins/dsh-safeharness/scripts/safeharness_sidecar.py
+            - --framework
+            - F:/AgentSecurity/Upear/src
+          timeoutMs: 1500
+          startTimeoutMs: 10000
+    - id: invariants
+      name: "@deepseek-ai/dsh-invariants"
+    - id: safeharness-invariant
+      name: "@upear/dsh-safeharness/invariant"

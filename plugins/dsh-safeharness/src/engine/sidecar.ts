@@ -22,7 +22,6 @@
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { createInterface } from 'node:readline'
 
 /** Lifecycle of the transport. */
 export type SidecarStatus = 'idle' | 'starting' | 'ready' | 'failed' | 'stopped'
@@ -43,6 +42,14 @@ export interface SidecarOptions {
   readonly startTimeoutMs?: number
   /** Cap on captured stderr bytes before the child is killed. */
   readonly maxStderrBytes?: number
+  /**
+   * Cap on one stdout line before the child is killed. A protocol response is a
+   * few hundred bytes; an unterminated line this long means the child is not
+   * speaking the protocol, and buffering it would let a buggy engine exhaust memory.
+   */
+  readonly maxLineBytes?: number
+  /** Cap on concurrent in-flight requests; beyond it calls reject as overloaded. */
+  readonly maxPending?: number
 }
 
 /**
@@ -83,6 +90,8 @@ export interface SidecarStats {
 const DEFAULT_TIMEOUT_MS = 5000
 const DEFAULT_START_TIMEOUT_MS = 10000
 const DEFAULT_MAX_STDERR_BYTES = 256 * 1024
+const DEFAULT_MAX_LINE_BYTES = 1024 * 1024
+const DEFAULT_MAX_PENDING = 64
 const KILL_GRACE_MS = 2000
 
 /** One in-flight request, resolved by {@link Sidecar.onLine}. */
@@ -106,13 +115,22 @@ export class Sidecar {
   private readonly timeoutMs: number
   private readonly startTimeoutMs: number
   private readonly maxStderrBytes: number
+  private readonly maxLineBytes: number
+  private readonly maxPending: number
 
   private child: ChildProcessWithoutNullStreams | undefined
   private statusValue: SidecarStatus = 'idle'
+  /**
+   * Bumped per spawned child. Every event handler captures the generation it was
+   * registered for and ignores events from any other one, so a child that exits
+   * *after* a restart cannot mark the new child failed (or reject its handshake).
+   */
+  private generation = 0
   private nextId = 1
   private readonly pending = new Map<number, PendingCall>()
   private badLines = 0
   private stderrBytes = 0
+  private outBuffer: Buffer = Buffer.alloc(0)
   /** Set once `health` answered; `request()` refuses before that. */
   private ready = false
 
@@ -124,6 +142,8 @@ export class Sidecar {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS
     this.maxStderrBytes = options.maxStderrBytes ?? DEFAULT_MAX_STDERR_BYTES
+    this.maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES
+    this.maxPending = options.maxPending ?? DEFAULT_MAX_PENDING
   }
 
   /** Current lifecycle state. */
@@ -172,12 +192,20 @@ export class Sidecar {
       throw new SidecarError('sidecar_spawn_failed', 'the engine process could not be started')
     }
     this.child = child
+    this.outBuffer = Buffer.alloc(0)
+    this.generation += 1
+    const generation = this.generation
+    // Ignore events from any child but this one: a child killed by `stop()` or by a
+    // failed handshake may report `exit` after a restart already began.
+    const current = (): boolean => this.generation === generation && this.child === child
 
     child.on('error', () => {
+      if (!current()) return
       this.statusValue = 'failed'
       this.failAll('sidecar_spawn_failed', 'the engine process failed to start')
     })
     child.on('exit', () => {
+      if (!current()) return
       if (this.statusValue !== 'stopped') this.statusValue = 'failed'
       this.ready = false
       this.failAll('sidecar_exited', 'the engine process exited')
@@ -185,11 +213,14 @@ export class Sidecar {
     // A closed stdin (the child died) must not surface as an unhandled error event.
     child.stdin.on('error', () => {})
     child.stderr.on('data', (chunk: Buffer) => {
+      if (!current()) return
       this.stderrBytes += chunk.length
       // stderr content is dropped on the floor; only the cap matters.
       if (this.stderrBytes > this.maxStderrBytes) this.kill()
     })
-    createInterface({ input: child.stdout }).on('line', (line) => this.onLine(line))
+    // Hand-rolled framing instead of `readline`: a line cap has to apply *before*
+    // the whole line is buffered, which a line event cannot express.
+    child.stdout.on('data', (chunk: Buffer) => this.onStdout(chunk, current))
 
     try {
       await this.request('health', {}, this.startTimeoutMs)
@@ -219,6 +250,9 @@ export class Sidecar {
     }
     if (!this.ready && method !== 'health') {
       throw new SidecarError('sidecar_not_ready', 'the engine process has not completed its health check')
+    }
+    if (this.pending.size >= this.maxPending) {
+      throw new SidecarError('sidecar_overloaded', 'too many requests are already in flight')
     }
 
     let line: string
@@ -255,7 +289,11 @@ export class Sidecar {
    */
   async stop(): Promise<void> {
     this.statusValue = 'stopped'
+    // Invalidate this child's handlers before killing it, so its late `exit` event
+    // cannot race a restart and mark the new child failed.
+    this.generation += 1
     this.ready = false
+    this.outBuffer = Buffer.alloc(0)
     this.failAll('sidecar_stopped', 'the engine process was stopped')
     const child = this.child
     this.child = undefined
@@ -306,6 +344,29 @@ export class Sidecar {
     for (const entry of entries) {
       clearTimeout(entry.timer)
       entry.reject(new SidecarError(code, message))
+    }
+  }
+
+  /**
+   * Feed stdout bytes, dispatching complete lines.
+   *
+   * Framing is done here (not by `readline`) so the line cap can apply *before* an
+   * unterminated line is fully buffered: a child that streams megabytes without a
+   * newline is killed instead of allowed to grow this process's heap.
+   */
+  private onStdout(chunk: Buffer, current: () => boolean): void {
+    if (!current()) return
+    this.outBuffer = this.outBuffer.length === 0 ? chunk : Buffer.concat([this.outBuffer, chunk])
+    let newline = this.outBuffer.indexOf(0x0a)
+    while (newline >= 0) {
+      const line = this.outBuffer.subarray(0, newline).toString('utf8')
+      this.outBuffer = this.outBuffer.subarray(newline + 1)
+      this.onLine(line.endsWith('\r') ? line.slice(0, -1) : line)
+      newline = this.outBuffer.indexOf(0x0a)
+    }
+    if (this.outBuffer.length > this.maxLineBytes) {
+      this.outBuffer = Buffer.alloc(0)
+      this.kill()
     }
   }
 

@@ -73,6 +73,7 @@ export const NEVER_PUBLISH = [
   /(^|\/)tests\/acceptance-m2\.test\.ts$/u,
   /(^|\/)tests\/corpus\.ts$/u,
   /(^|\/)tests\/golden\.test\.ts$/u,
+  /(^|\/)tests\/sidecar-parity\.test\.ts$/u,
   /(^|\/)tests\/fixtures\/golden\.json$/u,
   /(^|\/)tests\/fixtures\/benign(-borderline)?\.json$/u,
   /(^|\/)scripts\/gen_golden\.py$/u,

@@ -18,6 +18,7 @@ export const POSTURE_CODES = [
   'output_guard_off',
   'judge_unavailable',
   'plugin_version_mismatch',
+  'engine_sidecar_unavailable',
 ] as const
 
 /** One known posture code. */
@@ -146,6 +147,25 @@ export function runPostureChecks(config: ResolvedConfig, env: PostureEnv): Postu
     ))
   } else {
     findings.push(finding('plugin_version_mismatch', 'OK', 'host package versions match the pinned peers'))
+  }
+
+  // --- input engine ------------------------------------------------------------
+  // A configured-but-unusable engine is a FAIL regardless of preset: the operator
+  // asked for this control and it is not running. Whether that blocks the load is
+  // `posture.failOn`'s business (hardened includes this code by default).
+  if (env.engine === undefined) {
+    findings.push(finding('engine_sidecar_unavailable', 'SKIP', 'input engine not probed'))
+  } else if (env.engine.kind === 'builtin') {
+    findings.push(finding('engine_sidecar_unavailable', 'OK', 'built-in input engine'))
+  } else if (env.engine.status === 'ready' && env.engine.rulesStale !== true) {
+    findings.push(finding('engine_sidecar_unavailable', 'OK', 'python input engine ready'))
+  } else {
+    const stale = env.engine.rulesStale === true ? ', rules=stale' : ''
+    findings.push(finding(
+      'engine_sidecar_unavailable',
+      'FAIL',
+      `the configured python input engine is not ready (status=${env.engine.status}${stale})`,
+    ))
   }
 
   return findings

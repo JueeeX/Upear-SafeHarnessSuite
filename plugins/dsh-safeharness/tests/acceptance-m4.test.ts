@@ -108,8 +108,10 @@ describe('M4: published package shape', () => {
     expect(engines['node']).toBe('>=24')
   })
 
-  it('ships only lib, rules and README', () => {
-    expect(manifest()['files']).toEqual(['lib', 'rules', 'README.md'])
+  it('ships only lib, rules, the sidecar script and README', () => {
+    // 1.2.0 adds `scripts/safeharness_sidecar.py`: the optional Python engine is
+    // spawned from the installed package, so a tarball install must contain it.
+    expect(manifest()['files']).toEqual(['lib', 'rules', 'scripts/safeharness_sidecar.py', 'README.md'])
   })
 
   it('declares no runtime dependencies', () => {

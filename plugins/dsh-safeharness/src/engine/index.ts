@@ -59,6 +59,12 @@ export interface Engine extends SecurityEngine {
   readonly ruleset: RuleSet
   /** Full-text scan over model output (regex rules only in v1). */
   readonly config: ResolvedConfig
+  /**
+   * Adopt a hot-reloaded config. Optional: only the surfaces whose detection
+   * depends on config (`input.maxChars`, `tools.*`, `results.*`) need it, and a
+   * settings write must take effect without a restart.
+   */
+  reconfigure?(next: ResolvedConfig): void
 }
 
 /**
@@ -70,13 +76,16 @@ export interface Engine extends SecurityEngine {
  */
 export function createEngine(ruleset: RuleSet, config: ResolvedConfig): Engine {
   let current = ruleset
+  // Mutable so a settings hot-reload can move `input.maxChars` and the tool/result
+  // thresholds without recreating the engine (the old capture made them stale).
+  let currentConfig = config
 
   const engine: Engine = {
     get ruleset(): RuleSet {
       return current
     },
     get config(): ResolvedConfig {
-      return config
+      return currentConfig
     },
     get rulesetHash(): string {
       return current.hash
@@ -89,16 +98,16 @@ export function createEngine(ruleset: RuleSet, config: ResolvedConfig): Engine {
     },
 
     evaluateInput(text: string): Decision {
-      const { decision } = evaluateInput(current, text, { maxChars: config.input.maxChars })
+      const { decision } = evaluateInput(current, text, { maxChars: currentConfig.input.maxChars })
       return decision
     },
 
     evaluateTool(view: ToolView, session: SessionView): Decision {
-      return evaluateToolCall(current, config.tools, view, session)
+      return evaluateToolCall(current, currentConfig.tools, view, session)
     },
 
     evaluateToolResult(view: ToolResultView): readonly ResultFinding[] {
-      return scanToolResult(current, config.results, view)
+      return scanToolResult(current, currentConfig.results, view)
     },
 
     /**
@@ -131,6 +140,10 @@ export function createEngine(ruleset: RuleSet, config: ResolvedConfig): Engine {
 
     reloadRules(next: RuleSet): void {
       current = next
+    },
+
+    reconfigure(next: ResolvedConfig): void {
+      currentConfig = next
     },
   }
   return engine

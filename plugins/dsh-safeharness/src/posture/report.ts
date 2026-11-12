@@ -17,6 +17,8 @@ export interface PostureProbe {
   hmrEnabled?(): boolean | undefined
   /** DSH package versions that disagree with our pinned peers (empty = match). */
   versionMismatch?(): readonly string[]
+  /** Configured input engine and its live status. */
+  engine?(): PostureEnv['engine']
 }
 
 /** One completed posture report. */
@@ -55,6 +57,7 @@ async function collectEnv(runtime: Runtime, probe: PostureProbe): Promise<Postur
     approvalPolicy: safe('approval', probe.approvalPolicy),
     hmrEnabled: safe('hmr', probe.hmrEnabled),
     versionMismatch: safe('version', probe.versionMismatch),
+    engine: safe('engine', probe.engine),
     rules: {
       loaded: true,
       hash: runtime.engine.rulesetHash,

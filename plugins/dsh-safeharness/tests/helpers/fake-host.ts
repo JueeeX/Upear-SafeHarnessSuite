@@ -70,6 +70,8 @@ export interface FakeHostOptions {
   readonly resolved?: ResolvedConfig
   /** Replace the rule set (defaults to the packaged rules). */
   readonly ruleset?: RuleSet
+  /** Replace the engine (defaults to the built-in engine over `ruleset`). */
+  readonly engine?: import('../../src/engine/index.js').Engine
   /** Services exposed to `ctx.get`. */
   readonly services?: Record<string, unknown>
   /** Ledger instance to use (defaults to a temp-dir ledger). */
@@ -102,7 +104,7 @@ export function createFakeHost(options: FakeHostOptions = {}): { host: FakeHost;
     pluginVersion: 'test',
     rulesetHash: ruleset.hash,
   })
-  const engine = createEngine(ruleset, config)
+  const engine = options.engine ?? createEngine(ruleset, config)
   const runtime = createRuntime({
     config,
     engine,

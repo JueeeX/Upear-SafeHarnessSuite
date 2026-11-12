@@ -60,6 +60,97 @@ export interface InputEvaluation {
 }
 
 /**
+ * What an engine observed about one input text, before policy is composed.
+ *
+ * This is the seam the optional Python sidecar reports through: the child returns
+ * *facts* (which rule names matched, whether the canonical SQL inspector called the
+ * text dangerous), never a `Decision`. Composing the decision here keeps
+ * severity/category/reason-code semantics in exactly one place, so switching
+ * engines cannot silently change what a hit means in the ledger.
+ */
+export interface InputFacts {
+  /** Compiled rule names that matched (any order; duplicates tolerated). */
+  readonly matchedRuleNames: readonly string[]
+  /** Whether the SQL inspector classified the text as dangerous. */
+  readonly sqlDangerous: boolean
+  /** Statement kinds from the inspector, for the operator-facing reason only. */
+  readonly sqlKinds?: readonly string[]
+  /** Whether the text was truncated before matching. */
+  readonly truncated?: boolean
+  /** Truncation bound, for the allow-path reason string. */
+  readonly maxChars?: number
+}
+
+/**
+ * Truncate text to the configured match bound.
+ *
+ * Both engines scan exactly this string: the sidecar is sent the already-truncated
+ * text so `input.maxChars` is applied in one place.
+ */
+export function truncateForScan(text: unknown, maxChars: number): { scanned: string; truncated: boolean } {
+  const raw = typeof text === 'string' ? text : ''
+  const limit = normaliseMaxChars(maxChars)
+  const scanned = raw.length > limit ? raw.slice(0, limit) : raw
+  return { scanned, truncated: scanned.length < raw.length }
+}
+
+/**
+ * Turn engine-observed facts into the one `Decision` both engines report.
+ *
+ * Matched names are resolved against the live rule set **in rule-set order**, so
+ * "highest severity wins, ties keep the earlier rule" is identical for the built-in
+ * engine and the sidecar (which reports a name set, not an order).
+ *
+ * @param ruleset - the compiled deny rules.
+ * @param facts - what the engine found.
+ * @returns the composed decision; `kind: 'deny'` means "found something".
+ */
+export function composeInputDecision(ruleset: RuleSet, facts: InputFacts): Decision {
+  const matchedSet = new Set(facts.matchedRuleNames)
+  const matchedRules = matchedSet.size === 0
+    ? []
+    : ruleset.rules.filter((rule) => matchedSet.has(rule.name))
+
+  const sqlHit = facts.sqlDangerous
+  if (matchedRules.length === 0 && !sqlHit) {
+    return {
+      kind: 'allow',
+      reasonCode: ReasonCode.None,
+      ruleIds: [],
+      reason: facts.truncated === true ? `input truncated at ${facts.maxChars ?? 0} chars` : undefined,
+    }
+  }
+
+  // Highest severity wins; ties keep the earlier rule (rule-set order).
+  let severity: Severity | undefined = sqlHit ? SQL_SEVERITY : undefined
+  let category: string | undefined = sqlHit ? SQL_CATEGORY : undefined
+  for (const rule of matchedRules) {
+    if (severity === undefined || SEVERITY_RANK[rule.severity] > SEVERITY_RANK[severity]) {
+      severity = rule.severity
+      category = rule.category
+    }
+  }
+
+  const ids = matchedRules.map((rule) => rule.id)
+  if (sqlHit) ids.push(SQL_RULE_ID)
+
+  const kinds = facts.sqlKinds ?? []
+  const detail = sqlHit ? `kinds=${kinds.join(',') || 'unknown'}` : 'rule'
+  return {
+    kind: 'deny',
+    reasonCode: sqlHit ? ReasonCode.InputSql : ReasonCode.InputRule,
+    ruleIds: sortedIds(ids),
+    severity,
+    category,
+    // Operator-facing only (never shown verbatim to the model): names rules and
+    // SQL statement kinds, never user content.
+    reason: sqlHit
+      ? `input contains dangerous SQL (${detail})`
+      : `input matched deny rules: ${sortedIds(ids).join(',')}`,
+  }
+}
+
+/**
  * Stateless regex test.
  *
  * Compiled rules never carry the `g` flag (rules.ts compiles with `iu`), but a
@@ -104,59 +195,25 @@ export function evaluateInput(
   text: string,
   opts: { maxChars: number },
 ): InputEvaluation {
-  const raw = typeof text === 'string' ? text : ''
-  const limit = normaliseMaxChars(opts.maxChars)
-  const scanned = raw.length > limit ? raw.slice(0, limit) : raw
-  const truncated = scanned.length < raw.length
+  const { scanned, truncated } = truncateForScan(text, opts.maxChars)
 
   /** Rule hits, in rule-set order (deterministic). */
-  const matchedRules: CompiledRule[] = []
+  const matchedRuleNames: string[] = []
   if (scanned.length > 0) {
     for (const rule of ruleset.rules) {
-      if (testRegex(rule.regex, scanned)) matchedRules.push(rule)
+      if (testRegex(rule.regex, scanned)) matchedRuleNames.push(rule.name)
     }
   }
 
   // `inspectSql` short-circuits empty text itself; call it unconditionally so the
   // SQL face is judged exactly once per evaluation.
   const sql = inspectSql(scanned)
-  const sqlHit = sql.dangerous
-
-  if (matchedRules.length === 0 && !sqlHit) {
-    const decision: Decision = {
-      kind: 'allow',
-      reasonCode: ReasonCode.None,
-      ruleIds: [],
-      reason: truncated ? `input truncated at ${limit} chars` : undefined,
-    }
-    return { decision, truncated, scannedChars: scanned.length }
-  }
-
-  // Highest severity wins; ties keep the earlier rule (rule-set order).
-  let severity: Severity | undefined = sqlHit ? SQL_SEVERITY : undefined
-  let category: string | undefined = sqlHit ? SQL_CATEGORY : undefined
-  for (const rule of matchedRules) {
-    if (severity === undefined || SEVERITY_RANK[rule.severity] > SEVERITY_RANK[severity]) {
-      severity = rule.severity
-      category = rule.category
-    }
-  }
-
-  const ids = matchedRules.map((rule) => rule.id)
-  if (sqlHit) ids.push(SQL_RULE_ID)
-
-  const detail = sqlHit ? `kinds=${sql.statementKinds.join(',') || 'unknown'}` : 'rule'
-  const decision: Decision = {
-    kind: 'deny',
-    reasonCode: sqlHit ? ReasonCode.InputSql : ReasonCode.InputRule,
-    ruleIds: sortedIds(ids),
-    severity,
-    category,
-    // Operator-facing only (never shown verbatim to the model): names rules and
-    // SQL statement kinds, never user content.
-    reason: sqlHit
-      ? `input contains dangerous SQL (${detail})`
-      : `input matched deny rules: ${sortedIds(ids).join(',')}`,
-  }
+  const decision = composeInputDecision(ruleset, {
+    matchedRuleNames,
+    sqlDangerous: sql.dangerous,
+    sqlKinds: sql.statementKinds,
+    truncated,
+    maxChars: normaliseMaxChars(opts.maxChars),
+  })
   return { decision, truncated, scannedChars: scanned.length }
 }

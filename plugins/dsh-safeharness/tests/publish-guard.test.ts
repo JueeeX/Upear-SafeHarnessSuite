@@ -19,6 +19,7 @@ const INTERNAL_ASSETS = [
   'tests/acceptance-m2.test.ts',
   'tests/corpus.ts',
   'tests/golden.test.ts',
+  'tests/sidecar-parity.test.ts',
   'tests/fixtures/golden.json',
   'tests/fixtures/benign.json',
   'tests/fixtures/benign-borderline.json',

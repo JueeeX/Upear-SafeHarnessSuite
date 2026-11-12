@@ -110,6 +110,8 @@ describe('§5.3 preset table — one dimension per test', () => {
       // the gate is `posture.failOn` — so the code belongs in this list even
       // though §5.3's table only named the three deployment-posture codes.
       'plugin_version_mismatch',
+      // 1.2.0: an explicitly configured Python engine must be running.
+      'engine_sidecar_unavailable',
     ])
   })
 

@@ -56,6 +56,14 @@ export function statusTool(
   facts?: {
     readonly judge?: () => { readonly enabled: boolean; readonly scope: string; readonly available: boolean; readonly provider: string; readonly model: string }
     readonly budget?: () => { readonly enabled: boolean; readonly limit: number; readonly sessions: number }
+    readonly engine?: () => {
+      readonly kind: 'builtin' | 'sidecar'
+      readonly status: string
+      readonly rulesStale: boolean
+      readonly pending: number
+      readonly badLines: number
+      readonly lastError?: string
+    }
   },
 ): ToolDefinition {
   return defineTool({
@@ -113,6 +121,7 @@ export function statusTool(
         // the per-turn advisory cap, and both are read live so a hot reload shows.
         ...(facts?.judge === undefined ? {} : { judge: facts.judge() }),
         ...(facts?.budget === undefined ? {} : { budget: facts.budget() }),
+        ...(facts?.engine === undefined ? {} : { engine: facts.engine() }),
       }))
     },
     isConcurrencySafe: () => true,

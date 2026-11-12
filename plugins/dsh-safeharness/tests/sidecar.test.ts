@@ -6,6 +6,9 @@
  * teardown, and the rule that a failure never echoes prompt text or stderr.
  * @module
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { Sidecar, SidecarError } from '../src/engine/sidecar.js'
@@ -13,10 +16,10 @@ import { Sidecar, SidecarError } from '../src/engine/sidecar.js'
 const FAKE = fileURLToPath(new URL('./helpers/fake-sidecar.mjs', import.meta.url))
 
 /** Start a transport over the fake child. */
-async function started(overrides: { timeoutMs?: number; startTimeoutMs?: number } = {}): Promise<Sidecar> {
+async function started(overrides: { timeoutMs?: number; startTimeoutMs?: number; args?: string[] } = {}): Promise<Sidecar> {
   const sidecar = new Sidecar({
     command: process.execPath,
-    args: [FAKE],
+    args: overrides.args ?? [FAKE],
     timeoutMs: overrides.timeoutMs ?? 1000,
     startTimeoutMs: overrides.startTimeoutMs ?? 5000,
   })
@@ -144,5 +147,77 @@ describe('sidecar transport: fail-closed edges', () => {
     await sidecar.stop()
     expect(sidecar.status).toBe('stopped')
     expect(await codeOf(sidecar.request('echo'))).toBe('sidecar_stopped')
+  })
+})
+
+describe('sidecar transport: resource bounds', () => {
+  it('refuses more concurrent requests than the cap instead of queueing without bound', async () => {
+    const sidecar = new Sidecar({
+      command: process.execPath,
+      args: [FAKE],
+      timeoutMs: 1000,
+      startTimeoutMs: 5000,
+      maxPending: 1,
+    })
+    await sidecar.start()
+    try {
+      const inFlight = sidecar.request('slow').catch((error: unknown) => error)
+      const code = await codeOf(sidecar.request('echo', { a: 1 }))
+      expect(code).toBe('sidecar_overloaded')
+      // The in-flight call is unaffected by the rejection of the extra one.
+      expect(await inFlight).toBeInstanceOf(SidecarError)
+    } finally {
+      await sidecar.stop()
+    }
+  })
+
+  it('kills a child that streams an unterminated line past the cap', async () => {
+    const sidecar = new Sidecar({
+      command: process.execPath,
+      args: [FAKE, '--mode', 'flood'],
+      timeoutMs: 1000,
+      startTimeoutMs: 5000,
+      maxLineBytes: 4096,
+    })
+    const code = await codeOf(sidecar.start())
+    expect(code).toBe('sidecar_unavailable')
+    expect(sidecar.status).toBe('failed')
+  })
+
+  it('accepts CRLF-terminated frames', async () => {
+    const sidecar = await started({ args: [FAKE, '--mode', 'crlf'] })
+    try {
+      expect(await sidecar.request('echo', { crlf: true })).toEqual({ crlf: true })
+      expect(sidecar.stats.badLines).toBe(1)
+    } finally {
+      await sidecar.stop()
+    }
+  })
+
+  it('can start again after a failed handshake (a previous child cannot poison it)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'safeharness-sidecar-'))
+    const modeFile = join(dir, 'mode')
+    writeFileSync(modeFile, 'no-health', 'utf8')
+    const sidecar = new Sidecar({
+      command: process.execPath,
+      args: [FAKE, '--mode-file', modeFile],
+      timeoutMs: 1000,
+      startTimeoutMs: 300,
+    })
+    try {
+      expect(await codeOf(sidecar.start())).toBe('sidecar_unavailable')
+      expect(sidecar.status).toBe('failed')
+      // Let the dead child's exit event settle before retrying: the generation guard
+      // is what keeps that late event from failing the new handshake.
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      writeFileSync(modeFile, 'normal', 'utf8')
+      await sidecar.start()
+      expect(sidecar.status).toBe('ready')
+      const health = await sidecar.request<{ ok: boolean }>('health')
+      expect(health.ok).toBe(true)
+    } finally {
+      await sidecar.stop()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
