@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.8.0` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.8.1` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -126,7 +126,7 @@ pnpm test             # 694 个用例（41 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.8.0.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.8.1.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -140,7 +140,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.8.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.8.1.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -750,7 +750,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。
 11. **桌面端命令面**：`/safeharness status` 与 `/safeharness judge probe` 已在桌面端输入框实测（2026-11-11，真实 judge 路由 `liao/gpt-6-luna`，`status=ok verdict=allow duration_ms=4347`）；`/safeharness patrol` 的 UI 触发仍只有处理器单测（`safeharness_patrol` 工具已在真实 host 跑通）。
 12. **通知通道**：飞书 / 钉钉 / 企业微信 / OneBot / 通用五种信封已实现，每种都有 payload 单测，并有一次本地真实 HTTP 五通道联调（`tests/notify.test.ts`）；飞书的完整投递路径另有真实 HTTP 验证（本地 sink，内部证据未随仓库分发）。**真实飞书 / 钉钉 / 企业微信机器人投递：待验证**（需要真实 webhook URL / access_token；信封与加签已按官方格式单测，并有本地真实 HTTP 五通道联调）。配好任意一个真实通道后，制造一次 FAIL 巡检即可确认。
-13. **高熵令牌启发式的已知误报**：≥40 字符、≥3.5 bits/char 的"令牌"（含长路径片段，如 `@scope/pkg-name/lib/entry`）会被判为 `credential_high_entropy`。`balanced` 只记 WARN；`hardened` 会整条阻断工具结果 → 用 `results.blockOn: []` 或 `results.mode: warn` 缓解（规则文本需与 Python 侧保持一致，不单独改）。
+13. **高熵令牌启发式（1.8.1 已收紧）**：现在只有同时含**小写、大写和数字**、**不是纯 hex**、且**不是 Windows 路径**（`C:/...` / `file:///C:/...`）的 ≥40 字符令牌才参与熵计算。纯十六进制摘要（`safeharness_status` 的 64 位 ruleset 哈希、`safeharness_audit_query` 的 sha256 链哈希、`git log` 的 40 位 commit id）、全小写路径片段（如 `@scope/pkg/lib/entry`）与 Node 报错里的 `file:///C:/.../x.mjs` 不再误报 `credential_high_entropy`；`results.mode: enforce` 因此不会再拦掉插件自己的诊断结果。代价：全小写、无前缀的随机串不再由熵启发式兜底（仍可由 `credential_assignment` 等形态规则命中）。旧行为见 §12 R35，新决策见 R50。
 14. **输出面目前只覆盖回答**：不覆盖 compaction / session-title 等内部 LLM 调用（judge 请求本身有递归防护，但内部调用不送审）。
 15. **judge 的 URL/Key 属于宿主配置，不属于插件配置**：插件只携带 `provider`/`model` 路由，Key 由 DSH 凭据层按 `apiKeyEnv` 引用解析，插件既不读也不打印。换端点 = 改 profile 的 `llm-pi-ai.providers`，不需要改插件。
 16. **真实模型冒烟只做过一次最小会话**：用真实 OpenAI 兼容端点（`gpt-6-luna`）跑通一轮 observe：`usage_input=29280 / usage_output=26`、judge `status=ok`（`judge_ms=7319`）。不同供应商在工具调用形态、流式分片、usage 上报上的差异仍需各自冒烟；`/safeharness judge probe` 就是为此准备的自检入口。

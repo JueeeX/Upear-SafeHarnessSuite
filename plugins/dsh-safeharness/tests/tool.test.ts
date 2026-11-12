@@ -513,19 +513,46 @@ describe('scanToolResult: credential leaks', () => {
     expect(scanToolResult(ruleset(), resultsConfig(), resultView('a'.repeat(200)))).toEqual([])
   })
 
-  it('flags a long package-path token (known heuristic false positive, R35)', () => {
+  it('ignores a long lower-case package-path token (R35 fixed by R50)', () => {
     // Found live in M4: a `run_code` stack trace contains
     // `@deepseek-ai/dsh-ptc-runtime-node/lib/process`, and the `/`-joining token
-    // splitter turns a ≥40-char path fragment into one "high entropy token".
-    // The engine semantics are locked by the Python-parity requirement, so the
-    // behaviour is pinned here rather than special-cased — the mitigation is
-    // operational (`results.blockOn` / `results.mode`), documented in §12 R35.
+    // splitter turned a ≥40-char path fragment into one "high entropy token".
+    // R35 shipped operations-only mitigation; 1.8.1 rejects lower-case-only
+    // tokens so `results.mode: enforce` no longer blocks stack traces.
     const findings = scanToolResult(
       ruleset(),
       resultsConfig(),
       resultView('at @deepseek-ai/dsh-ptc-runtime-node/lib/process.js:1068:22'),
     )
-    expect(findings.flatMap((item) => item.ruleIds)).toContain('credential_high_entropy')
+    expect(findings).toEqual([])
+  })
+
+  it('ignores pure-hex digests: sha256 / git ids (R50)', () => {
+    // Observed live: `safeharness_status` carries a 64-hex ruleset hash and
+    // `safeharness_audit_query` carries sha256 chain hashes; with results in
+    // enforce mode those results were being replaced wholesale. A credential is
+    // never pure hex, so neither is a leak.
+    const sha256 = 'a3f1c9d8e7b6a5f4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0'
+    const gitSha = '0123456789abcdef0123456789abcdef01234567'
+    expect(sha256).toHaveLength(64)
+    expect(gitSha).toHaveLength(40)
+    const text = `{"rulesetHash":"${sha256}","sha":"${gitSha}"}`
+    expect(scanToolResult(ruleset(), resultsConfig(), resultView(text))).toEqual([])
+  })
+
+  it('ignores a case-mixed hexadecimal token (still a hash, R50)', () => {
+    const mixedHex = `${'a3F1c9D8e7B6a5F4'.repeat(4)}`
+    expect(mixedHex).toHaveLength(64)
+    expect(scanToolResult(ruleset(), resultsConfig(), resultView(`h ${mixedHex}`))).toEqual([])
+  })
+
+  it('ignores a Windows file URL in Node error output (R50)', () => {
+    // A module-not-found / stack trace prints `file:///C:/Users/.../x.mjs`; the
+    // drive letter gives it mixed case and the name may carry digits, so the
+    // generic shape gate alone would still flag it.
+    const url = `file:///${['C:', 'Users', 'xiaojue', 'AppData', 'Local', 'Temp', 'x.mjs'].join('/')}`
+    expect(url.length).toBeGreaterThan(40)
+    expect(scanToolResult(ruleset(), resultsConfig(), resultView(url))).toEqual([])
   })
 
   it('scans valueText as well as text', () => {

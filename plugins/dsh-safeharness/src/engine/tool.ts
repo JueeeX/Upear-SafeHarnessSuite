@@ -590,7 +590,38 @@ function shannonEntropy(value: string): number {
   return bits
 }
 
-/** True when the text contains a >=40-char, >=3.5 bits/char token. */
+/** A token made only of hexadecimal digits is a hash or an id, not an encoded secret. */
+const HEX_TOKEN_RE = /^[0-9a-f]+$/i
+/** A Windows path (`C:/...`) — including `file:///C:/...` — is a location, not a secret. */
+const WINDOWS_PATH_TOKEN_RE = /(?:^|\/)[A-Za-z]:\//
+const LOWER_CHAR_RE = /[a-z]/
+const UPPER_CHAR_RE = /[A-Z]/
+const DIGIT_CHAR_RE = /[0-9]/
+
+/**
+ * Whether a long token is shaped like an encoded secret rather than a hash or a
+ * path fragment (R50).
+ *
+ * The bare entropy heuristic was built for T1.2 and, once `results.mode` becomes
+ * `enforce`, its false positives block ordinary tool results wholesale: 64-hex
+ * ledger/ruleset digests in `safeharness_status`, 40-hex `git log` ids, long
+ * `@scope/pkg/lib/...` stack-trace fragments, and `file:///C:/...` module URLs in
+ * Node error output all cleared 40 chars / 3.5 bits. A real encoded credential
+ * mixes lower case, upper case and digits and is not pure hexadecimal; hashes are
+ * hex, path fragments are usually lower case, and Windows paths carry a drive
+ * letter, so all three are skipped here instead of relying on an operational
+ * workaround.
+ *
+ * @param token - one base64-ish token produced by {@link ENTROPY_TOKEN_SEPARATOR_RE}.
+ * @returns true when the token passes the shape gate (entropy is checked by the caller).
+ */
+function isCredentialShapedToken(token: string): boolean {
+  if (HEX_TOKEN_RE.test(token)) return false
+  if (WINDOWS_PATH_TOKEN_RE.test(token)) return false
+  return LOWER_CHAR_RE.test(token) && UPPER_CHAR_RE.test(token) && DIGIT_CHAR_RE.test(token)
+}
+
+/** True when the text contains a >=40-char, >=3.5 bits/char credential-shaped token. */
 function hasHighEntropyToken(text: string): boolean {
   const tokens = text.split(ENTROPY_TOKEN_SEPARATOR_RE)
   let examined = 0
@@ -598,6 +629,7 @@ function hasHighEntropyToken(text: string): boolean {
     if (token.length < ENTROPY_MIN_CHARS) continue
     examined += 1
     if (examined > MAX_ENTROPY_TOKENS) return false
+    if (!isCredentialShapedToken(token)) continue
     if (shannonEntropy(token) >= ENTROPY_MIN_BITS_PER_CHAR) return true
   }
   return false

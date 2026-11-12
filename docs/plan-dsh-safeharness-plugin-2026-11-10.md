@@ -1042,7 +1042,7 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | # | 风险 / 偏差 | 实测事实 | 处理与影响 |
 |---|---|---|---|
 | R34 | **`tools.mode` 已从运行时移除** | `dsh --profile … --dump-config-schema` 显示 `tools.mode` 的描述是 “Removed. Mount a native or PTC tool executor instead.”，`maxParallelSubCalls` “Moved to the PTC tool executor configuration”；headless bundle 里 `tool-executor-ptc` 默认 `disabled: true`，且“每个 scope 只允许一个工具执行器” | Code Mode 的正确启用方式是 `- id: tool-executor-native disabled: true` + `- id: tool-executor-ptc disabled: false`，不是配 `mode: both`。§8.3 与 R30 的“补齐方式”据此更正；`tools.mode` 在 0.1.x 的类型里仍存在，但那是**构建期**副本 |
-| R35 | **高熵令牌启发式把长路径误判为凭据** | Code Mode 联调中 `run_code` 的错误堆栈（`@deepseek-ai/dsh-ptc-runtime-node/lib/process`）触发 `credential_high_entropy`（`tool_result_flagged warn`）。分词器把 `/` 视为 base64 字符，≥40 字符的路径片段即可满足 3.5 bits/char | 不改检测语义（Python 黄金一致是硬要求）；在 `tests/tool.test.ts` **锁定**该行为并标注为已知误报类。`balanced` 只 warn；`hardened`（`results.mode=enforce` + `blockOn` 含 `credential_leak`）会整条阻断 → 运营方用 `results.blockOn: []` / `results.mode: warn` 缓解 |
+| R35 | **高熵令牌启发式把长路径误判为凭据** | Code Mode 联调中 `run_code` 的错误堆栈（`@deepseek-ai/dsh-ptc-runtime-node/lib/process`）触发 `credential_high_entropy`（`tool_result_flagged warn`）。分词器把 `/` 视为 base64 字符，≥40 字符的路径片段即可满足 3.5 bits/char | 1.0–1.8.0 不改检测语义（当时以 Python 黄金一致为硬要求），在 `tests/tool.test.ts` **锁定**该行为并标注为已知误报类，运营方用 `results.blockOn: []` / `results.mode: warn` 缓解。**1.8.1 起由 R50 收紧**：该形态不再误报，回归测试改为断言放行 |
 | R36 | **加载门禁“部分激活”**（hardened 拒绝加载后 seam 仍在工作） | M0–M3 的门禁在 `apply()` 末尾：命中也抛错、fiber 也失败，但**已注册的监听器在该 Cordis 版本下不随失败回滚**。实测：`posture_report fail` 之后账本仍出现 `input_checked`/`output_reviewed`，companion 也照常 `invariant_probe` | 门禁前移到 `ctx.provide` / 监听器 / 工具 / 提示词注册**之前**。修复后真实 host 实测：拒绝时账本只有 `plugin_loaded` + `posture_report fail`，companion 报 `pending (waiting for service: safeharness)`，host 继续运行且无我们的 seam（`tests/acceptance-m4.test.ts` 断言六类监听器/工具/提示词/服务全为空） |
 | R37 | **schemastery 把缺失数组物化成 `[]`，静默废掉预设表**（M2 起的潜在严重缺陷） | 宿主用我们的 `Config` schema 校验 entry config 后把结果交给 `apply()`；实测 `z.object({f:z.array(z.string())})({})` → `{f:[]}`。于是 hardened 的 `posture.failOn`（4 code）与 `results.blockOn`（2 类别）在**所有真实部署**里被当作“操作者显式覆盖为空”而失效——单元测试用原始 config 驱动 `apply()`，M2/M3 从未暴露。真实 host 复现：`preset: hardened` + `danger-full-access` **没有**拒绝加载，调试打印 `failOn: []` | schema 里全部数组改为 `keepAbsent(z.array(...))` = `z.transform(inner, identity)`：缺失仍是缺失（实测 `{}` → `{}`），显式值原样通过，`resolveConfig` 因此能区分“未写”与“显式写空”。回归：`tests/config.test.ts` 三例（缺失不物化 / hardened 预设仍生效 / 显式 `[]` 仍可关掉门禁）。**修复后 hardened 门禁才在真实 host 上真正生效** |
 
@@ -1110,6 +1110,7 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | # | 风险 / 偏差 | 实测事实 | 处理与影响 |
 |---|---|---|---|
 | R49 | **按工具分类扫描会削弱检测面**（把"写文档"放行，可能连"真执行"一起放过） | 分类只认三类：执行面（标签 `db`/`shell`/`exec`，或名字词元 `sql`/`query`/`exec`/`run`/`shell`/`bash`/`pwsh`/`cmd`/`psql`/`postgres`…）、落文本面（标签 `fs`，或词元 `write`/`edit`/`patch`/`create`/`save`/`read`/`list`…）、其余 | 其余类别**照旧扫描**（fail-closed）；一个工具同时命中两类时**执行面优先**（`write_and_exec` 仍拒）；输入面不受影响；`tools.sqlScan: all` 一键回退。真实宿主差分两态已验（默认放行 / `all` 拒绝） |
+| R50 | **高熵启发式在 `results: enforce` 下会拦掉正常结果** | 真实账本：`safeharness_status`（64 位 ruleset 哈希）、`safeharness_audit_query`（sha256 链哈希）、`git log`（40 位 commit id）、Code Mode 堆栈路径（`@scope/pkg/lib/...`）与 Node 报错里的 `file:///C:/.../x.mjs` 都被判 `credential_high_entropy`；`balanced` 只记 WARN 时还能忍，`results.mode` 一改 `enforce` 这些结果整条被替换，等于封掉插件自己的诊断入口 | 增加形状闸门 `isCredentialShapedToken()`：必须**同时含小写/大写/数字**、**非纯 hex**、**非 Windows 路径**（`(?:^|/)[A-Za-z]:/`）才参与熵计算；长度 40、熵阈值 3.5 不变；带前缀的真实密钥仍由 `sk-`/`Bearer`/PEM/`credential_assignment` 命中。回归：R35 路径、sha256+git hex、大小写混排 hex、Windows 文件 URL 四例；取舍是全小写无前缀随机串不再由熵启发式兜底。1.8.1 交付 |
 
 | # | 决策 | 理由 |
 |---|---|---|
@@ -1249,6 +1250,20 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | D49 | 导出返回账本原样脱敏记录，不重新投影 | 导出目的是证据片段；重新投影会制造"第二套账本字段"，且原记录已经只含哈希/长度/代码 |
 
 **验收证据**：`evidence/1.8.0-provider-export.md`（含真机截图与 fake OpenAI 兼容端到端记录）。
+
+### 12.20 1.8.1 高熵误报收紧与 results 强制拦截（2026-11-12）
+
+用户反馈：`session-c2e256f4` 里 `read` 了 `secret.txt` 并在回答里原样输出 `password` / `sk-…`，"插件似乎没起作用"。账本证明结果扫描**已判 critical**（`credential_assignment` + `credential_openai_key`），但 `balanced` 的 `results.mode: warn` 只记录不阻断；输出面只跑 20 条注入规则、不含凭据形态，`scope: flagged` 的 judge 因此根本没被调用。
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V16 | 直接切 `results.mode: enforce` 会把正常结果整条拦掉：真实账本里 `safeharness_status`（ruleset 64-hex）、`safeharness_audit_query`（sha256 链哈希）、`git log`（40-hex）、Code Mode 堆栈路径都命中 `credential_high_entropy` | 先收紧启发式（R50）再开强制拦截；否则插件自己的诊断入口先被封 |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D50 | 高熵启发式增加形状闸门（混合大小写 + 数字、非纯 hex），长度/熵阈值不变；先修误报，再在桌面 profile 开 `results.mode: enforce` | 只改"什么算候选令牌"，不改"多随机才算秘密"；带前缀密钥仍由形态规则命中，普通哈希/路径/摘要全部放行 |
+
+**验收证据**：`evidence/1.8.1-results-enforce.md`（账本前后对照 + 重启后 `secret.txt` 被拦、`safeharness_status` 不再误报）。
 
 ---
 
