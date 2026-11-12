@@ -43,6 +43,7 @@ Upear SafeHarness Suite 的核心判断（源自 SafeHarness 论文并在此实�
 | Runner 沙箱试点 | 每个 runner 声明沙箱策略（代码侧按框架键定，自定义卡不可改）：smolagents（执行生成代码，风险最高）跑进程级沙箱 worker（stdin 传钥不落盘/env 白名单/临时文件回传/超时杀进程组），`SAFEHARNESS_RUNNER_SANDBOX` 门控默认关 |
 | 租户隔离一期 | 统一租户解析贯穿身份上下文、文件/记忆/进化结算属主校验（含匿名下载 401 收紧）、租户配额框架（账号容量 + 每日对话运行，缺席=无限制） |
 | FSM 规划安全守卫 | 规划输入逐条语义验证；LLM 只提案，执行权在确定性编译的代码 |
+| DSH 插件（DeepSeek Harness 侧） | 同一套安全语义的第四个交付面：profile 级 Cordis 插件装进 DSH 的执行生命周期（输入 / 工具 / 结果 / 输出 / 审批五面接缝 + 哈希链账本 + 姿态自检 + 外部巡检），运行时零第三方依赖（[`plugins/dsh-safeharness`](plugins/dsh-safeharness)，见[下文](#dsh-插件deepseek-harness)） |
 
 总体关系：
 
@@ -143,6 +144,38 @@ Upear SafeHarness Suite 的核心判断（源自 SafeHarness 论文并在此实�
 
 ---
 
+## DSH 插件（DeepSeek Harness）
+
+> `@upear/dsh-safeharness` **1.2.2** · 宿主 DSH `0.2.2-rc.1` · Apache-2.0 · 源码 [`plugins/dsh-safeharness`](plugins/dsh-safeharness) · 独立发布仓库 [JueeeX/Upear-SafeHarnessSuite-dsh](https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh)
+
+同一套安全语义在 **DeepSeek Harness** 这一端的落地形态。它不是外挂进程，而是一个 **profile 级 Cordis 插件包**：装进 DSH profile 后直接接管执行生命周期接缝，运行时零第三方依赖、不启动子进程（语义 judge 走宿主自己的 `ctx.llm`，Python 输入引擎为可选 sidecar）。
+
+| 接缝 | 做的事 |
+|---|---|
+| `agent/pre-step` | 用户输入注入检测（20 条中英规则，critical 直接拒绝） |
+| `tools/pre-execute` + `ctx.tools.guard()` | 工具名/标签策略、参数字节预算、SQL 结构判定、轨迹链规则；异步与同步双保险 |
+| `tools/post-execute` / `tools/result` | 工具结果守卫（凭据形态、注入标记、被拒重试压力）+ 只读观察落账 |
+| `llm/stream` | 输出复检 + 可选语义 judge（带内部标记，不会自我复核） |
+| `approval/request` | 审批桥：一次性授予 → 复用 deny 列表 → 其余委托 |
+| 账本 / 姿态 / 巡检 | NDJSON 哈希链账本（只存哈希与长度）、10 项姿态自检、5 项外部巡检、多通道通知、预算护栏 |
+| 设置页 | 宿主 `settings` 表单服务从插件 `Config` 的 `.volatile()` 字段自动生成，改完即时生效（1.2.1 起） |
+
+安装（详见[插件 README](plugins/dsh-safeharness/README.md)）：
+
+```powershell
+cd plugins/dsh-safeharness
+node scripts/link-dsh.mjs; pnpm install; pnpm build; pnpm pack --pack-destination ./dist
+
+# 装进 profile（$dsh 为 DSH 自带 CLI），再把 entry 以 insert: 追加到 cordis.patch.yml
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.2.2.tgz"
+```
+
+自检：`safeharness_status` / `safeharness_posture` / `safeharness_patrol` 三个只读工具，或 `/safeharness status`。1.2.2 已在桌面端实测：`seams` 八面全真、`engine.kind: builtin`、姿态无 FAIL。
+
+边界：DSH 是"无特权核心"的插件化运行时，**插件可被停用、可被替换**。插件承诺的是"每步可观测 + 执行面 fail-closed + 插件外巡检兜底"，不是内核级强制；客户端 UI 面板（T5.3）尚未开始。
+
+---
+
 ## 仓库结构
 
 ```
@@ -159,6 +192,7 @@ Upear/
 ├── examples/
 │   ├── langgraph_noc/          #   LangGraph NOC 安全运维 Demo（守卫节点 + 签名能力）
 │   └── product_demo/           #   一键五进程产品 Demo（见下）
+├── plugins/dsh-safeharness/    # DSH 插件（TypeScript + Cordis，独立发版 v1.2.2）
 ├── tools/agentprobe/           # 注入攻击扫描套件、结果汇总与 triage 工具
 ├── deploy/                     # 生产化部署拓扑（PostgreSQL/Redis/Grafana/备份）
 ├── tests/                      # 框架测试（核心 / 回执 / SQL 守卫 / 受保护桥接）
@@ -247,6 +281,7 @@ powershell -ExecutionPolicy Bypass -File examples\product_demo\run.ps1
 - [Admin Console](docs/admin-console.md)
 - [提示注入演示指南](docs/prompt-injection-demo-guide.md)
 - [后端测试手册](docs/backend-test-manual.md) / [前端测试手册](docs/frontend-test-manual.md)
+- [DSH 插件交接文档](docs/safeharness-plugin-handoff-2026-11-11.md) / [实施计划](docs/plan-dsh-safeharness-plugin-2026-11-10.md)
 
 ## 测试
 

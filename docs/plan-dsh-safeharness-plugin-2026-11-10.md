@@ -859,7 +859,7 @@ pnpm test:golden        # 一致性
   **全部完成（1.2.0，2026-11-12）**——第 1 步（2026-11-11）交付进程边界与传输：`src/engine/sidecar.ts` + `tests/sidecar.test.ts`(9→13) + `tests/helpers/fake-sidecar.mjs`；第 2 步交付接线与配置：`scripts/safeharness_sidecar.py`（6 个 method、规则下发、只读零回声）、`src/engine/sidecar-engine.ts`（`evaluateInputAsync`，仅输入面）、`engine` 配置段（默认 `builtin`）、姿态 code `engine_sidecar_unavailable`（10 项）+ hardened `failOn`、`/safeharness status` 的 `engine` 块；失败语义：observe/balanced 记录并回落内置引擎，hardened 拒绝输入/拒绝加载；一致性 `tests/sidecar-parity.test.ts` 30/30；干净 profile tarball 冷启动两态（正常 / command 指向不存在文件）见 `evidence/M5-sidecar.md` §3。全套 33 文件 / 597 用例。
 - [x] T5.2 LLM 辅助规则起草工具（草稿不落地，PUT/设置才生效）
   证据：`evidence/M5-drafting.md` + `tests/draft.test.ts`(29) + `examples/cordis.patch.draft.example.yml` → 工具 `safeharness_draft_rule` 与 `/safeharness draft [--chain]`；只返回经 loader 校验的 YAML（`applied:false`），不写文件、不重载；起草请求带 `DRAFT_REQUEST_MARK` 跳过评审与预算；1.1.0 tarball 在干净 profile 冷启动通过。未验证：真实模型起草（需桌面端升级后手敲一次）
-- [ ] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）
+- [ ] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）——**下一步开工**，先做 API 可行性验证
 
 ### 9.1 dev profile 的 patch 行
 
@@ -1117,6 +1117,20 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | D23 | 名字匹配用**词元**而非子串 | 子串会把 `debug_dump` 当 `db`、把 `rewrite_doc` 当 `write`；词元化让 `mcp__postgres_query` 仍被覆盖，同时不产生新的误分类。认不出的词元一律保持扫描 |
 
 **验收证据**：`evidence/R42-sql-scan-convergence.md`（含 1.2.1 的三次拒绝记录、实现、单测 12 例、真实宿主两态账本）。计划 §11.4 的 R42 条目至此**关闭**。
+
+### 12.13 1.2.2 桌面升级验证与文档同步（2026-11-12）
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V1 | 用户按 §9.1 完成桌面升级后，本会话 `safeharness_status` 实测 `version: 1.2.2`、`seams` 八面全 `true`（含 `settings`）、`engine.kind: builtin`、`posture` 无 FAIL、`preset: balanced`、规则 hash 未变 | 1.2.1 的设置在桌面是**真生效**，不是只在 dev profile 成立；1.2.2 的检测面收敛不影响加载路径 |
+| V2 | 1.2.2 起 `write`/`edit`/`apply_patch` 写含 SQL 字面量的文档不再被拦（1 次实测）；`pwsh` 内联字面量仍被拒 | 与 §11.4/R42 的设计预期一致 |
+| V3 | 工作区备份远端 `github`（`JueeeX/Upear-SafeHarnessSuite`）落后 26 个提交、0 个标签 | 已 `git push github main` + 三个 tag；本地 `main` = `c584c36`，`dsh/main` = `0e6049f` |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D24 | 1.2.2 之后**不再开补丁版本**做文档/README 修整；文档改动直接进 `main`，公开树用 doc-only 提交同步，不动 `package.json`/tag（沿用 D21） | 版本号 = 交付物；README 里的旧 tgz 文件名、姿态 code 数（9→10）属于文档缺陷，不影响 tarball 行为 |
+
+**下一步**：只剩 T5.3 客户端 UI 面板（§9 T5.3，评估见交接文档 §11.2）。它是**独立 client 包**，不改动本插件主包的行为与配置面；先在 DSH 客户端插件 API 上做可行性验证（manifest 契约、slot 注册、数据通道），再决定是否按天投入。
 
 ---
 

@@ -8,7 +8,7 @@
 
 ## 0. 一句话现状
 
-我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.2.2**（2026-11-12）；计划内 M0–M5 全部完成（含 T5.1 Python sidecar、T5.2 规则起草、P3 设置面与 R42 扫描收敛），**只剩 T5.3 客户端 UI 面板未开始**。桌面端 1.2.1 已在用，升级到 1.2.2 需按 §9.1 再执行一次脚本。
+我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.2.2**（2026-11-12）；计划内 M0–M5 全部完成（含 T5.1 Python sidecar、T5.2 规则起草、P3 设置面与 R42 扫描收敛），**只剩 T5.3 客户端 UI 面板未开始**。桌面端已于 2026-11-12 升级到 **1.2.2** 并实测（`version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`）。
 
 ---
 
@@ -19,13 +19,13 @@
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
 | 当前版本 | `1.2.2`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
-| 桌面端插件 | 运行 **1.2.1**（profile `desktop`，tarball 安装，2026-11-12 用户升级并实测 `seams.settings: true`）；升级包 `upear-dsh-safeharness-1.2.2.tgz` 已打到 `plugin-tarballs`，安装脚本 TGZ 行已改，**需用户退出 DSH 后双击脚本升级** |
+| 桌面端插件 | 运行 **1.2.2**（profile `desktop`，tarball 安装；2026-11-12 升级，本会话 `safeharness_status` 实测 `version: 1.2.2`、`seams.settings: true`、`engine.kind: builtin`、`posture` 无 FAIL）；安装脚本 `plugin-tarballs\install-safeharness-desktop.cmd` 的 TGZ 已指向 1.2.2 |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = `0e6049f`，tag **`v1.2.2`** 指同一提交，CI `completed/success` |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = `47d9d82`（1.2.2 功能提交，文档提交随后，见 §14 自检） |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = `c584c36`（1.2.2 功能 + 发布文档提交；工作区备份远端 `github` 已同步同名 main 与 v1.2.0–v1.2.2 标签） |
 | 测试 | 本机 `pnpm test` = **35 文件 / 617 用例**全绿（含 sidecar 13+7+4+3、设置面 8、SQL 扫面 12 与内部一致性 1 例）；公开树 32 文件 / 599（596 pass + 3 skip），CI 剔除 perf 后 31 文件 / 591（588 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 §12.10、1.2.1 §12.11、1.2.2 §12.12） |
 | 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 证据见 `evidence/R42-sql-scan-convergence.md`） |
-| 下一步 | T5.3 客户端 UI（独立分支），或 R42 SQL 误报收敛（1.2.2 候选），详见 §11 |
+| 下一步 | **T5.3 客户端 UI 面板**（唯一剩余计划项，独立分支，见 §11.2）；R42 SQL 误报已于 1.2.2 关闭 |
 
 ---
 
@@ -383,7 +383,7 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 
 ### 11.6 其他
 
-- 桌面端升级到 1.2.2：**完全退出 DSH**（含托盘）→ 双击 `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.2.2）→ 重启。升级后 `safeharness_status` 应显示 `version: 1.2.2`、`engine.kind: builtin`、`seams.settings: true`。1.2.2 的实际收益：写文档/写测试文件时引用 SQL 不再被自己拦（`pwsh` 命令里带字面量**仍会**被拦，那是执行面）。
+- 桌面端已升级到 1.2.2（2026-11-12）：退出 DSH（含托盘）→ 双击 `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd` → 重启，实测 `version: 1.2.2`、`engine.kind: builtin`、`seams.settings: true`。1.2.2 的实际收益：写文档/写测试文件时引用 SQL 不再被自己拦（`pwsh` 命令里带字面量**仍会**被拦，那是执行面）。
 - GitHub Release 附件（需 `gh auth login`，见 §9.4 注）。
 - npm 发布：计划明确 v1 不发（无 `@upear` scope 权限）；tarball + 本地安装即交付形态。
 
@@ -454,7 +454,7 @@ git log --oneline -3                       # 期望 HEAD = 1.2.2 之后的最新
 git rev-parse dsh/main                     # 期望 1.2.2 发布提交（tag v1.2.2 指同一提交）
 cd plugins\dsh-safeharness
 pnpm build; pnpm test                      # 期望 35 文件 / 617 全绿
-Get-Content C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\package.json | ConvertFrom-Json | % version   # 桌面端升级后期望 1.2.2（未升级则为更早版本，属正常）
+Get-Content C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\package.json | ConvertFrom-Json | % version   # 桌面端实测 1.2.2（2026-11-12 已升级）
 Get-Content C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson | Measure-Object | % Count   # 约 2000+ 行，链连续
 ```
 
@@ -480,7 +480,7 @@ cd F:\AgentSecurity\Upear\plugins\dsh-safeharness
 pnpm build; pnpm test; pnpm pack --pack-destination ./dist
 
 # 装到某个 profile（应用需退出，仅 desktop 受限）
-& $DSH plugin --profile <profile> add "file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.2.1.tgz"
+& $DSH plugin --profile <profile> add "file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.2.2.tgz"
 & $DSH plugin --profile <profile> remove @upear/dsh-safeharness
 
 # 无头跑一轮
@@ -500,4 +500,4 @@ Invoke-RestMethod -Uri 'https://api.github.com/repos/JueeeX/JueeeX-Upear-SafeHar
 
 ## 16. 交接时的一句话总结
 
-**插件已 GA（1.0.0）并迭代到 1.2.2（可选 Python 输入引擎 + 桌面设置面 + SQL 扫描范围收敛），本地全绿、公开仓库已发布 v1.2.2；计划内只剩 T5.3 客户端 UI 面板未开始。** 桌面端在 1.2.1 上运行，用户退出 DSH 后双击 `install-safeharness-desktop.cmd` 即升级到 1.2.2（写文档时引用 SQL 不再被自己拦）。想继续做功能就开 T5.3 的独立分支；想"收口"就补 §11.5 的两个部署验证（真实 IM 投递、真实人工审批）——它们都需要用户侧凭据或预设切换，代码侧没有剩余必做项。
+**插件已 GA（1.0.0）并迭代到 1.2.2（可选 Python 输入引擎 + 桌面设置面 + SQL 扫描范围收敛），本地全绿、公开仓库已发布 v1.2.2、桌面端已升级到 1.2.2；计划内只剩 T5.3 客户端 UI 面板未开始。** 想继续做功能就开 T5.3 的独立分支；想"收口"就补 §11.5 的两个部署验证（真实 IM 投递、真实人工审批）——它们都需要用户侧凭据或预设切换，代码侧没有剩余必做项。
