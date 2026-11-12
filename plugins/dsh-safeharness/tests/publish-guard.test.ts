@@ -5,11 +5,12 @@
  * stranger needs to clone, build and test the package.
  * @module
  */
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error - the publisher is a plain ESM script; it has no declaration file.
-import { PACKAGE_ROOT, PUBLISH_TOP, isPublishable, planPublish } from '../scripts/publish-public.mjs'
+import { PACKAGE_ROOT, PUBLISH_TOP, findLeaks, isPublishable, planPublish } from '../scripts/publish-public.mjs'
 
 /** The plan, computed once. */
 const plan = planPublish() as { files: string[]; skipped: string[] }
@@ -93,6 +94,28 @@ describe('public tree plan: still contains what a stranger needs', () => {
   it('top-level list has no internal directory', () => {
     for (const forbidden of ['evidence', 'docs', 'lib', 'dist', 'node_modules']) {
       expect(PUBLISH_TOP).not.toContain(forbidden)
+    }
+  })
+})
+
+describe('leak scan', () => {
+  it('ignores the working environment (.git / node_modules) but flags internal content', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'safeharness-leak-'))
+    try {
+      mkdirSync(join(dir, '.git'), { recursive: true })
+      writeFileSync(join(dir, '.git', 'config'), 'x')
+      mkdirSync(join(dir, 'node_modules', 'pkg'), { recursive: true })
+      writeFileSync(join(dir, 'node_modules', 'pkg', 'index.js'), 'x')
+      mkdirSync(join(dir, 'src'), { recursive: true })
+      writeFileSync(join(dir, 'src', 'a.ts'), 'x')
+      mkdirSync(join(dir, 'evidence'), { recursive: true })
+      writeFileSync(join(dir, 'evidence', 'e.md'), 'x')
+      writeFileSync(join(dir, 'upear-dsh-safeharness-9.9.9.tgz'), 'x')
+      // A real worktree always has `.git`; a local install always has node_modules.
+      // Neither is published content, but evidence/ and tarballs are leaks.
+      expect(findLeaks(dir)).toEqual(['evidence/e.md', 'upear-dsh-safeharness-9.9.9.tgz'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

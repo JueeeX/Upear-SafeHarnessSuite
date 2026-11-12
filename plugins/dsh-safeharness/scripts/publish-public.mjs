@@ -161,12 +161,21 @@ export function publish(target, root = PACKAGE_ROOT) {
 export function findLeaks(target) {
   /** @type {string[]} */
   const leaks = []
+  /**
+   * Directory names that belong to the *working environment*, not the published
+   * content. A `git worktree` always contains `.git`, and a local install creates
+   * `node_modules`; neither is ever committed, so flagging them is noise.
+   */
+  const SKIP_DIRS = new Set(['.git', 'node_modules'])
   /** @param {string} rel */
   const walk = (rel) => {
     const absolute = rel === '' ? target : join(target, rel)
     const stats = statSync(absolute)
     if (stats.isDirectory()) {
-      for (const entry of readdirSync(absolute)) walk(rel === '' ? entry : `${rel}/${entry}`)
+      for (const entry of readdirSync(absolute)) {
+        if (rel === '' && SKIP_DIRS.has(entry)) continue
+        walk(rel === '' ? entry : `${rel}/${entry}`)
+      }
       return
     }
     const path = toPosix(rel)
