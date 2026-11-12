@@ -125,7 +125,7 @@ pnpm test             # 617 个用例（35 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.2.1.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.2.2.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -139,7 +139,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.2.1.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.2.2.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -187,6 +187,8 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 
 # 3) 用一条明显的注入话术试输入防线（balanced/hardened 应被拒）
 ```
+
+> `1.2.2` 已在桌面端（DSH 桌面应用，宿主包走 app-bundle `0.2.2-rc.1`）实测：`safeharness_status` 返回 `version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`；`safeharness_posture` 无 FAIL。桌面升级方式见 §3.6 与仓库外脚本 `install-safeharness-desktop.cmd`。
 
 ### 3.6 升级与卸载
 
@@ -546,7 +548,7 @@ DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configur
 | 工具 | 作用 |
 |---|---|
 | `safeharness_status` | 加载状态、preset、规则 hash/条数、账本健康、决策计数、各面 mode、宿主包解析来源、judge 路由、预算上限 |
-| `safeharness_posture` | 立即跑姿态检查（9 个 code，FAIL/WARN/OK/SKIP） |
+| `safeharness_posture` | 立即跑姿态检查（10 个 code，FAIL/WARN/OK/SKIP） |
 | `safeharness_patrol` | 立即跑巡检（5 项），返回 findings、summary 与退出码 0/1/2 |
 | `safeharness_audit_query` | 读账本尾部（已脱敏），按 session/decision/kind 过滤，上限 500 条 |
 | `safeharness_draft_rule` | **唯一会调用模型的工具**：按一句自然语言描述起草一条规则，返回经 loader 校验的、可直接粘贴的 YAML；`applied: false`，永不自动生效 |
