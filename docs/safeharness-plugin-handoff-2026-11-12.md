@@ -495,7 +495,8 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 8. **面板动作有限**：不写规则文件、不做通用调度、不提供 provider 编辑（只能添加/删除同名重建）；导出只在浏览器端保存。
 9. **CI 状态未在本地读取**（`api.github.com` 超时）；push 成功，runs 需要在网页确认。
 10. **结果层强制拦截的代价**：任何含凭据形态的工具结果（含测试 fixture、文档示例、`.credentials.yaml`）都会被整条替换；输出层仍是 `warn`，若把结果层关掉，模型仍可能把密钥写进回答。开发插件时用 `safeharness-dev`（observe）。另外 `pnpm-lock.yaml` 里的 `sha512-…` SRI 摘要也会被判为高熵令牌（1.8.1 尚未为 SRI 前缀加豁免），读 lockfile 会被整条拦截，属已知误报。
-11. **旧文档里的“桌面 1.6.0”已过时**：现在是 1.8.1 profile。
+11. **侦察命令不单独拦截**：`whoami` / `hostname` / `ipconfig` / `systeminfo` / `net user` 这类身份与环境侦察不在结果扫描的形态里（只认凭据与注入标记），工具面也没有命令级分类；单条属低危，但在不可信内容诱导下是外发前奏，且没有"侦察→外发"的链式规则。**用户 2026-11-12 明确不做**命令级 recon 分类与 egress 收紧，这里只作已知边界记录（详见 §12 D51）。
+12. **旧文档里的“桌面 1.6.0”已过时**：现在是 1.8.1 profile。
 
 ---
 
@@ -509,6 +510,7 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 4. **真实 webhook 验证**：用户提供飞书/钉钉/企微 webhook 后，配置 `patrol.notify` 并跑一次巡检；这是部署验收项，不是代码项。
 5. **provider 编辑/CAS（可选）**：settings 加 expectedRevision 做并发保护；自定义 provider 支持改 URL/模型而不是删除重建。
 6. **CI**：在网页确认 v1.8.1 的 runs 绿。
+7. **已明确不做（2026-11-12）**：命令级 recon 分类（`whoami` 等）、`tools.denyTags: ['egress']` / 网络面收紧；单条侦察命令保持放行，边界见 §10 第 11 条。SRI 前缀豁免（1.8.2）仍可选，未做。
 
 ---
 
@@ -530,6 +532,8 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 | D47 | Key 只进凭据服务，profile 只存引用名；失败回滚 | 避免 Key 进 YAML/账本/日志 |
 | D48 | 自定义路由单独记 `providers.json`，只删自己加的，在用拒绝 | 不误删宿主/他人 provider |
 | D49 | 导出返回账本原样脱敏记录 | 证据片段不重新投影、不制造第二套字段 |
+| D50 | 高熵启发式加形状闸门（混合大小写+数字、非纯 hex、非 Windows 路径） | 只改“什么算候选令牌”，不改“多随机才算秘密”；让 `results: enforce` 可用 |
+| D51 | `whoami` 等侦察命令不单独拦截；不做命令级 recon 分类、不收紧 egress | 单条低危（用户名/域，非凭据）且拦截会误伤排障；代价是注入诱导下的“侦察→外发”组合不在防护面内，已作为已知边界记录在 §10 第 11 条。用户 2026-11-12 明确不排期 |
 
 ---
 
