@@ -1,6 +1,20 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.2.2 — 2026-11-12
+
+修复（R42）：**写文档时引用一条破坏性 SQL 会被当成"在执行 SQL"而拒绝**。这是检测范围问题，不是检测能力问题。
+
+- 1.2.1 及更早，`tools/pre-execute` 对**所有工具的字符串参数**跑危险 SQL 判定，于是 `write` / `edit` 只要内容里出现一条破坏性语句就 `tool_denied_by_args`。实际代价：写交接文档被拒 3 次（`args_chars` 33303 / 33618 / 105），每次都要改措辞；实现 1.2.0/1.2.1 期间也被拦过多次。
+- 新增 `tools.sqlScan`（`execution` 默认 | `all`）：`execution` 只扫**执行面**工具——标签含 `db`/`shell`/`exec`，或名字词元含 `sql`/`query`/`exec`/`run`/`shell`/`bash`/`pwsh`/`cmd`/`psql`/`postgres`…；`write`/`edit`/`apply_patch`/`read` 这类只落文本的工具跳过 SQL 判定。
+- **不做静默降级**：无法识别的工具（既不像执行面也不像落文本面）仍按旧规则扫（fail-closed）；一个同时像"写入"和"执行"的工具（`write_and_exec`）执行信号优先；输入面（`agent/pre-step`）完全不变，对话里贴破坏性语句照旧拒绝。
+- 名字按**词元**匹配而非子串：`debug_dump` 不会因为含 `db` 被当成数据库工具，`mcp__postgres_query` 会命中 `postgres`/`query`。
+- 恢复旧行为：`tools.sqlScan: all`；给自定义工具补扫描：`tools.tagOverrides` 打 `db`/`shell`/`exec` 标签。该字段是 patch-only（检测范围而非阈值，不进设置页）。
+- 测试：新增 `tests/tools-sql-scope.test.ts`（12 例：内容类工具放行、执行类工具仍拒、未知工具 fail-closed、`all` 回退、tagOverrides 生效、词元边界、输入面不受影响、其他工具面行为未变）；`tests/robustness.test.ts` 的参数走查用例改用执行面工具名（走查只在被扫时运行）。全套 **35 文件 / 617 用例**。
+- **真实宿主差分验证**（`r42-smoke` + 假模型，同一段"把含破坏性语句的备注写入文件"的 `write` 调用）：默认配置 → 无 `tool_denied`、工具照常执行；`tools.sqlScan: all` → `tool_denied` / `tool_denied_by_args` / `rules: dangerous_sql`。
+- 与 Python 参考实现的关系：`SqlGuardPolicy` 同样只对 SQL 类参数键做判定，不是"所有字符串参数"。本版向那个取向靠拢，同时保留了本插件对 shell 命令的覆盖（Python 侧不覆盖）。
+- 未验证：真实 IM 投递、真实人工审批（与前两版同口径）。
+
 ## 1.2.1 — 2026-11-12
 
 修复：**桌面端设置页看不到、也改不了 safeharness 配置**（P3 §11.3）。这是宿主 0.2.2-rc.1 的 settings API 与插件按 0.1.0-rc.5 类型源实现之间的差异，不是配置错误。

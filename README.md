@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.2.1` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.2.2` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -52,13 +52,13 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
              审批请求 ──► approval/request ► 审批桥（allowOnce / deny / delegate）
                     │
                     ▼
-        全程 ──► NDJSON 哈希链账本 ◄── 姿态自检（9 项）· 外部巡检（5 项）· 预算护栏
+        全程 ──► NDJSON 哈希链账本 ◄── 姿态自检（10 项）· 外部巡检（5 项）· 预算护栏
 ```
 
 | 接缝 | 能力 | 拦截语义 |
 |---|---|---|
 | `agent/pre-step` | 用户输入注入检测：`rules/inform.yaml` 的 20 条中英文规则（prompt injection / instruction override / identity impersonation / hidden command），critical 规则直接 deny；超长输入截断后匹配并记 WARN | `{kind:'reject'}` 或放行 |
-| `tools/pre-execute` | 工具名 glob 的 `denyTools` / `askTools`、语义标签 `denyTags`、参数字节上限、参数内 SQL 结构判定（`DROP`/`DELETE`/`INTO OUTFILE` 等）、轨迹链规则（工具 A → 工具 B，限 `max_gap`） | allow / deny / ask |
+| `tools/pre-execute` | 工具名 glob 的 `denyTools` / `askTools`、语义标签 `denyTags`、参数字节上限、参数内 SQL 结构判定（1.2.2 起只扫**执行面**工具，见 §4.6；`DROP`/`DELETE`/`INTO OUTFILE` 等）、轨迹链规则（工具 A → 工具 B，限 `max_gap`） | allow / deny / ask |
 | `ctx.tools.guard()` | 与 pre-execute 同源的**同步**判定；不能 await、不碰 IO，异常一律 deny | `string \| undefined`（返回即拒绝原因） |
 | `tools/post-execute` | 工具结果守卫：凭据形态（私钥/API key/高熵令牌）、注入标记（如工具结果里伪造的指令）、被拒重试压力；命中可整条替换或阻断 | accept / block |
 | `tools/result` | 只读观察工具结果，写账本，不改变结果 | — |
@@ -81,6 +81,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 - `denyTools` / `askTools` 只支持 `*` 通配，大小写不敏感；`denyTags` 使用语义标签（`shell` / `network` / `file-write` 等），可用 `tools.tagOverrides` 覆盖工具名→标签映射。
 - 参数扫描有**节点数与字符数预算**，遇到循环引用/超深结构不会爆栈，直接 fail-closed deny。
 - SQL 判定是结构判定：危险关键字、批处理、导出子句；`SELECT 1; SELECT 2` 不算危险。
+- **SQL 判定只作用于能执行它的工具**（1.2.2，R42）：`db_query` / `pwsh` / `bash` / `mcp__postgres_query` 这类"执行面"工具照旧扫；`write` / `edit` / `apply_patch` / `read` 这类只落文本的工具不再因为**引用**一条破坏性语句被拒（写文档、写测试夹具、写迁移脚本都需要引用）。无法识别的工具名仍按旧规则扫描（fail-closed）；`tools.sqlScan: all` 可一键回到 1.2.1 语义。详见 §4.6。
 - 轨迹链规则默认 3 条（例如"先读凭据再外联"一类组合）；链规则只认工具名正则或标签，不依赖操作者额外配置。
 - 同步 guard 是最后一道内联兜底：pre-execute 是异步的，guard 是同步的；两者都对结果写账本。
 
@@ -120,7 +121,7 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # tsc -> lib/
-pnpm test             # 605 个用例（34 个文件）
+pnpm test             # 617 个用例（35 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
@@ -226,6 +227,7 @@ config:
     askTools: ["mcp_*"]
     denyTags: ["network"]
     maxArgsBytes: 65536
+    sqlScan: execution                     # execution（默认）| all：谁被扫危险 SQL，见 §4.6
     trajectory: true
     tagOverrides:                          # 工具名 → 语义标签
       - { pattern: "bash*", tags: [shell] }
@@ -447,11 +449,38 @@ DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configur
 
 **可在线编辑（volatile）**：`input.mode`、`input.maxChars`、`tools.mode`、`tools.maxArgsBytes`、`tools.trajectory`、`results.mode`、`output.mode`、`output.bufferTimeoutMs`、`output.bufferMaxChars`、`output.judge.*`（enabled / scope / provider / model / maxChars / timeoutMs）、`approval.mode`、`budget.maxTokensPerTurn`、`draft.*`（enabled / provider / model / maxChars / timeoutMs / maxTokens）。
 
-**仍只读（patch-only）**：`preset`、`engine.*`、`rules.*`、`audit.*`、`posture.*`、`patrol.*`（含 webhook / secret / token，凭据不进设置页）、`tools.denyTools` / `askTools` / `denyTags` / `tagOverrides`、`results.blockOn`、`approval.allowOnce`。改这些字段会让 entry 重挂载；非法值由宿主的配置编辑器回滚。
+**仍只读（patch-only）**：`preset`、`engine.*`、`rules.*`、`audit.*`、`posture.*`、`patrol.*`（含 webhook / secret / token，凭据不进设置页）、`tools.denyTools` / `askTools` / `denyTags` / `tagOverrides` / `sqlScan`、`results.blockOn`、`approval.allowOnce`。改这些字段会让 entry 重挂载；非法值由宿主的配置编辑器回滚。
 
 **兼容**：若宿主仍提供旧的 `register(ns, schema, { base })` API，插件走旧路径并在 `watch` 里热更新。`safeharness_status.seams.settings` 只有在真正检测到 settings 服务后才为 `true`——该服务在插件注入的 `tools` / `systemPrompt` 之后才启动，加载瞬间读不到（`ctx.inject` 是顺序安全的读法）。
 
 **真实宿主验证（2026-11-12）**：在 `safeharness-dev`（与桌面同 bundle 组合）上启动后 `settings.describe()` 出现 `ns: safeharness`（`auto: true`，含上述 volatile 子树）；通过 `configEditor.edit` 把 `input.mode` 改为 `off`、`maxChars` 改为 4321 后，插件运行时 `runtime.config.input` 立即变为 `off` / 4321，账本恰好一条 `rules_reloaded`，`seams.settings: true`。
+
+### 4.6 SQL 扫描范围（1.2.2，R42）
+
+**问题**：1.2.1 及更早，`tools/pre-execute` 会对**所有工具的字符串参数**跑危险 SQL 判定。于是"写一篇文档，里面举例说明一条破坏性语句"会被判成"在执行 SQL"，`balanced` 直接 deny——写交接文档时被拒三次，每次都得重写措辞。
+
+**现在的语义**（`tools.sqlScan`）：
+
+| 工具类别 | 判定依据 | 是否扫 SQL |
+|---|---|---|
+| 执行面 | 标签含 `db` / `shell` / `exec`，或名字含 `sql` / `query` / `exec` / `run` / `shell` / `bash` / `pwsh` / `cmd` / `psql` / `postgres` … 等词元 | **扫**（行为与 1.2.1 相同） |
+| 落文本面 | 标签含 `fs`，或名字含 `write` / `edit` / `patch` / `create` / `save` / `read` / `list` … 等词元 | **不扫**（只是引用/写入文本） |
+| 其他（无法识别） | 以上都不命中 | **扫**（fail-closed：不认识就按旧规则处理） |
+
+- 名字按**词元**匹配，不是子串：`debug_dump` 不会因为含 `db` 被当成数据库工具；`mcp__postgres_query` 会命中 `postgres`/`query`。
+- 一个工具同时像"写入"和"执行"（`write_and_exec`）时，**执行信号优先**，仍然扫。
+- **输入面完全不变**：用户在对话里贴一条破坏性语句，`agent/pre-step` 照旧拒绝（这是 Python `CONTENT_RECEIVED` 的语义）。
+- 想恢复旧行为：`tools.sqlScan: all`。想给某个自定义工具补上扫描：`tools.tagOverrides: [{ pattern: 'my_tool*', tags: ['db'] }]`。
+- 该字段是 **patch-only**（不在设置页），因为它是检测范围而不是阈值。
+
+**真实宿主验证（2026-11-12，`r42-smoke` profile + 假模型）**：同一段"把含破坏性语句备注写入文件"的 `write` 调用——
+
+| 配置 | 账本 |
+|---|---|
+| 默认（`execution`） | 无 `tool_denied`；工具照常执行（`tool_result`） |
+| `tools.sqlScan: all` | `tool_denied` / `tool_denied_by_args` / `rules: dangerous_sql` |
+
+**取舍**：写文件确实可能把 SQL 落到磁盘、再被别的流程执行；但那一段责任在"执行 SQL 的工具"上（仍被拦），而不是"写文本的工具"。这与 Python 参考实现 `SqlGuardPolicy` 的取向一致——它只检查 `sql` / `query` / `statement` / `expression` 这类参数键，且只对 SQL 类调用生效。
 
 ---
 
@@ -603,7 +632,7 @@ plugins/dsh-safeharness/
 ├─ rules/               inform.yaml（20 条）+ chains.yaml（3 条）
 ├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml / cordis.patch.notify.example.yml / cordis.patch.sidecar.example.yml
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
-├─ tests/               605 个用例（34 个文件）
+├─ tests/               617 个用例（35 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -622,7 +651,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # tsc -> lib/
-pnpm test             # vitest：34 个文件 / 605 个用例（内部含黄金语料、sidecar 一致性与失败矩阵）。公开树 31 文件 / 587（584 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 30 文件 / 579（576 pass + 3 skip）
+pnpm test             # vitest：35 个文件 / 617 个用例（内部含黄金语料、sidecar 一致性与失败矩阵）。公开树 32 文件 / 599（596 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 31 文件 / 591（588 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```

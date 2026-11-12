@@ -21,7 +21,7 @@
  * fixed ASCII description and rule ids. Matched substrings are never retained.
  * @module
  */
-import type { ResolvedConfig } from '../config.js'
+import type { ResolvedConfig, SqlScanScope } from '../config.js'
 import { inspectSql } from './sql.js'
 import type {
   CompiledChainRule,
@@ -65,6 +65,93 @@ export const MAX_RESULT_SCAN_CHARS = 256 * 1024
 
 /** Bound on result tokens examined by the entropy heuristic. */
 const MAX_ENTROPY_TOKENS = 2000
+
+// ---------------------------------------------------------------------------
+// Who gets an SQL scan (R42)
+// ---------------------------------------------------------------------------
+
+/**
+ * A tool whose string arguments can REACH a SQL engine: database clients, shells
+ * and anything that runs a statement. Only these are worth passing through
+ * `inspectSql`, because "the argument text mentions a destructive statement" only
+ * predicts harm when the tool can execute it (R42, 1.2.2).
+ */
+const EXECUTION_NAME_TOKENS: ReadonlySet<string> = new Set([
+  // database clients
+  'sql', 'db', 'database', 'query', 'psql', 'mysql', 'sqlite', 'postgres',
+  'postgresql', 'mongo', 'mongodb', 'redis', 'oracle', 'mssql', 'clickhouse',
+  'snowflake', 'bigquery',
+  // command / process launchers
+  'exec', 'execute', 'run', 'shell', 'bash', 'sh', 'zsh', 'pwsh', 'powershell',
+  'cmd', 'terminal', 'console', 'eval', 'invoke',
+])
+
+/**
+ * A tool that only LANDS text somewhere (file, document, clipboard, patch). Such
+ * a tool cannot execute what it writes, so an SQL example in its payload is
+ * content, not intent — the R42 false positive.
+ *
+ * The set is deliberately a *positive* recognition: a tool that matches neither
+ * list keeps the SQL scan, so an unfamiliar or vaguely named tool stays on the
+ * fail-closed side instead of silently losing coverage.
+ */
+const CONTENT_NAME_TOKENS: ReadonlySet<string> = new Set([
+  'write', 'edit', 'patch', 'create', 'save', 'append', 'apply', 'put',
+  'insert', 'update', 'upsert', 'upload', 'copy', 'move', 'rename', 'delete',
+  'remove', 'mkdir', 'touch', 'read', 'cat', 'open', 'view', 'show', 'print',
+  'glob', 'grep', 'find', 'ls', 'list', 'search', 'diff',
+])
+
+/** Semantic tags that mark a tool as able to execute its argument text. */
+const EXECUTION_TAGS: ReadonlySet<string> = new Set(['db', 'shell', 'exec'])
+
+/** Semantic tags that mark a tool as landing text rather than running it. */
+const CONTENT_TAGS: ReadonlySet<string> = new Set(['fs'])
+
+/**
+ * Split a tool name into comparable tokens.
+ *
+ * Tool names arrive as `snake_case`, `kebab-case`, `camelCase` or MCP's
+ * `mcp__server_tool`; all of those reduce to lowercase alphanumeric tokens
+ * (`mcp__postgres_query` → `['mcp', 'postgres', 'query']`).
+ */
+function nameTokens(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((token) => token.length > 0)
+}
+
+/** Whether any token of `name` belongs to `set`. */
+function hasToken(name: string, set: ReadonlySet<string>): boolean {
+  for (const token of nameTokens(name)) if (set.has(token)) return true
+  return false
+}
+
+/**
+ * Which tools get an SQL scan.
+ *
+ * - `execution` (default since 1.2.2): execution-facing tools, plus every tool
+ *   this plugin does not positively recognize as content-landing. `write`, `edit`,
+ *   `apply_patch` and `read` therefore stop being denied for quoting SQL.
+ * - `all`: the pre-1.2.2 behaviour, every string argument of every tool.
+ *
+ * @param view - the call as the engine sees it (name, tags).
+ * @param scope - `ResolvedConfig['tools']['sqlScan']`.
+ * @returns whether `inspectSql` runs over this call's string arguments.
+ */
+export function shouldScanSql(view: Pick<ToolView, 'name' | 'tags'>, scope: SqlScanScope): boolean {
+  if (scope === 'all') return true
+  const execution = view.tags.some((tag) => EXECUTION_TAGS.has(tag))
+    || hasToken(view.name, EXECUTION_NAME_TOKENS)
+  if (execution) return true
+  const content = view.tags.some((tag) => CONTENT_TAGS.has(tag))
+    || hasToken(view.name, CONTENT_NAME_TOKENS)
+  // Content tool: an SQL example in its payload is data. Everything else keeps the
+  // pre-1.2.2 scan (fail-closed for tools this version cannot classify).
+  return !content
+}
 
 // ---------------------------------------------------------------------------
 // Name globs and the built-in tag table
@@ -395,29 +482,35 @@ export function evaluateToolCall(
     }
   }
 
-  // (4) dangerous SQL in any string argument value
-  const scan = collectArgumentStrings(view.arguments)
-  if (scan.truncated) {
-    // Fail closed: a value too large or too convoluted to scan end-to-end may be
-    // hiding the very payload this check exists for.
-    return {
-      kind: 'deny',
-      reasonCode: ReasonCode.ToolArgsTooLarge,
-      ruleIds: [],
-      severity: 'high',
-      reason: 'tool arguments exceed the scan budget (too large or cyclic)',
+  // (4) dangerous SQL in string arguments — only where it can execute (R42)
+  //
+  // Walking every string leaf of every tool was the pre-1.2.2 rule; it denied
+  // `write`/`edit` whenever the document merely QUOTED a destructive statement
+  // (R42). `sqlScan` decides who is scanned; the walk itself stays fail-closed.
+  if (shouldScanSql(view, cfg.sqlScan)) {
+    const scan = collectArgumentStrings(view.arguments)
+    if (scan.truncated) {
+      // Fail closed: a value too large or too convoluted to scan end-to-end may be
+      // hiding the very payload this check exists for.
+      return {
+        kind: 'deny',
+        reasonCode: ReasonCode.ToolArgsTooLarge,
+        ruleIds: [],
+        severity: 'high',
+        reason: 'tool arguments exceed the scan budget (too large or cyclic)',
+      }
     }
-  }
-  for (const candidate of scan.strings) {
-    const verdict = inspectSql(candidate)
-    if (!verdict.dangerous) continue
-    return {
-      kind: 'deny',
-      reasonCode: ReasonCode.ToolArgs,
-      ruleIds: [SQL_ARG_RULE_ID],
-      severity: 'high',
-      category: SQL_CATEGORY,
-      reason: `tool arguments contain dangerous SQL (kinds=${verdict.statementKinds.join(',') || 'unknown'})`,
+    for (const candidate of scan.strings) {
+      const verdict = inspectSql(candidate)
+      if (!verdict.dangerous) continue
+      return {
+        kind: 'deny',
+        reasonCode: ReasonCode.ToolArgs,
+        ruleIds: [SQL_ARG_RULE_ID],
+        severity: 'high',
+        category: SQL_CATEGORY,
+        reason: `tool arguments contain dangerous SQL (kinds=${verdict.statementKinds.join(',') || 'unknown'})`,
+      }
     }
   }
 
