@@ -52,6 +52,48 @@ export function agentIdOf(agent: { id?: unknown } | undefined): string | undefin
   return typeof id === 'string' ? id : undefined
 }
 
+/** The structural slice of a live agent's session header this module reads. */
+export interface SessionHeaderLike {
+  readonly session?: {
+    readonly header?: { readonly cwd?: unknown; readonly createdAt?: unknown }
+    /** Older hosts exposed the header as `meta`; kept for compatibility. */
+    readonly meta?: { readonly cwd?: unknown; readonly createdAt?: unknown }
+  }
+}
+
+/** First value that is a non-empty string, or undefined. */
+function firstString(...values: readonly unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+  return undefined
+}
+
+/** First value that is a finite number, or undefined. */
+function firstNumber(...values: readonly unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return undefined
+}
+
+/**
+ * Absolute project directory a session was created in, when the host exposes it.
+ *
+ * The session header's `cwd` is durable session metadata (not conversation
+ * content), so the panel may show it to tell two conversations apart. It is
+ * read structurally: a host that stops exposing `header.cwd` degrades the panel
+ * to the session id alone instead of failing a hook.
+ */
+export function sessionWorkspaceOf(agent: SessionHeaderLike | undefined): string | undefined {
+  return firstString(agent?.session?.header?.cwd, agent?.session?.meta?.cwd)
+}
+
+/** Session creation time (epoch ms) from the session header, when exposed. */
+export function sessionCreatedAtOf(agent: SessionHeaderLike | undefined): number | undefined {
+  return firstNumber(agent?.session?.header?.createdAt, agent?.session?.meta?.createdAt)
+}
+
 /** Call id of a tool execution as a plain string. */
 export function callIdOf(exec: { callId?: unknown }): string | undefined {
   const id = exec.callId

@@ -24,6 +24,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { Runtime } from '../runtime.js'
 import { matchNamePattern, resolveTags } from '../engine/tool.js'
+import { sessionCreatedAtOf, sessionWorkspaceOf } from './context.js'
 
 /** Maximum remembered grants across all sessions (LRU-ish, insertion order). */
 export const MAX_GRANTS = 512
@@ -58,6 +59,18 @@ export function installApprovalHook(ctx: Context, runtime: Runtime): boolean {
   try {
     ctx.on('approval/request', async (request, next): Promise<ApprovalOutcome> => {
       const mode = runtime.config.approval.mode
+      const agent = request?.agent as
+        | {
+          session?: {
+            header?: { cwd?: unknown; createdAt?: unknown }
+            meta?: { cwd?: unknown; createdAt?: unknown }
+          }
+        }
+        | undefined
+      runtime.state.describe(sessionIdOf(request), {
+        workspace: sessionWorkspaceOf(agent),
+        createdAt: sessionCreatedAtOf(agent),
+      })
       if (mode === 'delegate') {
         // Audit pair first: the outcome is written below, after the answerer ran.
         runtime.audit('approval_asked', {

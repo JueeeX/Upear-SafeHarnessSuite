@@ -14,6 +14,8 @@ import type { SessionView, ToolTrailEntry, ToolView } from './engine/types.js'
 export const MAX_TRAIL = 64
 /** Maximum sessions tracked at once (LRU eviction beyond this). */
 export const MAX_SESSIONS = 256
+/** Default page size for {@link SessionStateStore.list}. */
+export const MAX_LISTED_SESSIONS = 50
 
 /** Aggregate counters across all live sessions. */
 export interface CounterSnapshot {
@@ -34,6 +36,29 @@ export interface SessionState {
   counters: { allow: number; deny: number; ask: number; warn: number }
   /** Last time this session produced an event (epoch ms), for LRU. */
   touchedAt: number
+  /**
+   * Absolute project directory the session was created in, when the host
+   * exposed it. A path only: never conversation content (§6.8).
+   */
+  workspace?: string
+  /** Epoch ms the session was created, when the host exposed it. */
+  createdAt?: number
+}
+
+/** Read-only, panel-facing summary of one tracked session. */
+export interface SessionSummary {
+  /** Session id exactly as the ledger records it (`session-<uuid>`). */
+  readonly sessionId: string
+  /** Project directory, when known. */
+  readonly workspace?: string
+  /** Session creation time (epoch ms), when known. */
+  readonly createdAt?: number
+  /** Last time the session produced an event (epoch ms). */
+  readonly touchedAt: number
+  /** Tool calls observed for this session. */
+  readonly totalCalls: number
+  /** Per-session decision counters. */
+  readonly counters: Readonly<{ allow: number; deny: number; ask: number; warn: number }>
 }
 
 /** A minimal, structural view of a DSH session event (no DSH import). */
@@ -99,6 +124,45 @@ export class SessionStateStore {
   count(sessionId: string | undefined, outcome: 'allow' | 'deny' | 'ask' | 'warn'): void {
     const state = this.of(sessionId)
     state.counters[outcome] += 1
+  }
+
+  /**
+   * Remember the durable facts the panel uses to tell sessions apart.
+   *
+   * Called from the seams that carry a live `Agent`; a session the host created
+   * without metadata simply keeps the fields undefined and the panel shows the
+   * id alone. Values never overwrite a known one with `undefined`.
+   */
+  describe(sessionId: string | undefined, facts: { workspace?: string; createdAt?: number }): void {
+    if (facts.workspace === undefined && facts.createdAt === undefined) return
+    const state = this.of(sessionId)
+    if (state.workspace === undefined && facts.workspace !== undefined) state.workspace = facts.workspace
+    if (state.createdAt === undefined && facts.createdAt !== undefined) state.createdAt = facts.createdAt
+  }
+
+  /**
+   * Newest-first snapshot of tracked sessions (bounded, non-mutating).
+   *
+   * The panel renders this instead of the ledger so a session remains visible
+   * before its first denial, and so the displayed counters match this process.
+   *
+   * @param limit - page size; defaults to {@link MAX_LISTED_SESSIONS}.
+   */
+  list(limit: number = MAX_LISTED_SESSIONS): SessionSummary[] {
+    const pageSize = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, MAX_SESSIONS) : MAX_LISTED_SESSIONS
+    const summaries: SessionSummary[] = []
+    for (const state of this.sessions.values()) {
+      summaries.push({
+        sessionId: state.sessionId,
+        ...(state.workspace === undefined ? {} : { workspace: state.workspace }),
+        ...(state.createdAt === undefined ? {} : { createdAt: state.createdAt }),
+        touchedAt: state.touchedAt,
+        totalCalls: state.totalCalls,
+        counters: { ...state.counters },
+      })
+    }
+    summaries.sort((left, right) => right.touchedAt - left.touchedAt)
+    return summaries.slice(0, pageSize)
   }
 
   /** Feed one `session/event`. Only the trail-relevant facts are inspected. */
