@@ -20,6 +20,9 @@ import { join, resolve } from 'node:path'
 /** Active ledger file name inside the resolved directory. */
 export const LEDGER_FILENAME = 'ledger.ndjson'
 
+/** Plugin-owned panel state (currently the patrol schedule). */
+export const PANEL_STATE_FILENAME = 'panel-state.json'
+
 /** Environment slice {@link resolveLedgerDir} consults (injectable for tests). */
 export interface LedgerPathEnv {
   readonly DSH_HOME?: string
@@ -69,4 +72,19 @@ export function resolveLedgerDir(configuredDir: string, env?: LedgerPathEnv): st
   // producing a cwd-relative `safeharness/audit` (which would write inside the repo).
   const home = firstNonEmpty(env?.DSH_HOME, process.env.DSH_HOME) ?? join(homedir(), '.dsh')
   return join(expandHome(home), 'safeharness', 'audit')
+}
+
+/**
+ * Absolute path of the plugin-owned panel state file.
+ *
+ * Deliberately independent of `audit.dir`: the schedule is UI state, not
+ * evidence, and pointing `audit.dir` at a shared/read-only evidence volume
+ * must not break the panel's timer. It lives next to the default audit
+ * directory under `$DSH_HOME`.
+ *
+ * @param env - optional environment override; defaults to `process.env`.
+ */
+export function resolvePanelStatePath(env?: LedgerPathEnv): string {
+  const home = firstNonEmpty(env?.DSH_HOME, process.env.DSH_HOME) ?? join(homedir(), '.dsh')
+  return join(expandHome(home), 'safeharness', PANEL_STATE_FILENAME)
 }

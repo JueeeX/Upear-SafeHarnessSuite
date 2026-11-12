@@ -16,6 +16,15 @@ export const PANEL_STATUS_ENDPOINT = 'status'
 /** Endpoint that runs one patrol and returns its report. */
 export const PANEL_PATROL_ENDPOINT = 'patrol'
 
+/** Endpoint that asks the drafting route for one candidate rule. */
+export const PANEL_DRAFT_ENDPOINT = 'draft'
+
+/** Endpoint that arms/disarms the optional patrol timer. */
+export const PANEL_SCHEDULE_ENDPOINT = 'schedule'
+
+/** Endpoint that re-reads the rule directory. */
+export const PANEL_RELOAD_ENDPOINT = 'reload-rules'
+
 /**
  * One enforcement/approval event as the panel shows it. Deliberately a
  * projection, not the ledger record: the ledger may grow fields, and the GUI
@@ -44,6 +53,8 @@ export interface PanelEvent {
   readonly session?: string
   /** Absolute project directory the session was created in, when known. */
   readonly workspace?: string
+  /** Latest session title, when the host exposed one (display-only metadata). */
+  readonly title?: string
   /** First 8 characters of the sha256 of the canonical tool arguments. */
   readonly argsHash?: string
 }
@@ -59,6 +70,8 @@ export interface PanelSession {
   readonly workspace?: string
   /** Session creation time (epoch ms), when known. */
   readonly createdAt?: number
+  /** Latest session title, when the host exposed one. */
+  readonly title?: string
   /** Last time the session produced an event (epoch ms). */
   readonly lastSeenAt: number
   /** Tool calls observed for this session. */
@@ -119,6 +132,85 @@ export interface PanelEngine {
   readonly badLines: number
 }
 
+/** One compiled rule (or chain) as the rules tab lists it. */
+export interface PanelRule {
+  /** `rule` for a deny/inform regex, `chain` for a two-leg tool sequence. */
+  readonly kind: 'rule' | 'chain'
+  /** Rule name (also the identifier the ledger records). */
+  readonly name: string
+  /** Severity label. */
+  readonly severity: string
+  /** Category label. */
+  readonly category: string
+  /** Source file (relative to the rules dir) or `inline`. */
+  readonly origin: string
+  /** Pattern for a rule; `first → then` summary for a chain. */
+  readonly detail: string
+  /** Hits inside the current event window (coarse activity, not a verdict). */
+  readonly hits: number
+}
+
+/** Patrol schedule as the panel shows it. */
+export interface PanelSchedule {
+  /** Whether the timer is armed. */
+  readonly enabled: boolean
+  /** Interval in minutes; null when disabled. */
+  readonly intervalMinutes: number | null
+  /** Epoch ms of the next scheduled run, when enabled. */
+  readonly nextAt: number | null
+  /** Epoch ms of the last scheduled run, when any. */
+  readonly lastRunAt: number | null
+  /** False when the schedule could not be written to disk (memory-only). */
+  readonly persisted: boolean
+}
+
+/** Rule-drafting availability (the panel's "AI 起草" form). */
+export interface PanelDraft {
+  readonly enabled: boolean
+  readonly maxChars: number
+}
+
+/** One successful rule draft (already validated by the loader's own gate). */
+export interface PanelDraftValue {
+  readonly status: 'ok'
+  readonly name: string
+  readonly severity: string
+  readonly category: string
+  /** One-line human summary. */
+  readonly summary: string
+  /** Complete YAML file body, ready to paste into the rules dir. */
+  readonly yaml: string
+  /** Shape warnings (never a semantic verdict). */
+  readonly warnings: readonly string[]
+}
+
+/** Successful draft envelope. */
+export interface PanelDraftOk {
+  readonly ok: true
+  readonly value: PanelDraftValue
+}
+
+/** What a draft call resolves to. */
+export type PanelDraftResult = PanelDraftOk | PanelError
+
+/** Successful schedule update. */
+export interface PanelScheduleOk {
+  readonly ok: true
+  readonly value: PanelSchedule
+}
+
+/** What a schedule call resolves to. */
+export type PanelScheduleResult = PanelScheduleOk | PanelError
+
+/** Successful rule reload. */
+export interface PanelReloadOk {
+  readonly ok: true
+  readonly value: { readonly rules: number; readonly chains: number; readonly hash: string }
+}
+
+/** What a rule reload resolves to. */
+export type PanelReloadResult = PanelReloadOk | PanelError
+
 /** Everything the SafeHarness settings tab renders. */
 export interface PanelPayload {
   /** When the Host produced the payload. */
@@ -135,6 +227,10 @@ export interface PanelPayload {
   readonly sessionDetails: readonly PanelSession[]
   /** Compiled rule set identity (hash truncated for display). */
   readonly rules: { readonly hash: string; readonly count: number; readonly chains: number }
+  /** Rules and chains for the rules tab, ordered as compiled. */
+  readonly rulesDetail: readonly PanelRule[]
+  /** Extra rule directory the loader reads (empty = packaged rules only). */
+  readonly rulesDir: string
   /** Seam modes. */
   readonly modes: PanelModes
   /** Decision counters. */
@@ -143,6 +239,10 @@ export interface PanelPayload {
   readonly ledger: PanelLedger
   /** Engine facts. */
   readonly engine: PanelEngine
+  /** Rule-drafting availability. */
+  readonly draft: PanelDraft
+  /** Patrol schedule. */
+  readonly schedule: PanelSchedule
   /** Enforcement/approval events, oldest first. */
   readonly recentEvents: readonly PanelEvent[]
   /** How much of the ledger tail {@link recentEvents} was built from. */

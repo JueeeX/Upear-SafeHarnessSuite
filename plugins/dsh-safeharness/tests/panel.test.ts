@@ -3,11 +3,18 @@
  *
  * What matters here is not the wiring but the projection: the browser must only
  * ever see coarse facts, the event list must come from the ledger tail with the
- * allow/ok bulk filtered out, sessions must stay bounded, and a dead ledger or
- * state store must degrade to empty lists rather than failing the whole panel.
+ * allow/ok bulk filtered out, sessions must stay bounded, rules must keep their
+ * operator-authored definitions (never matched text), and a dead ledger or state
+ * store must degrade to empty lists rather than failing the whole panel.
  */
 import { describe, expect, it } from 'vitest'
-import { PANEL_EVENT_LIMIT, PANEL_SCAN_LIMIT, PANEL_SESSION_LIMIT, buildPanelPayload, shortSessionId } from '../src/panel/status.js'
+import {
+  PANEL_EVENT_LIMIT,
+  PANEL_SCAN_LIMIT,
+  PANEL_SESSION_LIMIT,
+  buildPanelPayload,
+  shortSessionId,
+} from '../src/panel/status.js'
 import type { SessionSummary } from '../src/state.js'
 import type { Runtime } from '../src/runtime.js'
 import type { AuditQuery } from '../src/audit/types.js'
@@ -20,6 +27,42 @@ function summary(id: string, overrides: Partial<SessionSummary> = {}): SessionSu
     totalCalls: 3,
     counters: { allow: 1, deny: 2, ask: 1, warn: 0 },
     ...overrides,
+  }
+}
+
+/** The compiled rule set the runtime would expose. */
+function ruleset(): unknown {
+  return {
+    hash: 'a'.repeat(64),
+    rules: [
+      {
+        id: 'inform_01',
+        name: 'credential_assignment',
+        source: 'password\\s*=',
+        severity: 'critical',
+        category: 'credential_leak',
+        action: 'deny',
+        reason: 'credential assignment',
+        origin: 'inform.yaml',
+      },
+    ],
+    chains: [
+      {
+        name: 'read_then_network',
+        firstSource: 'read',
+        thenSource: 'web_search',
+        firstTags: [],
+        thenTags: [],
+        maxGap: 3,
+        severity: 'high',
+        category: 'exfiltration',
+        reason: 'secret read followed by egress',
+      },
+    ],
+    ruleCount: 20,
+    chainCount: 3,
+    sources: ['inform.yaml'],
+    loadedAt: 0,
   }
 }
 
@@ -40,8 +83,15 @@ function stubRuntime(options: {
       results: { mode: 'warn' },
       output: { mode: 'warn' },
       approval: { mode: 'delegate' },
+      draft: { enabled: false, maxChars: 2_000 },
+      rules: { dir: 'C:\\rules', inline: [] },
     },
-    engine: { rulesetHash: 'a'.repeat(64), ruleCount: 20, chainCount: 3 },
+    engine: {
+      rulesetHash: 'a'.repeat(64),
+      ruleCount: 20,
+      chainCount: 3,
+      ruleset: ruleset(),
+    },
     ledger: {
       stats: {
         enabled: true, writable: true, records: 7, failures: 1,
@@ -71,11 +121,13 @@ describe('buildPanelPayload', () => {
     const { runtime } = stubRuntime()
     const payload = await buildPanelPayload(runtime, Date.now() - 1_000, {
       engine: () => ({ kind: 'builtin', status: 'ready', rulesStale: false, pending: 0, badLines: 0 }),
+      rulesDir: () => 'C:\\rules',
     })
     expect(payload.version).toMatch(/^\d+\.\d+\.\d+/u)
     expect(payload.preset).toBe('balanced')
     expect(payload.sessions).toBe(0)
     expect(payload.rules).toEqual({ hash: 'aaaaaaaaaaaa', count: 20, chains: 3 })
+    expect(payload.rulesDir).toBe('C:\\rules')
     expect(payload.modes).toEqual({
       input: 'enforce', tools: 'enforce', results: 'warn', output: 'warn', approval: 'delegate',
     })
@@ -93,11 +145,35 @@ describe('buildPanelPayload', () => {
     expect(payload.sessionDetails).toEqual([])
     expect(payload.recentEvents).toEqual([])
     expect(payload.eventWindow).toEqual({ scanned: 0, kept: 0, since: null })
+    // Drafting and the timer default to off when the host wires no facts.
+    expect(payload.draft).toEqual({ enabled: false, maxChars: 0 })
+    expect(payload.schedule).toEqual({ enabled: false, intervalMinutes: null, nextAt: null, lastRunAt: null, persisted: false })
+    expect(payload.rulesDetail).toHaveLength(2)
+    expect(payload.rulesDetail[0]).toEqual({
+      kind: 'rule',
+      name: 'credential_assignment',
+      severity: 'critical',
+      category: 'credential_leak',
+      origin: 'inform.yaml',
+      detail: 'password\\s*=',
+      hits: 0,
+    })
+    expect(payload.rulesDetail[1]).toMatchObject({
+      kind: 'chain',
+      name: 'read_then_network',
+      detail: 'read → web_search · gap ≤ 3',
+      hits: 0,
+    })
   })
 
-  it('lists sessions newest-first with short ids and bounded history', async () => {
+  it('lists sessions newest-first with short ids, titles and a bounded page', async () => {
     const sessions = [
-      summary('session-11111111-aaaa', { workspace: 'F:\\AgentSecurity\\Upear', createdAt: 1_759_000_000_000, touchedAt: 300 }),
+      summary('session-11111111-aaaa', {
+        workspace: 'F:\\AgentSecurity\\Upear',
+        createdAt: 1_759_000_000_000,
+        title: '修登录重试',
+        touchedAt: 300,
+      }),
       summary('session-22222222-bbbb', { touchedAt: 200, totalCalls: 9, counters: { allow: 0, deny: 0, ask: 0, warn: 0 } }),
       summary('session-33333333-cccc', { touchedAt: 100 }),
     ]
@@ -109,12 +185,10 @@ describe('buildPanelPayload', () => {
       id: '11111111',
       workspace: 'F:\\AgentSecurity\\Upear',
       createdAt: 1_759_000_000_000,
+      title: '修登录重试',
       lastSeenAt: 300,
       calls: 3,
       allow: 1, warn: 0, deny: 2, ask: 1,
-    })
-    expect(payload.sessionDetails[1]).toEqual({
-      id: '22222222', lastSeenAt: 200, calls: 9, allow: 0, warn: 0, deny: 0, ask: 0,
     })
     // A list longer than the panel page is truncated, not rejected.
     const many = Array.from({ length: PANEL_SESSION_LIMIT + 4 }, (_, index) =>
@@ -122,7 +196,6 @@ describe('buildPanelPayload', () => {
     const wide = await buildPanelPayload(stubRuntime({ sessions: many }).runtime, Date.now())
     expect(wide.sessions).toBe(PANEL_SESSION_LIMIT + 4)
     expect(wide.sessionDetails).toHaveLength(PANEL_SESSION_LIMIT)
-    // Newest activity first.
     expect(wide.sessionDetails[0]?.id).toBe(
       (many.at(-1) as SessionSummary).sessionId.slice('session-'.length, 'session-'.length + 8),
     )
@@ -153,7 +226,7 @@ describe('buildPanelPayload', () => {
       { ts: '2026-11-12T01:00:06.000Z', kind: 'tool_result', decision: 'error', tool: 'pwsh', session: 'session-abcdef01-2345' },
     ]
     const { runtime, queries } = stubRuntime({
-      sessions: [summary('session-abcdef01-2345', { workspace: 'F:\\AgentSecurity\\Upear' })],
+      sessions: [summary('session-abcdef01-2345', { workspace: 'F:\\AgentSecurity\\Upear', title: '修登录重试' })],
       query: async () => records,
     })
     const payload = await buildPanelPayload(runtime, Date.now())
@@ -173,11 +246,13 @@ describe('buildPanelPayload', () => {
       rules: 7,
       session: 'abcdef01',
       workspace: 'F:\\AgentSecurity\\Upear',
+      title: '修登录重试',
       argsHash: 'ffffffff',
     })
-    // A different session keeps its own short id and has no workspace known here.
+    // A different session keeps its own short id and has no title/workspace here.
     expect(payload.recentEvents[1]?.session).toBe('99aa00bb')
     expect(payload.recentEvents[1]?.workspace).toBeUndefined()
+    expect(payload.recentEvents[1]?.title).toBeUndefined()
     // A record with no session at all still projects cleanly.
     expect(payload.recentEvents[3]).toEqual({
       ts: '2026-11-12T01:00:05.000Z',
@@ -192,6 +267,19 @@ describe('buildPanelPayload', () => {
       kept: 4,
       since: '2026-11-12T01:00:00.000Z',
     })
+  })
+
+  it('counts rule hits in the event window', async () => {
+    const { runtime } = stubRuntime({
+      query: async () => [
+        { ts: '2026-11-12T01:00:00.000Z', kind: 'tool_denied', decision: 'deny', reason_code: 'x', rule_ids: ['credential_assignment'] },
+        { ts: '2026-11-12T01:00:01.000Z', kind: 'tool_result_flagged', decision: 'warn', reason_code: 'y', rule_ids: ['credential_assignment', 'other'] },
+      ],
+    })
+    const payload = await buildPanelPayload(runtime, Date.now())
+    const byName = new Map(payload.rulesDetail.map(rule => [rule.name, rule.hits]))
+    expect(byName.get('credential_assignment')).toBe(2)
+    expect(byName.get('read_then_network')).toBe(0)
   })
 
   it('keeps only the newest PAGE events of a long ledger tail', async () => {
@@ -241,11 +329,12 @@ describe('buildPanelPayload', () => {
     expect(payload.recentEvents).toHaveLength(1)
     expect(payload.recentEvents[0]?.session).toBeUndefined()
     expect(payload.recentEvents[0]?.workspace).toBeUndefined()
+    expect(payload.recentEvents[0]?.title).toBeUndefined()
   })
 
   it('is lossless JSON (the RPC envelope must serialize)', async () => {
     const { runtime } = stubRuntime({
-      sessions: [summary('session-abcdef01-2345', { workspace: 'F:\\AgentSecurity\\Upear' })],
+      sessions: [summary('session-abcdef01-2345', { workspace: 'F:\\AgentSecurity\\Upear', title: '修登录重试' })],
       query: async () => [{
         ts: '2026-11-12T01:00:00.000Z',
         kind: 'tool_denied',

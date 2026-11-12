@@ -43,6 +43,13 @@ export interface SessionState {
   workspace?: string
   /** Epoch ms the session was created, when the host exposed it. */
   createdAt?: number
+  /**
+   * Latest session title the host's title service reported. A session title is
+   * session metadata (the user may rename it; otherwise a title provider
+   * suggests it), shown by the panel only — never written to the ledger and
+   * never sent to a model by this plugin.
+   */
+  title?: string
 }
 
 /** Read-only, panel-facing summary of one tracked session. */
@@ -53,6 +60,8 @@ export interface SessionSummary {
   readonly workspace?: string
   /** Session creation time (epoch ms), when known. */
   readonly createdAt?: number
+  /** Latest title the host reported, when known. */
+  readonly title?: string
   /** Last time the session produced an event (epoch ms). */
   readonly touchedAt: number
   /** Tool calls observed for this session. */
@@ -131,13 +140,16 @@ export class SessionStateStore {
    *
    * Called from the seams that carry a live `Agent`; a session the host created
    * without metadata simply keeps the fields undefined and the panel shows the
-   * id alone. Values never overwrite a known one with `undefined`.
+   * id alone. Workspace/createdAt are first-write-wins; the title is
+   * latest-wins, because a user rename or a later provider suggestion must
+   * replace an earlier value.
    */
-  describe(sessionId: string | undefined, facts: { workspace?: string; createdAt?: number }): void {
-    if (facts.workspace === undefined && facts.createdAt === undefined) return
+  describe(sessionId: string | undefined, facts: { workspace?: string; createdAt?: number; title?: string }): void {
+    if (facts.workspace === undefined && facts.createdAt === undefined && facts.title === undefined) return
     const state = this.of(sessionId)
     if (state.workspace === undefined && facts.workspace !== undefined) state.workspace = facts.workspace
     if (state.createdAt === undefined && facts.createdAt !== undefined) state.createdAt = facts.createdAt
+    if (facts.title !== undefined && facts.title.length > 0) state.title = facts.title
   }
 
   /**
@@ -156,6 +168,7 @@ export class SessionStateStore {
         sessionId: state.sessionId,
         ...(state.workspace === undefined ? {} : { workspace: state.workspace }),
         ...(state.createdAt === undefined ? {} : { createdAt: state.createdAt }),
+        ...(state.title === undefined ? {} : { title: state.title }),
         touchedAt: state.touchedAt,
         totalCalls: state.totalCalls,
         counters: { ...state.counters },

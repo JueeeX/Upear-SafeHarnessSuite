@@ -2,19 +2,26 @@
  * The panel payload builder: the same facts `safeharness_status` reports, in
  * the shape the Settings tab renders (T5.3).
  *
- * Zero-echo discipline holds here too: nothing in this payload may carry input
- * text, tool arguments, model output, a credential or a webhook URL. The only
- * free-form data is the event projection (timestamp, kind, disposition, reason
- * code, tool name, severity/category, rule ids, a truncated argument hash and the
- * session id), all of which are coarse codes the ledger already stores. The
- * project directory of a session is durable session metadata, not content.
+ * Zero-echo discipline holds for ledger-derived data: nothing here may carry
+ * input text, tool arguments, model output, a credential or a webhook URL. The
+ * event projection only carries coarse codes, hashes, session metadata and the
+ * session title the host's title service owns (display-only, never logged).
+ * Rule entries are the operator's own rule definitions, not matched content.
  * @module
  */
 import type { LedgerRecord } from '../audit/types.js'
 import type { Runtime } from '../runtime.js'
 import type { SessionSummary } from '../state.js'
 import { VERSION } from '../version.js'
-import type { PanelEngine, PanelEvent, PanelPayload, PanelSession } from './protocol.js'
+import type {
+  PanelDraft,
+  PanelEngine,
+  PanelEvent,
+  PanelPayload,
+  PanelRule,
+  PanelSchedule,
+  PanelSession,
+} from './protocol.js'
 
 /** How many enforcement/approval events the panel shows. */
 export const PANEL_EVENT_LIMIT = 60
@@ -23,9 +30,9 @@ export const PANEL_EVENT_LIMIT = 60
 export const PANEL_SCAN_LIMIT = 200
 
 /** How many sessions the panel lists. */
-export const PANEL_SESSION_LIMIT = 8
+export const PANEL_SESSION_LIMIT = 20
 
-/** Session summaries read to resolve a workspace for an event row. */
+/** Session summaries read to resolve a workspace/title for an event row. */
 const PANEL_STATE_SCAN = 200
 
 /** Display width of the rule-set hash (the ledger keeps the full one). */
@@ -42,6 +49,9 @@ const ARGS_HASH_CHARS = 8
 
 /** Longest rule-id list one event row carries. */
 const MAX_RULE_IDS = 6
+
+/** Longest rule detail string the rules tab carries. */
+const MAX_RULE_DETAIL = 300
 
 /**
  * Dispositions that count as "needs attention". `ok` / `allow` / `info` records
@@ -66,9 +76,12 @@ function isPanelEvent(record: LedgerRecord): boolean {
 }
 
 /** Project one ledger record into the wire shape (codes and hashes only). */
-function toPanelEvent(record: LedgerRecord, workspaceOf: (session: string) => string | undefined): PanelEvent {
+function toPanelEvent(
+  record: LedgerRecord,
+  sessionFacts: (session: string) => { workspace?: string; title?: string } | undefined,
+): PanelEvent {
   const rawSession = record.session !== undefined && record.session.length > 0 ? record.session : undefined
-  const workspace = rawSession === undefined ? undefined : workspaceOf(rawSession)
+  const facts = rawSession === undefined ? undefined : sessionFacts(rawSession)
   const ruleIds = record.rule_ids === undefined ? [] : record.rule_ids.slice(0, MAX_RULE_IDS)
   return {
     ts: record.ts,
@@ -81,7 +94,8 @@ function toPanelEvent(record: LedgerRecord, workspaceOf: (session: string) => st
     ruleIds,
     rules: record.rule_ids?.length ?? 0,
     ...(rawSession === undefined ? {} : { session: shortSessionId(rawSession) }),
-    ...(workspace === undefined ? {} : { workspace }),
+    ...(facts?.workspace === undefined ? {} : { workspace: facts.workspace }),
+    ...(facts?.title === undefined ? {} : { title: facts.title }),
     ...(record.args_sha256 === undefined ? {} : { argsHash: record.args_sha256.slice(0, ARGS_HASH_CHARS) }),
   }
 }
@@ -92,6 +106,7 @@ function toPanelSession(summary: SessionSummary): PanelSession {
     id: shortSessionId(summary.sessionId),
     ...(summary.workspace === undefined ? {} : { workspace: summary.workspace }),
     ...(summary.createdAt === undefined ? {} : { createdAt: summary.createdAt }),
+    ...(summary.title === undefined ? {} : { title: summary.title }),
     lastSeenAt: summary.touchedAt,
     calls: summary.totalCalls,
     allow: summary.counters.allow,
@@ -110,11 +125,59 @@ function safeSessions(runtime: Runtime): SessionSummary[] {
   }
 }
 
-/** Live facts `apply()` owns but the runtime does not: the engine's health. */
+/** Count how often each rule name appears in the displayed event window. */
+function ruleHits(events: readonly PanelEvent[]): Map<string, number> {
+  const hits = new Map<string, number>()
+  for (const event of events) {
+    for (const id of event.ruleIds) hits.set(id, (hits.get(id) ?? 0) + 1)
+  }
+  return hits
+}
+
+/** Project the compiled rule set into the rules-tab list. */
+function toPanelRules(runtime: Runtime, hits: ReadonlyMap<string, number>): PanelRule[] {
+  const rules: PanelRule[] = []
+  const ruleset = runtime.engine.ruleset
+  for (const rule of ruleset.rules) {
+    rules.push({
+      kind: 'rule',
+      name: rule.name,
+      severity: rule.severity,
+      category: rule.category,
+      origin: rule.origin,
+      detail: rule.source.slice(0, MAX_RULE_DETAIL),
+      hits: hits.get(rule.name) ?? 0,
+    })
+  }
+  for (const chain of ruleset.chains) {
+    rules.push({
+      kind: 'chain',
+      name: chain.name,
+      severity: chain.severity,
+      category: chain.category,
+      origin: '',
+      detail: `${chain.firstSource ?? '(any tool)'} → ${chain.thenSource ?? '(any tool)'}${chain.maxGap > 0 ? ` · gap ≤ ${chain.maxGap}` : ''}`,
+      hits: hits.get(chain.name) ?? 0,
+    })
+  }
+  return rules
+}
+
+/** Live facts `apply()` owns but the runtime does not. */
 export interface PanelFacts {
   /** Engine identity/health; defaults to the built-in engine when absent. */
   readonly engine?: () => PanelEngine
+  /** Extra rules directory (empty means packaged rules only). */
+  readonly rulesDir?: () => string
+  /** Drafting availability; defaults to disabled. */
+  readonly draft?: () => PanelDraft
+  /** Patrol schedule; defaults to disabled. */
+  readonly schedule?: () => PanelSchedule
 }
+
+/** Default rule/draft/schedule facts for a host that wires none of them. */
+const NO_DRAFT: PanelDraft = { enabled: false, maxChars: 0 }
+const NO_SCHEDULE: PanelSchedule = { enabled: false, intervalMinutes: null, nextAt: null, lastRunAt: null, persisted: false }
 
 /**
  * Build one panel payload from live runtime state.
@@ -136,8 +199,15 @@ export async function buildPanelPayload(
   const stats = runtime.ledger.stats
   const counters = runtime.counters
   const summaries = safeSessions(runtime)
-  const workspaceOf = (session: string): string | undefined =>
-    summaries.find(summary => summary.sessionId === session)?.workspace
+  const bySession = new Map(summaries.map(summary => [summary.sessionId, summary]))
+  const sessionFacts = (session: string): { workspace?: string; title?: string } | undefined => {
+    const summary = bySession.get(session)
+    if (summary === undefined) return undefined
+    return {
+      ...(summary.workspace === undefined ? {} : { workspace: summary.workspace }),
+      ...(summary.title === undefined ? {} : { title: summary.title }),
+    }
+  }
 
   let scanned = 0
   let recentEvents: PanelEvent[] = []
@@ -147,7 +217,7 @@ export async function buildPanelPayload(
     recentEvents = records
       .filter(isPanelEvent)
       .slice(-PANEL_EVENT_LIMIT)
-      .map(record => toPanelEvent(record, workspaceOf))
+      .map(record => toPanelEvent(record, sessionFacts))
   } catch {
     scanned = 0
     recentEvents = []
@@ -165,6 +235,8 @@ export async function buildPanelPayload(
       count: runtime.engine.ruleCount,
       chains: runtime.engine.chainCount,
     },
+    rulesDetail: toPanelRules(runtime, ruleHits(recentEvents)),
+    rulesDir: facts.rulesDir?.() ?? '',
     modes: {
       input: runtime.config.input.mode,
       tools: runtime.config.tools.mode,
@@ -189,6 +261,8 @@ export async function buildPanelPayload(
       path: stats.path !== undefined && stats.path.length > 0 ? stats.path : null,
     },
     engine: facts.engine?.() ?? { kind: 'builtin', status: 'ready', rulesStale: false, pending: 0, badLines: 0 },
+    draft: facts.draft?.() ?? NO_DRAFT,
+    schedule: facts.schedule?.() ?? NO_SCHEDULE,
     recentEvents,
     eventWindow: {
       scanned,

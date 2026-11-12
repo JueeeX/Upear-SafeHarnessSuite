@@ -90,6 +90,16 @@ describe('SessionStateStore', () => {
     expect(store.size).toBe(1)
   })
 
+  it('keeps the latest title but the first workspace', () => {
+    const store = new SessionStateStore()
+    store.describe('s1', { workspace: 'F:\\one', title: '未命名' })
+    store.describe('s1', { workspace: 'F:\\two', title: '修登录重试' })
+    expect(store.list()[0]).toMatchObject({ workspace: 'F:\\one', title: '修登录重试' })
+    // An empty title never erases the last known one.
+    store.describe('s1', { title: '' })
+    expect(store.list()[0]?.title).toBe('修登录重试')
+  })
+
   it('bounds the listed session page and keeps a bad limit usable', () => {
     const store = new SessionStateStore()
     for (let index = 0; index < 5; index += 1) store.of(`s${index}`)
