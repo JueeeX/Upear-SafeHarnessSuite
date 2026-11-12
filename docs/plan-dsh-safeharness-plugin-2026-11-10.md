@@ -635,6 +635,12 @@ export interface SecurityEngine {
 
 要求：**引擎不 import 任何 DSH 类型**（`ToolExecution` 等在 hooks 层转换成 `ToolView`）。这样 v2 可以把 `SecurityEngine` 换成"通过 stdio 调用 Python 引擎"的实现，而 hooks/audit/surface 完全不动。
 
+> **实现补充（1.2.0，2026-11-12）**：实际落地的是"内置引擎 + 可选异步输入路径"，不是"替换整个引擎"：
+> - `SecurityEngine` 增加**可选** `evaluateInputAsync?(text): Promise<Decision>`；内置引擎不实现它，`engine.kind: sidecar` 时由 `SidecarEngine` 实现。
+> - `tools.guard` 必须保持同步无 IO（R3），所以 sidecar 只接管输入面（信息 + SQL），工具/结果/输出仍走内置引擎。
+> - 子进程只返回"命中了哪些规则名 / 是否危险 SQL"这些事实，`Decision` 由 TS 侧 `composeInputDecision()` 合成——切换引擎不改变账本语义。
+> - 详见 `plugins/dsh-safeharness/evidence/M5-sidecar.md`。
+
 ---
 
 ## 7. 失败语义矩阵（必须逐条实现并测试）
@@ -688,6 +694,8 @@ cd F:\AgentSecurity\Upear\plugins\dsh-safeharness
 2. TS 测试读同一批语料，按 `suite/id` 对齐，断言 `inform_matched` / `sql_dangerous` 一致。
 3. 已知差异白名单：JS 与 Python 正则语法差异（如 Python 的 `(?P<name>)`、`\A`、`\Z`）**不允许**出现在规则里；由规则校验器直接拒绝这类写法，而不是靠白名单兜。
 4. 语料只有 2 个 suite（`identity-impersonation.json`、`sql-dangerous.json`）时也照跑；后续扩充语料不需要改测试。
+
+**1.2.0 补充（sidecar 一致性）**：`tests/sidecar-parity.test.ts` 用同一批语料对"内置引擎 vs 真实 Python 引擎"逐条比较 `Decision`（kind / reasonCode / ruleIds / severity / category），30/30 全等；它依赖内部语料与本机 Python，属内部资产（`NEVER_PUBLISH`），公开树不含。差异一旦出现就是 bug，不允许白名单（与上面的黄金判定同一纪律）。
 
 ### 8.3 集成测试（DSH 内）
 
@@ -847,8 +855,8 @@ pnpm test:golden        # 一致性
 
 ### M5（可选）
 
-- [~] T5.1 `SecurityEngine` 的 Python sidecar 实现（复用本仓引擎与语料，进程边界 + fail-closed）
-  **第 1 步已完成**（2026-11-11）：进程边界与传输 —— `src/engine/sidecar.ts` + `tests/sidecar.test.ts`(9) + `tests/helpers/fake-sidecar.mjs`；JSON-lines 协议、id 关联并发、每请求超时、崩溃 fail-closed、脏行容忍、stderr 只计数不保留、零回声、SIGTERM→SIGKILL。尚未接进引擎（计划 §6.14 的接口是同步的，sidecar 必须异步化才能接；下一步见 `evidence/M5-sidecar.md` §3）
+- [x] T5.1 `SecurityEngine` 的 Python sidecar 实现（复用本仓引擎与语料，进程边界 + fail-closed）
+  **全部完成（1.2.0，2026-11-12）**——第 1 步（2026-11-11）交付进程边界与传输：`src/engine/sidecar.ts` + `tests/sidecar.test.ts`(9→13) + `tests/helpers/fake-sidecar.mjs`；第 2 步交付接线与配置：`scripts/safeharness_sidecar.py`（6 个 method、规则下发、只读零回声）、`src/engine/sidecar-engine.ts`（`evaluateInputAsync`，仅输入面）、`engine` 配置段（默认 `builtin`）、姿态 code `engine_sidecar_unavailable`（10 项）+ hardened `failOn`、`/safeharness status` 的 `engine` 块；失败语义：observe/balanced 记录并回落内置引擎，hardened 拒绝输入/拒绝加载；一致性 `tests/sidecar-parity.test.ts` 30/30；干净 profile tarball 冷启动两态（正常 / command 指向不存在文件）见 `evidence/M5-sidecar.md` §3。全套 33 文件 / 597 用例。
 - [x] T5.2 LLM 辅助规则起草工具（草稿不落地，PUT/设置才生效）
   证据：`evidence/M5-drafting.md` + `tests/draft.test.ts`(29) + `examples/cordis.patch.draft.example.yml` → 工具 `safeharness_draft_rule` 与 `/safeharness draft [--chain]`；只返回经 loader 校验的 YAML（`applied:false`），不写文件、不重载；起草请求带 `DRAFT_REQUEST_MARK` 跳过评审与预算；1.1.0 tarball 在干净 profile 冷启动通过。未验证：真实模型起草（需桌面端升级后手敲一次）
 - [ ] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）
@@ -1060,6 +1068,20 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 |---|---|---|
 | D13 | 四项"部署环境/人工操作"未验证项**不阻塞** `1.0.0` | 四项（真实 IM 投递、真实人工审批、桌面端命令 UI、跨 turn 预算）都需要他人环境或点击操作；本地等价证明已具备（单测 + 本地真实 HTTP + 真实模型冒烟 + tarball 全链路）。把"未验证"写进 CHANGELOG/README/证据三处，比压着不发更诚实 |
 | D14 | GA 只转版本号，不加功能 | rc.4 之后不再动代码，保证 tarball 验收（21 条账本、`version=1.0.0`）对应的就是公开发布的字节 |
+
+### 12.10 1.2.0 sidecar 新增风险与决策（2026-11-12）
+
+| # | 风险 / 偏差 | 实测事实 | 处理与影响 |
+|---|---|---|---|
+| R42 | **危险 SQL 扫描把"写文档/写命令"当成"执行 SQL"** | 给用户写交接文档时 `write` 被拒 3 次（`tool_denied_by_args`，`args_chars` 33303/33618/105）；1.2.0 实现期间 `pwsh` 命令里带完整删表字面量也再次被拒 | **本版不改检测语义**（改了就动摇与 Python 的黄金一致性）。缓解：文档/命令里避免完整字面量（拼接）；运营方临时 `tools.mode: warn` 或 `results.blockOn: []`。收敛方向见 `evidence/R42-sql-scan-false-positive.md`（按工具分类扫描），列为 1.2.1 |
+| R43 | **sidecar 与内置引擎语义漂移**（同一 ruleset_hash 判出不同结论） | Python `InformPolicy` 在匹配前做 NFKC/零宽/HTML 注释清理，内置引擎不做；若 sidecar 跑 `_sanitize_value`，两个引擎会分叉而账本 hash 相同 | ①sidecar 只跑同一批正则（裸文本），**刻意不做**结构清理，写入 README §4.4/§11.18；②规则同源：`set_rules` 下发 `CompiledRule.source`，`accepted != ruleCount` 即拉起失败，未知规则名 `sidecar_unknown_rule`；③规则热更新后到子进程确认前拒绝（`sidecar_rules_stale`）；④`tests/sidecar-parity.test.ts` 30/30 逐条比对 |
+| R44 | **子进程生命周期**（孤儿进程、重启毒化、超大行、在途堆积） | 第 1 步的传输层只有超时与崩溃处理；代码审读发现：旧 child 的 `exit` 可能在新 `start()` 期间把新实例打成 `failed`；stdout 单行可无限缓冲；在途请求无上限 | 1.2.0 加：child 事件**代际守卫**、`maxLineBytes`（超限杀进程）、`maxPending`（`sidecar_overloaded`）、手写 framing 取代 `readline`；`ctx.effect` 关闭顺序 stop→ledger.close；门禁拒绝加载时显式 `stop()`。**未做自动重启**（连续超时会持续降级），记入 README §11.18 |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D15 | sidecar **只接管输入面**；子进程只返回事实（命中规则名、SQL 判定），`Decision` 由 TS 合成 | `tools.guard` 同步无 IO 是硬约束（R3）；事实/决策分离让"一次命中的含义"只有一处定义，换引擎不改账本语义（§6.14 补充） |
+| D16 | 不可用语义：observe/balanced 记录一次 + 回落内置引擎；hardened 拒绝输入（含 `input.mode: warn`）、加载期不可用拒绝加载；姿态新增 `engine_sidecar_unavailable`（FAIL），hardened `failOn` 含它 | 与 §7 "执行面 fail-closed / 观察面记录并继续"一致；姿态 FAIL 是"配置了却没跑起来"的诚实表述，是否拦加载交给 `failOn`（与 `sandbox_danger_full_access` 同构） |
+| D17 | 1.2.0 只装 sidecar；R42 的扫描面收敛留到 1.2.1 | 两个验收面不混：sidecar 是新增可选能力（默认行为不变），R42 是检测语义变更，需要独立的差分测试与发布说明 |
 
 ---
 
