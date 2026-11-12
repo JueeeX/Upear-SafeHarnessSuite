@@ -282,7 +282,7 @@ powershell -ExecutionPolicy Bypass -File examples\product_demo\run.ps1
 - [Admin Console](docs/admin-console.md)
 - [提示注入演示指南](docs/prompt-injection-demo-guide.md)
 - [后端测试手册](docs/backend-test-manual.md) / [前端测试手册](docs/frontend-test-manual.md)
-- [DSH 插件交接文档](docs/safeharness-plugin-handoff-2026-11-11.md) / [实施计划](docs/plan-dsh-safeharness-plugin-2026-11-10.md)
+- [DSH 插件交接文档（2026-11-12，当前）](docs/safeharness-plugin-handoff-2026-11-12.md) / [实施计划](docs/plan-dsh-safeharness-plugin-2026-11-10.md)（早期坑清单见 [2026-11-11 版](docs/safeharness-plugin-handoff-2026-11-11.md)）
 
 ## 测试
 
