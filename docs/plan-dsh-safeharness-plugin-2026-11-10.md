@@ -859,7 +859,7 @@ pnpm test:golden        # 一致性
   **全部完成（1.2.0，2026-11-12）**——第 1 步（2026-11-11）交付进程边界与传输：`src/engine/sidecar.ts` + `tests/sidecar.test.ts`(9→13) + `tests/helpers/fake-sidecar.mjs`；第 2 步交付接线与配置：`scripts/safeharness_sidecar.py`（6 个 method、规则下发、只读零回声）、`src/engine/sidecar-engine.ts`（`evaluateInputAsync`，仅输入面）、`engine` 配置段（默认 `builtin`）、姿态 code `engine_sidecar_unavailable`（10 项）+ hardened `failOn`、`/safeharness status` 的 `engine` 块；失败语义：observe/balanced 记录并回落内置引擎，hardened 拒绝输入/拒绝加载；一致性 `tests/sidecar-parity.test.ts` 30/30；干净 profile tarball 冷启动两态（正常 / command 指向不存在文件）见 `evidence/M5-sidecar.md` §3。全套 33 文件 / 597 用例。
 - [x] T5.2 LLM 辅助规则起草工具（草稿不落地，PUT/设置才生效）
   证据：`evidence/M5-drafting.md` + `tests/draft.test.ts`(29) + `examples/cordis.patch.draft.example.yml` → 工具 `safeharness_draft_rule` 与 `/safeharness draft [--chain]`；只返回经 loader 校验的 YAML（`applied:false`），不写文件、不重载；起草请求带 `DRAFT_REQUEST_MARK` 跳过评审与预算；1.1.0 tarball 在干净 profile 冷启动通过。未验证：真实模型起草（需桌面端升级后手敲一次）
-- [x] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）——**1.3.0 第一步**：只读面板进宿主设置页；**1.4.0 第二步**：面板内两步确认运行巡检（宿主侧单飞 + 冷却）；**1.5.0 第三步**：事件卡片（工具/原因/严重度/规则/项目与会话 id/时间 + 红橙紫绿配色 + 筛选）、会话列表、账本路径、模式彩色胶囊。剩可选项：账本片段导出、定时巡检面板化（明确不做调度）。
+- [x] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）——**1.3.0 第一步**：只读面板进宿主设置页；**1.4.0 第二步**：面板内两步确认运行巡检（宿主侧单飞 + 冷却）；**1.5.0 第三步**：事件卡片、会话列表、账本路径、模式彩色胶囊；**1.6.0 第四步**：四标签工作台、工作区/对话标题/类别/结论四个下拉 + 20 条分页、规则清单与搜索、AI 起草（草稿不启用）、重新加载规则、5–1440 分钟定时巡检（状态落盘）。剩可选项：账本片段导出。
 
 ### 9.1 dev profile 的 patch 行
 
@@ -1130,7 +1130,7 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 |---|---|---|
 | D24 | 1.2.2 之后**不再开补丁版本**做文档/README 修整；文档改动直接进 `main`，公开树用 doc-only 提交同步，不动 `package.json`/tag（沿用 D21） | 版本号 = 交付物；README 里的旧 tgz 文件名、姿态 code 数（9→10）属于文档缺陷，不影响 tarball 行为 |
 
-**下一步**：T5.3 已在 1.3.0/1.4.0/1.5.0 三步内完成（只读面板 → 巡检动作 → 信息增强）。代码侧计划项全部收口；剩余为可选项与两个部署验证（真实 IM 投递、真实人工审批），见交接文档 §11.2/§14。
+**下一步**：T5.3 已在 1.3.0/1.4.0/1.5.0/1.6.0 四步内完成（只读面板 → 巡检动作 → 信息增强 → 工作台/规则/定时）。代码侧计划项全部收口；剩余为可选项（账本片段导出）与两个部署验证（真实 IM 投递、真实人工审批），见交接文档 §11.2/§14。
 
 ### 12.14 1.3.0 客户端面板第一步（T5.3，2026-11-12）
 
@@ -1185,6 +1185,27 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | D35 | 计数与事件分栏标注口径，不做"重启后仍显示历史计数"的补偿 | 计数是"本进程发生了什么"，账本是"历史上发生了什么"；混在一起会让巡检/对账失去意义 |
 
 **验收证据**：`evidence/1.5.0-panel-detail.md`（含三张真机截图）。
+### 12.17 1.6.0 面板工作台（T5.3 第四步，2026-11-12）
+
+用户反馈：信息堆积、"看不出是哪个对话"、看不到 AI 建规则、没有维护规则入口、定时巡检不能设时间、DSH 工具卡片与本插件拒绝措辞混淆。
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V1 | 1.5.0 的事件列表无限增长，只有结论筛选按钮 | 改成四个下拉（工作区/对话/类别/结论）+ 20 条分页；对话选项用宿主 `sessionTitle` 服务的标题，取不到才回落"项目 · 短 id" |
+| V2 | 宿主 0.2.2 有 `sessionTitle` 服务（`get(session)` 返回快照），标题可能是用户重命名或标题提供方建议 | 标题只进面板显示，不进账本/模型上下文；读取失败或没有服务时静默回落，不读会话日志 |
+| V3 | 规则只有 hash 与条数；起草只有工具/命令入口 | 新增规则标签（编译后规则/链 + 来源 + 模式 + 窗口命中）与 `POST /safeharness/draft`（草稿不落盘）、`POST /safeharness/reload-rules`（失败保留旧集） |
+| V4 | 巡检只有手动入口；用户明确要"可以设置时间" | 新增 `POST /safeharness/schedule`（5–1440 分钟）+ 插件自有 `panel-state.json` + 递归 setTimeout 调度器；手动/定时共享单飞，冷却只对手动 |
+| V5 | DSH 工具卡片显示"该操作不被平台安全策略允许" | 卡片是宿主 UI，措辞是本插件 `TOOL_DENIAL_TEXT`；在 README §4.7 与交接文档写清边界，避免再混淆 |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D36 | 标签页全部挂载（非当前页 `display:none`） | 条件渲染会丢起草结果/筛选/巡检结果；真机验证第一版就踩到，切标签即清空 |
+| D37 | AI 起草只返回草稿，不写入、不启用；写路径仍需人把 YAML 放进 rules 目录再点重载 | 面板写规则文件 = 新增一条可被同源脚本利用的写路径；草稿 + 人审 + loader 门是可接受的折中 |
+| D38 | 定时状态写 `$DSH_HOME/safeharness/panel-state.json`，不写 profile 配置 | 定时是 UI 状态不是安全策略；写配置会要求重启/触发设置面，且把 UI 与配置面耦合 |
+| D39 | 定时器用递归 setTimeout + `unref()` + `dispose()`；最小 5 分钟 | 不堆 tick、不为插件拖住宿主、卸载即停；5 分钟避免把巡检变成高频写账本 |
+| D40 | 冷却只作用于手动巡检 | 用户刚点过按钮不该阻止已排定的定时；但定时跑完后 5 秒内手动点会被冷却拦住，避免连续两次写账本 |
+
+**验收证据**：`evidence/1.6.0-panel-workbench.md`（含四张真机截图）。
 
 ---
 
