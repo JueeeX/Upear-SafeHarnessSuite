@@ -1,6 +1,21 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.7.0 — 2026-11-12
+
+修复 + 面板重做 + 评审设置：**工作区/对话筛选真正可选**，面板改为跟随宿主主题的五标签工作台，新增"设置"页直接在面板里改语义评审与起草路由，并给拒绝措辞加上来源标记。回应四条反馈：筛选选不了、拒绝看不出是谁拦的、面板仍丑、judge 用的什么模型/怎么在面板里设置。
+
+- **筛选根因（不是下拉坏了，是没有数据）**：工作区/对话选项原来只来自**本进程内存**里的会话表，重启后账本仍有事件、内存表却是空的，所以两个下拉永远只有"全部/未知项目"。现在 `SessionStateStore` 把**显示元数据**持久化到插件自己的 `$DSH_HOME/safeharness/sessions.json`（只存 `sessionId / workspace / createdAt / title / touchedAt`，不存计数、trail、prompt、参数或输出；tmp+rename、750ms 合并写、损坏文件忽略、随插件卸载 flush）。重启后这些会话以 `historical: true` 回到列表，工作区与标题仍可用于筛选。
+- **对话下拉补全**：选项 = 持久化/本进程会话 ∪ 账本事件里出现过的会话；标签优先标题，其次"项目 basename · 短 id"，再其次短 id；同名标题保留短 id 后缀；只有存在无工作区事件时才出现"未记录工作区"。选择工作区会重置对话筛选，只列该工作区的对话。
+- **标题采集时机**：除三个接缝外，`session/event` 也读一次 `sessionTitle` 服务。标题是宿主的标题提供方在事件流里生成的，只在下一次 pre-step 采会晚一轮；现在改名/建议标题随事件落进索引，仍然只用于显示。
+- **拒绝来源标记**：四个模型可见的拒绝措辞都加上 `（SafeHarness 安全插件）`（输入/工具/结果/输出），保留"不点名规则、阈值或参数"的既有口径。用户能看出是本插件拦的，模型仍拿不到可绕过的细节。
+- **面板重做为五标签工作台**：概览 / 事件 / 规则 / 巡检 / **设置**。新视觉系统（设计 token、卡片、KPI、时间线、空状态、复制按钮、键盘可达），**跟随宿主主题**（读 `documentElement` 的 `color-scheme`/`data-theme`，不再只靠 `prefers-color-scheme`）；概览把"本进程计数 / 历史会话"分开标注；事件页支持工作区、对话、类别、结论四重筛选 + 文本搜索 + 展开详情。
+- **设置页（新端点 `POST /safeharness/settings`）**：`op: read|save|probe`，POST-only、body ≤ 16 KiB。读：当前评审启用/范围/路由/字符上限/超时、起草路由、宿主模型目录（provider → models，缓存 30s，上限 24 provider / 600 model）。写：只提交改动字段，走宿主自己的 `settings` 服务（`settings.update`，仅 volatile 路径）→ `cordis.patch.yml` → loader 热更新 → `applyHotConfig`，**不另建配置存储**；校验范围（maxChars 500–200000、timeout 500–60000、启用时 provider/model 必填），失败只回粗粒度错误码，不转发宿主原文。probe 发一次最小结构化请求，只回 status/verdict/耗时，不回模型文本。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
+- **顺序加固**：`tools/pre-execute`、`agent/pre-step`、`llm/stream`、`approval/request` 四处监听改为 `{ prepend: true }`。DSH 0.2.2 **没有插件数值优先级**；同事件监听器按注册序执行，`prepend` 是 unshift（后 prepend 者更靠前），`tools.guard` 在 pre-execute 与审批之后、按 scope 分层且单调不可撤销。因此口径是"prepend 最佳努力 + guard 单调兜底"，文档不承诺"绝对第一个执行"。
+- **测试**：新增 `tests/panel-settings.test.ts`（9）与 `tests/state.test.ts` 持久化三例、`tests/panel.test.ts` 历史/账本会话一例、`tests/panel-route.test.ts` 设置端点五例。全套 **41 文件 / 688 用例**（公开树 38 / 670；CI 37 / 662）。
+- **真实宿主验证**（0.2.2 Web 壳 + 桌面同源 dev profile）：重启后 `sessions.json` 回读出 `Greeting`、`F:\AgentSecurity\Upear` 等历史行；工作区筛选从 20 条收敛到 2 条，对话下拉列出标题 + 短 id + 历史标记；设置页读到 `configurable: true`、`available: true` 与真实 provider 目录；保存 `judge.timeoutMs 4000→4100→4000` 往返成功；填 `liao/gpt-6-luna` 后 probe 返回 `status: ok / verdict: allow / 3685ms`，随后恢复空路由；新建会话发一条消息后插件状态目录写出 `sessions.json` 且标题被采集。
+- **覆盖边界不变**：所有经 `tools/pre-execute` 的工具调用（内置、MCP、技能、子代理、工作流/PTC）都在调用级被判定；shell 内部二次命令与子进程、网络副作用、技能正文、模型推理流、MCP server 自身以及工具体开始执行之后不在"已防护"范围。DSH 的顺序机制也意味着一个更早注册且不调用 `next()` 的第三方监听器可以让我们看不到调用——这属于宿主组合层风险，文档如实标注。
+- 仍不做：面板写规则文件；账本导出；通用调度器（定时只跑巡检）。桌面端需升级到 1.7.0 后确认五标签、筛选与设置页。
 ## 1.6.0 — 2026-11-12
 
 新增功能（T5.3 第四步）：**面板从"一个长列表"变成能用的工作台**——四个标签、按工作区/对话标题/类别/结论筛选与分页、规则清单与 AI 起草、可设时间的定时巡检。回应四条反馈：信息堆积、会话只有 ID、看不到 AI 建规则、定时巡检不能设时间。

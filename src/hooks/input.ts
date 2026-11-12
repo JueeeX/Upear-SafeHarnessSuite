@@ -163,7 +163,7 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
       if (mode === 'enforce') return { kind: 'reject' }
       return next()
     }
-  })
+  }, { prepend: true })
 }
 
 /** One-line error description for logs (never the offending content). */

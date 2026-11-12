@@ -17,20 +17,27 @@ import { BudgetGuard } from './budget.js'
 import { VERSION } from './version.js'
 
 /**
+ * The one phrase every model-facing refusal carries so a user can tell *what*
+ * refused them without learning *why*: the source marker names this plugin,
+ * while the sentence stays generic about the rule, count or threshold (§6.4).
+ */
+const SOURCE_MARK = '（SafeHarness 安全插件）'
+
+/**
  * The single model-facing denial sentence. Deliberately generic (§6.4): it must
  * not name a rule, a pattern, a count or a threshold — telling the model what
  * tripped the guard is telling an attacker how to phrase the next attempt.
  */
 export const DENIAL_TEXT =
-  '该请求触发平台安全策略，无法执行。请调整表述或联系管理员。'
+  `该请求触发平台安全策略，无法执行${SOURCE_MARK}。请调整表述或联系管理员。`
 
 /** Tool-surface denial wording (same rationale, tool-shaped). */
 export const TOOL_DENIAL_TEXT =
-  '该操作不被平台安全策略允许。请改用其他方式，或联系管理员。'
+  `该操作不被平台安全策略允许${SOURCE_MARK}。请改用其他方式，或联系管理员。`
 
 /** Result-block feedback wording, shown to the model instead of the blocked value. */
 export const RESULT_BLOCK_TEXT =
-  '该工具结果被平台安全策略拦截，未向模型提供内容。请改用其他方式或联系管理员。'
+  `该工具结果被平台安全策略拦截${SOURCE_MARK}，未向模型提供内容。请改用其他方式或联系管理员。`
 
 /**
  * Answer-replacement wording for `output.mode: 'enforce-buffer'` (§6.6). The
@@ -39,7 +46,7 @@ export const RESULT_BLOCK_TEXT =
  * say which rule fired.
  */
 export const OUTPUT_BLOCK_TEXT =
-  '该回答已被平台安全策略拦截，未向用户显示内容。请调整问题或联系管理员。'
+  `该回答已被平台安全策略拦截${SOURCE_MARK}，未向用户显示内容。请调整问题或联系管理员。`
 
 /** Logger seam: matches what Cordis hands a plugin, structurally. */
 export interface LoggerLike {

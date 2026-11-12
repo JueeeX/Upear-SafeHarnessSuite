@@ -3,6 +3,9 @@
  * LRU bound that keeps a long-lived host from growing one entry per session.
  */
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { MAX_SESSIONS, MAX_TRAIL, SessionStateStore } from '../src/state.js'
 import type { ToolView } from '../src/engine/types.js'
 
@@ -108,5 +111,71 @@ describe('SessionStateStore', () => {
     expect(store.list(0)).toHaveLength(5)
     expect(store.list(Number.NaN)).toHaveLength(5)
     expect(store.list(50)).toHaveLength(5)
+  })
+
+  it('persists display metadata only, and restores it as historical rows', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'safeharness-state-'))
+    const file = join(dir, 'sessions.json')
+    try {
+      const first = new SessionStateStore({ path: file })
+      first.describe('session-1', { workspace: 'F:\\AgentSecurity\\Upear', createdAt: 1_759_000_000_000, title: '旧标题' })
+      // Counters/trails are per process and must not reach the index.
+      first.count('session-1', 'deny')
+      first.recordToolCall('session-1', view('pwsh'))
+      first.flush()
+
+      const document = JSON.parse(readFileSync(file, 'utf8')) as { version: number; sessions: unknown[] }
+      expect(document.version).toBe(1)
+      expect(document.sessions).toEqual([{
+        id: 'session-1',
+        touchedAt: expect.any(Number),
+        workspace: 'F:\\AgentSecurity\\Upear',
+        createdAt: 1_759_000_000_000,
+        title: '旧标题',
+      }])
+
+      const restored = new SessionStateStore({ path: file })
+      expect(restored.list()[0]).toMatchObject({
+        sessionId: 'session-1',
+        workspace: 'F:\\AgentSecurity\\Upear',
+        title: '旧标题',
+        historical: true,
+        totalCalls: 0,
+        counters: { allow: 0, deny: 0, ask: 0, warn: 0 },
+      })
+      // First live touch promotes the row out of the historical state.
+      restored.of('session-1')
+      expect(restored.list()[0]?.historical).toBeUndefined()
+      restored.dispose()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not write an index when no session carried display metadata', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'safeharness-state-'))
+    const file = join(dir, 'sessions.json')
+    try {
+      const store = new SessionStateStore({ path: file })
+      store.recordToolCall('session-1', view('pwsh'))
+      store.flush()
+      expect(() => readFileSync(file, 'utf8')).toThrow()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('ignores a corrupt index instead of failing the store', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'safeharness-state-'))
+    const file = join(dir, 'sessions.json')
+    try {
+      writeFileSync(file, '{not json', 'utf8')
+      const store = new SessionStateStore({ path: file })
+      expect(store.size).toBe(0)
+      store.describe('session-1', { title: '新标题' })
+      expect(store.list()[0]?.title).toBe('新标题')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

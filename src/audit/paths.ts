@@ -23,6 +23,9 @@ export const LEDGER_FILENAME = 'ledger.ndjson'
 /** Plugin-owned panel state (currently the patrol schedule). */
 export const PANEL_STATE_FILENAME = 'panel-state.json'
 
+/** Plugin-owned session metadata index (workspace/title per session id). */
+export const SESSION_INDEX_FILENAME = 'sessions.json'
+
 /** Environment slice {@link resolveLedgerDir} consults (injectable for tests). */
 export interface LedgerPathEnv {
   readonly DSH_HOME?: string
@@ -87,4 +90,19 @@ export function resolveLedgerDir(configuredDir: string, env?: LedgerPathEnv): st
 export function resolvePanelStatePath(env?: LedgerPathEnv): string {
   const home = firstNonEmpty(env?.DSH_HOME, process.env.DSH_HOME) ?? join(homedir(), '.dsh')
   return join(expandHome(home), 'safeharness', PANEL_STATE_FILENAME)
+}
+
+/**
+ * Absolute path of the plugin-owned session metadata index.
+ *
+ * Like {@link resolvePanelStatePath}, deliberately independent of `audit.dir`:
+ * it holds display metadata (workspace path, latest title) used to label
+ * conversations in the panel after a restart, not evidence. It never holds
+ * prompt text, tool arguments or model output.
+ *
+ * @param env - optional environment override; defaults to `process.env`.
+ */
+export function resolveSessionIndexPath(env?: LedgerPathEnv): string {
+  const home = firstNonEmpty(env?.DSH_HOME, process.env.DSH_HOME) ?? join(homedir(), '.dsh')
+  return join(expandHome(home), 'safeharness', SESSION_INDEX_FILENAME)
 }

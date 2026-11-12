@@ -15,6 +15,9 @@ import type { Runtime } from '../src/runtime.js'
 import type { PatrolReport } from '../src/patrol/index.js'
 import type { DraftResult } from '../src/draft/rule.js'
 import type { PatrolScheduler } from '../src/panel/schedule.js'
+import type { PanelSettingsHost } from '../src/panel/settings.js'
+import { PanelSettingsError } from '../src/panel/settings.js'
+import type { PanelJudgeProbe, PanelSettingsValue } from '../src/panel/protocol.js'
 
 /** One request, with an optional JSON body the handler can read. */
 function request(
@@ -61,7 +64,10 @@ function stubRuntime(options: { stateThrows?: boolean; draftEnabled?: boolean } 
       input: { mode: 'enforce' },
       tools: { mode: 'enforce' },
       results: { mode: 'warn' },
-      output: { mode: 'warn' },
+      output: {
+        mode: 'warn',
+        judge: { enabled: false, scope: 'flagged', provider: '', model: '', maxChars: 12_000, timeoutMs: 4_000 },
+      },
       approval: { mode: 'delegate' },
       draft: { enabled: options.draftEnabled ?? false, maxChars: 2_000, timeoutMs: 5_000, maxTokens: 200 },
       rules: { dir: '', inline: [] },
@@ -418,6 +424,108 @@ describe('reload-rules endpoint', () => {
     const missing = response()
     await unwired(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/reload-rules' }), missing.res)
     expect(JSON.parse(missing.body)).toMatchObject({ ok: false, error: { code: 'reload_unavailable' } })
+  })
+})
+
+describe('settings endpoint', () => {
+  const logger = { info: () => {}, warn: () => {}, error: () => {} }
+  const value: PanelSettingsValue = {
+    preset: 'balanced',
+    judge: {
+      enabled: false,
+      scope: 'flagged',
+      provider: 'liao',
+      model: 'gpt-6-luna',
+      maxChars: 12_000,
+      timeoutMs: 4_000,
+      available: true,
+      configurable: true,
+    },
+    draft: { enabled: false, provider: '', model: '' },
+    providers: [{ id: 'liao', name: 'liao', models: [{ id: 'gpt-6-luna', name: 'gpt-6-luna' }] }],
+    configPath: 'C:\\Users\\x\\.dsh\\profiles\\desktop\\cordis.patch.yml',
+  }
+  const probe: PanelJudgeProbe = {
+    status: 'ok',
+    verdict: 'allow',
+    blocked: false,
+    route: 'liao/gpt-6-luna',
+    elapsedMs: 42,
+  }
+
+  function stubSettings(saved: Record<string, unknown>[] = [], failure?: Error): PanelSettingsHost {
+    return {
+      judgeFact: () => ({
+        enabled: value.judge.enabled,
+        scope: value.judge.scope,
+        provider: value.judge.provider,
+        model: value.judge.model,
+        available: value.judge.available,
+      }),
+      read: async () => value,
+      save: async (patch) => {
+        if (failure !== undefined) throw failure
+        saved.push(patch as unknown as Record<string, unknown>)
+        return value
+      },
+      probe: async () => probe,
+    }
+  }
+
+  it('reads the judge/drafting settings and the catalog', async () => {
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, settings: stubSettings() })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/settings', body: { op: 'read' } }), out.res)
+    expect(JSON.parse(out.body)).toMatchObject({
+      ok: true,
+      value: { preset: 'balanced', judge: { configurable: true, available: true }, providers: [{ id: 'liao' }] },
+    })
+  })
+
+  it('saves a patch through the host settings service', async () => {
+    const saved: Record<string, unknown>[] = []
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, settings: stubSettings(saved) })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, {
+      url: '/safeharness/settings',
+      body: { op: 'save', patch: { judge: { enabled: true, model: 'gpt-6-luna' } } },
+    }), out.res)
+    expect(JSON.parse(out.body)).toMatchObject({ ok: true })
+    expect(saved).toEqual([{ judge: { enabled: true, model: 'gpt-6-luna' } }])
+  })
+
+  it('probes the configured judge route without echoing its reply', async () => {
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, settings: stubSettings() })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/settings', body: { op: 'probe' } }), out.res)
+    expect(JSON.parse(out.body)).toEqual({ ok: true, value: probe })
+  })
+
+  it('refuses a bad op, a non-object patch and an unwired surface', async () => {
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, settings: stubSettings() })
+    const badOp = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/settings', body: { op: 'delete' } }), badOp.res)
+    expect(JSON.parse(badOp.body)).toMatchObject({ ok: false, error: { code: 'settings_invalid' } })
+
+    const badPatch = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/settings', body: { op: 'save', patch: [] } }), badPatch.res)
+    expect(JSON.parse(badPatch.body)).toMatchObject({ ok: false, error: { code: 'settings_invalid' } })
+
+    const unwired = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger })
+    const missing = response()
+    await unwired(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/settings', body: { op: 'read' } }), missing.res)
+    expect(JSON.parse(missing.body)).toMatchObject({ ok: false, error: { code: 'settings_unavailable' } })
+  })
+
+  it('maps a typed settings failure to its code', async () => {
+    const failing = stubSettings([], new PanelSettingsError('settings_readonly', 'read only'))
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, settings: failing })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, {
+      url: '/safeharness/settings',
+      body: { op: 'save', patch: { judge: { enabled: true } } },
+    }), out.res)
+    expect(JSON.parse(out.body)).toMatchObject({ ok: false, error: { code: 'settings_readonly' } })
   })
 })
 
