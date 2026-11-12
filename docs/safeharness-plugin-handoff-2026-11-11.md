@@ -20,9 +20,9 @@
 | 当前版本 | `1.2.1`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
 | 桌面端插件 | 仍装 `1.1.1`（profile `desktop`，tarball 安装）；升级包 `upear-dsh-safeharness-1.2.1.tgz` 已打到 `plugin-tarballs`，安装脚本 TGZ 行已改，**需用户退出 DSH 后双击脚本升级** |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` 已发布 `v1.2.1` |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.2.1 功能提交与文档提交（见 §14 自检） |
-| 测试 | 本机 `pnpm test` = **34 文件 / 605 用例**全绿（含 sidecar 13+7+4+3、设置面 8 与内部一致性 1 例） |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = `f1297b3`，tag **`v1.2.1`**，CI `completed/success` |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = `16b4066`（1.2.1 功能提交；文档提交随后，见 §14 自检） |
+| 测试 | 本机 `pnpm test` = **34 文件 / 605 用例**全绿（含 sidecar 13+7+4+3、设置面 8 与内部一致性 1 例）；公开树 31 文件 / 587（584 pass + 3 skip），CI 剔除 perf 后 30 文件 / 579（576 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 新增 §12.10，1.2.1 新增 §12.11） |
 | 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.1 证据见 `evidence/1.2.1-settings-surface.md`） |
 | 下一步 | T5.3 客户端 UI（独立分支），或 R42 SQL 误报收敛（1.2.2 候选），详见 §11 |
@@ -42,8 +42,8 @@
 | Python | `C:\Python314\python.exe`，`Python 3.14.7`（T5.1 sidecar 会用） |
 | 宿主包版本 | `cordis 4.1.0` / `schemastery 3.19.0` / `dsh-* 0.2.2-rc.1`（运行时解析自 app bundle） |
 | judge 路由 | provider `liao`，model `gpt-6-luna`；Key 在 `$DSH_HOME/.credentials.yaml`（`apiKeyEnv: LIAO_API_KEY`），**插件不读不打印** |
-| 账本 | `C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson`（2026-11-12 实测 913 行，哈希链校验通过） |
-| 插件 tarball 仓库 | `C:\Users\xiaojue\.dsh\plugin-tarballs\`（rc.2/rc.3/rc.4/1.0.0/1.1.0/1.1.1 + 安装脚本） |
+| 账本 | `C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson`（2026-11-12 实测 1800+ 行，哈希链校验通过） |
+| 插件 tarball 仓库 | `C:\Users\xiaojue\.dsh\plugin-tarballs\`（rc.2/rc.3/rc.4/1.0.0/1.1.0/1.1.1/1.2.0/**1.2.1** + 安装脚本） |
 | git 身份 | `git config user.email` 必须是 `182746526+JueeeX@users.noreply.github.com` |
 
 本机 profile 一览（`C:\Users\xiaojue\.dsh\profiles\`）：
@@ -278,16 +278,21 @@ node plugins/dsh-safeharness/scripts/fake-openai.mjs --port 18080 --scenario too
 6. 公开仓库发布（**不要手工挑文件**）：
    ```powershell
    cd F:\AgentSecurity\Upear
-   git worktree add F:\AgentSecurity\_pub-ga --detach dsh/main
+   git worktree add F:\AgentSecurity\_pub-<ver> dsh/main
    cd plugins\dsh-safeharness
    node scripts/publish-public.mjs --check                      # 先看计划：哪些会发、哪些被拒、被拒原因
-   node scripts/publish-public.mjs --target F:\AgentSecurity\_pub-ga
-   git -C F:\AgentSecurity\_pub-ga add -A
-   git -C F:\AgentSecurity\_pub-ga commit -m "…"
-   git -C F:\AgentSecurity\_pub-ga push dsh HEAD:main
-   git -C F:\AgentSecurity\_pub-ga tag -a v<ver> -m "…"; git -C F:\AgentSecurity\_pub-ga push dsh v<ver>
-   git worktree remove F:\AgentSecurity\_pub-ga --force
+   node scripts/publish-public.mjs --target F:\AgentSecurity\_pub-<ver>
+   git -C F:\AgentSecurity\_pub-<ver> add -A                    # 必须 -A：worktree 里未跟踪的改动靠这一步归一化 CRLF
+   git -C F:\AgentSecurity\_pub-<ver> status --short             # 期望只剩真实改动（不是几十个"modified"）
+   git -C F:\AgentSecurity\_pub-<ver> commit -m "…"
+   git -C F:\AgentSecurity\_pub-<ver> push dsh HEAD:main
+   # tag 在**主仓**打（主仓已 fetch 过 dsh），worktree 里的同名 tag 不能直接 push 到 dsh：
+   cd F:\AgentSecurity\Upear
+   git fetch dsh --tags
+   git tag -a v<ver> dsh/main -m "…"; git push dsh v<ver>
+   git worktree remove F:\AgentSecurity\_pub-<ver> --force
    ```
+   **发布前删掉 worktree 里的 `lib/` 与 `node_modules/`**（本地构建/安装的产物会被泄漏扫描当成可疑资产；1.2.0 就因此 exit 1）。
    「哪些文件不许发」现在是**代码**：`scripts/publish-public.mjs` 的 `PUBLISH_TOP`（顶层白名单）与 `NEVER_PUBLISH`（内部资产拒绝清单：`evidence/`、`lib/`、`dist/`、`*.tgz`、`.env`、`tests/acceptance-m2.test.ts`、`tests/corpus.ts`、`tests/golden.test.ts`、`tests/fixtures/golden.json`、`tests/fixtures/benign*.json`、`scripts/gen_golden.py`）。`tests/publish-guard.test.ts`（8 例）在 `pnpm test` 里守着这份计划：任何内部资产被选中就红。新加的 `src/*.ts`、`tests/*.test.ts` 会被自动纳入，不需要改脚本。
 7. 查 CI（无需 gh）：
    ```powershell
@@ -317,6 +322,7 @@ node plugins/dsh-safeharness/scripts/fake-openai.mjs --port 18080 --scenario too
 - `M3-output-approval-patrol.md`、`M3-e2e.md`、`T3.1-judge.md`、`T3.3-approval.md`、`T3.4-patrol.md`、`T3.5-budget.md`：M3。
 - `M4-hardening.md`、`M4-compat.md`、`GA-tarball-1.0.0.md` + `GA-tarball-1.0.0/`：M4/GA tarball 验收原始账本。
 - `M5-sidecar.md`：T5.1 第 1 步设计、测试、**第 2 步任务分解与风险**。
+- `1.2.1-settings-surface.md`：P3 设置面根因测量、修复点、单测、真实宿主 API 验证、1.2.1 冷启动两态、打包/发布记录。
 - 各种 `*.ndjson` / `*.log`：原始账本与运行日志（名字对应任务号）。
 - overlay 文件：`ga-hmr-overlay.yml`、`ga-feishu-overlay.yml`、`ga-real-provider-overlay.yml`、`m4-*-overlay.yml`、`headless-m3-e2e.patch.yml`。
 - 工具：`webhook-sink.mjs`（本地 webhook 接收器）、`desktop-patch.before-budget.yml`（临时改配置前的备份）。
@@ -436,8 +442,8 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 
 ```powershell
 cd F:\AgentSecurity\Upear
-git log --oneline -3                       # 期望 HEAD = 1.2.1 功能提交 + 文档提交；dsh/main = v1.2.1 发布提交
-git rev-parse dsh/main                     # 期望 1.2.1 发布提交
+git log --oneline -3                       # 期望 HEAD = 1.2.1 功能提交 16b4066 + 文档提交；dsh/main = f1297b3
+git rev-parse dsh/main                     # 期望 f1297b3（公开仓 v1.2.1 发布提交）
 cd plugins\dsh-safeharness
 pnpm build; pnpm test                      # 期望 34 文件 / 605 全绿
 Get-Content C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\package.json | ConvertFrom-Json | % version   # 桌面端升级后期望 1.2.1（未升级则为 1.1.1，属正常）
