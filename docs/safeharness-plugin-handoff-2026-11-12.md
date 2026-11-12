@@ -448,7 +448,7 @@ fetch('/safeharness/settings', { method:'POST', headers:{'content-type':'applica
 
 // 添加自定义模型（假 OpenAI 或真实端点）
 { op:'add-provider', provider:{ id:'fake-local', api:'openai-completions',
-  baseURL:'http://127.0.0.1:18080/v1', apiKey:'sk-fake-sentinel',
+  baseURL:'http://127.0.0.1:18080/v1', apiKey:'<fake-sentinel>',
   model:'fake-model', useForJudge:true } }
 
 // 测试评审路由
@@ -494,7 +494,7 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 7. **`llm-pi-ai` 被 home patch / `--patch` overlay 覆盖时**，`settings.update('llm-pi-ai')` 可能被宿主拒绝（teammate 在 overlay profile 实测到）；正常 profile 可用。添加自定义模型失败时不会破坏现有配置。
 8. **面板动作有限**：不写规则文件、不做通用调度、不提供 provider 编辑（只能添加/删除同名重建）；导出只在浏览器端保存。
 9. **CI 状态未在本地读取**（`api.github.com` 超时）；push 成功，runs 需要在网页确认。
-10. **结果层强制拦截的代价**：任何含凭据形态的工具结果（含测试 fixture、文档示例、`.credentials.yaml`）都会被整条替换；输出层仍是 `warn`，若把结果层关掉，模型仍可能把密钥写进回答。开发插件时用 `safeharness-dev`（observe）。
+10. **结果层强制拦截的代价**：任何含凭据形态的工具结果（含测试 fixture、文档示例、`.credentials.yaml`）都会被整条替换；输出层仍是 `warn`，若把结果层关掉，模型仍可能把密钥写进回答。开发插件时用 `safeharness-dev`（observe）。另外 `pnpm-lock.yaml` 里的 `sha512-…` SRI 摘要也会被判为高熵令牌（1.8.1 尚未为 SRI 前缀加豁免），读 lockfile 会被整条拦截，属已知误报。
 11. **旧文档里的“桌面 1.6.0”已过时**：现在是 1.8.1 profile。
 
 ---
