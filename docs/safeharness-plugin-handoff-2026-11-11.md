@@ -20,8 +20,8 @@
 | 当前版本 | `1.2.1`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
 | 桌面端插件 | 仍装 `1.1.1`（profile `desktop`，tarball 安装）；升级包 `upear-dsh-safeharness-1.2.1.tgz` 已打到 `plugin-tarballs`，安装脚本 TGZ 行已改，**需用户退出 DSH 后双击脚本升级** |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = `f1297b3`，tag **`v1.2.1`**，CI `completed/success` |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = `16b4066`（1.2.1 功能提交；文档提交随后，见 §14 自检） |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = `1eacd42`（1.2.1 + 一个 test-only 提交），tag **`v1.2.1`** 指向 `f1297b3`，两次 CI 均 `completed/success` |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = `9be6e57`（1.2.1 功能 + 文档 + 测试稳定性，见 §14 自检） |
 | 测试 | 本机 `pnpm test` = **34 文件 / 605 用例**全绿（含 sidecar 13+7+4+3、设置面 8 与内部一致性 1 例）；公开树 31 文件 / 587（584 pass + 3 skip），CI 剔除 perf 后 30 文件 / 579（576 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 新增 §12.10，1.2.1 新增 §12.11） |
 | 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.1 证据见 `evidence/1.2.1-settings-surface.md`） |
@@ -426,6 +426,7 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 25. **0.2.2-rc.1 的 settings 不是命名空间注册**：`ctx.settings.register(ns, schema)` 在这个宿主上不存在（那是 0.1.0-rc.5 的 API），设置页是 `SettingsForms` 从插件 `Config` 的 `.volatile()` 字段**自动**生成的。改设置相关代码只照 0.1.0 类型源写会得到"永远 false 的 seam"，且不会有任何报错。
 26. **`.volatile()` 的值是 box，不是原值**：宿主解析出的配置里，volatile 字段是 `{ get(), [Symbol.for('cosmokit.volatile.write')] }`。任何消费前必须 `unwrapVolatile`（本仓 `config.ts` 在 `resolveConfig` 入口统一做）；不要 `typeof value === 'string'` 直接判，否则会把它当成"类型错误"。schema 里给 volatile 数值字段补 `.min()`/`.step()`，保证设置页写入不会制造下次启动无法加载的配置。
 27. **`safeharness-headless` profile 里是 M3 时代的 0.3.0 副本，不是 link**：拿它做当前版本冒烟会得到 `plugin_loaded v=0.3.0`、`seams` 无 `settings` 的假结论（1.2.1 实现期间踩过一次）。冒烟一律「复制 `headless` 模板 → `dsh plugin add file:<tgz>` → 新 profile」。同理，`dsh plugin add` 前必须删掉复制来的 `node_modules` 与 `pnpm-lock.yaml`，否则 pnpm 会因虚拟 store 位置变化直接失败。
+28. **`tests/perf.test.ts` 的 p99 会偶发假红灯**：200 样本时 p99 = 倒数第 3 个样本，两个 GC/调度停顿就能把 60 KB 输入判定顶过 5 ms（实测 6 次里 2 次，中位数 <0.5 ms）。已加 `withoutStalls()`（剔除 > 批次中位数 10× 的孤立样本）并把该用例采样提到 400；**不要**靠调大预算让它变绿——预算是 §8.5 的契约，改测法才不丢检测力（计划 §12.11 R48/D21）。
 
 ---
 
@@ -443,8 +444,8 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 
 ```powershell
 cd F:\AgentSecurity\Upear
-git log --oneline -3                       # 期望 HEAD = 1.2.1 功能提交 16b4066 + 文档提交；dsh/main = f1297b3
-git rev-parse dsh/main                     # 期望 f1297b3（公开仓 v1.2.1 发布提交）
+git log --oneline -3                       # 期望 HEAD = 9be6e57（1.2.1 + perf 稳定性）；dsh/main = 1eacd42
+git rev-parse dsh/main                     # 期望 1eacd42（= v1.2.1 tag f1297b3 + 一个 test-only 提交）
 cd plugins\dsh-safeharness
 pnpm build; pnpm test                      # 期望 34 文件 / 605 全绿
 Get-Content C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\package.json | ConvertFrom-Json | % version   # 桌面端升级后期望 1.2.1（未升级则为 1.1.1，属正常）
