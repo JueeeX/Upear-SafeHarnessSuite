@@ -859,7 +859,7 @@ pnpm test:golden        # 一致性
   **全部完成（1.2.0，2026-11-12）**——第 1 步（2026-11-11）交付进程边界与传输：`src/engine/sidecar.ts` + `tests/sidecar.test.ts`(9→13) + `tests/helpers/fake-sidecar.mjs`；第 2 步交付接线与配置：`scripts/safeharness_sidecar.py`（6 个 method、规则下发、只读零回声）、`src/engine/sidecar-engine.ts`（`evaluateInputAsync`，仅输入面）、`engine` 配置段（默认 `builtin`）、姿态 code `engine_sidecar_unavailable`（10 项）+ hardened `failOn`、`/safeharness status` 的 `engine` 块；失败语义：observe/balanced 记录并回落内置引擎，hardened 拒绝输入/拒绝加载；一致性 `tests/sidecar-parity.test.ts` 30/30；干净 profile tarball 冷启动两态（正常 / command 指向不存在文件）见 `evidence/M5-sidecar.md` §3。全套 33 文件 / 597 用例。
 - [x] T5.2 LLM 辅助规则起草工具（草稿不落地，PUT/设置才生效）
   证据：`evidence/M5-drafting.md` + `tests/draft.test.ts`(29) + `examples/cordis.patch.draft.example.yml` → 工具 `safeharness_draft_rule` 与 `/safeharness draft [--chain]`；只返回经 loader 校验的 YAML（`applied:false`），不写文件、不重载；起草请求带 `DRAFT_REQUEST_MARK` 跳过评审与预算；1.1.0 tarball 在干净 profile 冷启动通过。未验证：真实模型起草（需桌面端升级后手敲一次）
-- [ ] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）——**下一步开工**，先做 API 可行性验证
+- [x] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）——**1.3.0 第一步完成**：只读面板进宿主设置页；巡检触发与写操作留第二步
 
 ### 9.1 dev profile 的 patch 行
 
@@ -1131,6 +1131,27 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | D24 | 1.2.2 之后**不再开补丁版本**做文档/README 修整；文档改动直接进 `main`，公开树用 doc-only 提交同步，不动 `package.json`/tag（沿用 D21） | 版本号 = 交付物；README 里的旧 tgz 文件名、姿态 code 数（9→10）属于文档缺陷，不影响 tarball 行为 |
 
 **下一步**：只剩 T5.3 客户端 UI 面板（§9 T5.3，评估见交接文档 §11.2）。它是**独立 client 包**，不改动本插件主包的行为与配置面；先在 DSH 客户端插件 API 上做可行性验证（manifest 契约、slot 注册、数据通道），再决定是否按天投入。
+
+### 12.14 1.3.0 客户端面板第一步（T5.3，2026-11-12）
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V1 | 真实 0.2.2 Web 壳里 `ctx.inject(['connection'], …)` 能拿到 `connection`，但 `connection.rpc.handle()` 内部按**接收者 ctx** 去取 `owner.webServer`，该 ctx 没有 `webServer` 注入 → `cannot get property "webServer" without inject` | 第三方 profile 插件不要走 `connection.rpc.handle()`（至少在 0.2.2 上不可用）。改用 `ctx.inject(['webServer'])` + `webServer.register({kind:'prefix'})` |
+| V2 | 宿主 `settings.plugins.tab` 在 0.2.2 **存在**（设置 → 内置插件，页内标签 `插件列表` / `SafeHarness`）；客户端 bundle 只有预构建才会被扫描进启动图，缺失会让整个 client-module 注册表抛错（白屏） | 面板走"独立预构建 client bundle + `dsh.client` manifest"是可行的；构建产物必须随 tarball 发布 |
+| V3 | 0.2.2 壳按**批量 URL**（`plugins/??<id1>/client.js,<id2>/client.js…`）预取 client bundle，启动图里能看到本插件行；直接 `GET /plugins/<id>/client.js` 返回 404 属正常现象 | 验证面板只能开浏览器看，不能靠直接抓 bundle URL 判断 |
+| V4 | 端到端实测：设置页出现 `SafeHarness` 标签、显示 v1.3.0/计数/账本；会话里发注入话术被输入面拒绝后，面板"最近拦截"出现 `input_denied` | 只读面板闭环成立；无需模型调用 |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D25 | 面板数据用**私有只读路由**（`/safeharness` 前缀）而不是 Connection RPC | V1 阻塞了 RPC；路由自己带 loopback + 同源栅栏（与宿主 `/api` 同义），只读、不含原文 |
+| D26 | 浏览器半**不 import 任何 `@deepseek-ai/dsh-client-*`**，只用平台 seed 的 `react` 与结构化 ctx | 打包壳与源码树的 client 版本可能不一致（0.1.0-rc.5 vs 0.2.2）；少一个运行期依赖就少一类白屏风险 |
+| D27 | 面板注册用 `ctx.slots.inject('settings.plugins.tab', …)`（等待声明） | 槽不存在时静默不出现，而不是让整页失败；换宿主大版本时由账本 `invariant_probe` 提供线索 |
+| D28 | 1.3.0 只做**只读**面板；巡检按钮/写操作留到第二步 | 只读面板不引入新的写路径与权限面，先证明"数据能到桌面" |
+
+**验收证据**：`evidence/1.3.0-panel.md`（host 路由 probe、真实壳截图、注入拒绝后的最近拦截、测试计数）。
+
+---
+
 
 ---
 

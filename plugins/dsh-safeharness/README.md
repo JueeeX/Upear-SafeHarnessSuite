@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.2.2` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.3.0` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -66,6 +66,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 | `approval/request` | 审批桥粗粒度判定：`allowOnce` 一次性授予 → 复用 deny 列表 → 其余 delegate；`delegate` 也写审计对，供巡检对账 | 授予 / 拒绝 / 委托 |
 | 系统提示词 | 在工具引导区（`order: 190`）注入 ≤300 字符的部署约束条款，**不含**规则正文、数量、阈值 | — |
 | 只读工具 / 命令 | 4 个 `safeharness_*` 工具 + `/safeharness` 命令，供模型与操作者自查 | — |
+| Web 面板（1.3.0） | 设置 → 内置插件 → `SafeHarness` 标签页：版本/预设、拦截与放行计数、五个面的判定模式、规则集与账本健康、最近 10 条拦截。只读、不触发模型；数据走宿主 `webServer` 上的私有路由（loopback + 同源栅栏）。见 §4.7 | — |
 | 姿态 / 巡检 | 加载时姿态门禁（可配 `failOn`）、5 项外部巡检与退出码（0/1/2）、可选多通道通知（飞书 / 钉钉 / 企业微信 / OneBot / 通用 webhook） | 拒绝加载 / FAIL |
 | 预算 | 每轮 `input+output` token 累计，越限只记一条 `budget_exceeded`（不拦截） | — |
 
@@ -120,12 +121,12 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 # 把 DSH 安装里的宿主包 junction 到本仓库 node_modules（构建期类型来源）
 node scripts/link-dsh.mjs
 pnpm install
-pnpm build            # tsc -> lib/
-pnpm test             # 617 个用例（35 个文件）
+pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
+pnpm test             # 638 个用例（38 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.2.2.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.3.0.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -139,7 +140,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.2.2.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.3.0.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -188,7 +189,7 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 # 3) 用一条明显的注入话术试输入防线（balanced/hardened 应被拒）
 ```
 
-> `1.2.2` 已在桌面端（DSH 桌面应用，宿主包走 app-bundle `0.2.2-rc.1`）实测：`safeharness_status` 返回 `version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`；`safeharness_posture` 无 FAIL。桌面升级方式见 §3.6 与仓库外脚本 `install-safeharness-desktop.cmd`。
+> `1.2.2` 已在桌面端（DSH 桌面应用，宿主包走 app-bundle `0.2.2-rc.1`）实测：`safeharness_status` 返回 `version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`；`safeharness_posture` 无 FAIL。`1.3.0` 的面板在同一个 0.2.2 Web 壳里实测：设置 → 内置插件出现 `SafeHarness` 标签页、显示 `v1.3.0` 与实时计数，发一条注入话术被输入面拒绝后面板"最近拦截"出现对应行（详见 §4.7）。桌面升级方式见 §3.6 与仓库外脚本 `install-safeharness-desktop.cmd`。
 
 ### 3.6 升级与卸载
 
@@ -486,6 +487,24 @@ DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configur
 
 ---
 
+### 4.7 桌面端面板（1.3.0，T5.3）
+
+设置 → **内置插件** 里会多出一个 `SafeHarness` 标签页：版本与预设、拦截/放行/告警计数、五个面的判定模式、规则集与账本健康、最近 10 条拦截。**只读**——没有写操作，也不触发模型调用。
+
+数据通路分两段：
+
+1. **宿主半**（`src/panel/`）：`apply()` 检测到 `webServer` 服务后，在 `/safeharness` 前缀注册一个只读路由（`POST /safeharness/status`）。注册结果写一条 `invariant_probe`（`labels.state = route_registered` / `web_server_unavailable` / `route_failed`），所以"面板为什么没出现"可以直接查账本。
+2. **浏览器半**（`src/client/`）：本包带一个**预构建**的 `lib/client.js`（CJS 闭包工厂，唯一副作用是 `window.__ModuleLoader__.load({id, factory})`）。DSH 的 client-module 注册表扫描 profile 的 Loader entry，按 package.json 的 `dsh.client` 把它编入启动图并从 `/plugins/<id>/client.js` 提供；组件只用平台 seed 的 `react`，通过 `ctx.slots.inject('settings.plugins.tab', …)` 注册标签页——等待槽声明，而不是假设宿主一定有它。
+
+安全口径：
+
+- 路由只接受 **loopback Host + 同源 Origin**（带跨站标记直接拒），与宿主 `/api` 的浏览器栅栏同义；插件不读 `trustedHosts`，因此**不会**从 LAN 暴露。
+- 响应是固定投影：版本、预设、计数、模式、规则 hash 前缀、账本计数，以及最近拦截的 `ts` / `kind` / `reason_code` / `tool` / 规则数。不含 prompt、工具参数、模型输出、webhook 或凭据；内部异常只返回 `panel_failed`。
+- 面板不可用（headless profile 没有 `webServer`，或浏览器半未构建）时插件照常加载，不抛错。
+
+构建与验证：`pnpm build:client` 产出 `lib/client.js`（`pnpm build` 会一并执行）。`tests/client-bundle.test.ts` 锁定"闭包工厂形状 + 只 require 平台模块 + 能注册出标签页"，`tests/panel-route.test.ts` 锁定栅栏与响应包络。真实宿主验证：设置页出现 `SafeHarness` 标签页并显示 `v1.3.0`；在会话里发一条注入话术被输入面拒绝后，面板"最近拦截"出现对应 `input_denied` 行（无模型调用）。
+
+---
 ## 5. 预设与失败语义
 
 预设只是"一组默认值"，任何字段都能逐项覆盖。
@@ -633,8 +652,11 @@ plugins/dsh-safeharness/
 │  └─ version.ts        版本（与 package.json 同步，测试锁定）
 ├─ rules/               inform.yaml（20 条）+ chains.yaml（3 条）
 ├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml / cordis.patch.notify.example.yml / cordis.patch.sidecar.example.yml
+├─ panel/               面板宿主半：只读路由 + 浏览器栅栏 + 载荷投影（protocol / status / route）
+├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
-├─ tests/               617 个用例（35 个文件）
+├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
+├─ tests/               638 个用例（38 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -652,8 +674,8 @@ plugins/dsh-safeharness/
 
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
-pnpm build            # tsc -> lib/
-pnpm test             # vitest：35 个文件 / 617 个用例（内部含黄金语料、sidecar 一致性与失败矩阵）。公开树 32 文件 / 599（596 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 31 文件 / 591（588 pass + 3 skip）
+pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
+pnpm test             # vitest：38 个文件 / 638 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 35 文件 / 620（617 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 34 文件 / 612（609 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -691,6 +713,8 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 17. **规则起草只是"草稿"**：模型给的正则可能过宽（误杀）也可能过窄（漏检），插件只保证"结构与语法能过 loader 门"，不保证语义正确。`1.1.1` 起会对**明显过窄的形状**（纯字面量、短于 12 字符、单词元、chain 字面工具名）给出 `warnings`，但那仍然只是形状判断，最终要靠人看。起草需要一条可用的辅助路由（默认复用 judge 路由）；路由不可用时工具返回 `unavailable`，不会退回本地启发式，也不会静默生成一条看起来能用的规则。
 18. **Python sidecar 是可选增强，不是默认路径**：需要本机 Python 与 `src/safeharness` 可 import；只接管输入面，不接管 `tools.guard`（同步无 IO 约束）。规则热更新后到子进程确认前的输入会被拒绝（hardened）或回落内置引擎（observe/balanced）。它刻意不做 Python `InformPolicy` 的 NFKC/零宽清理，以保持与内置引擎判定一致；不做这一点是**显式取舍**，见 §4.4。子进程超时只让当次请求失败、不会自动重启；连续超时会让输入面持续降级，此时应看 `safeharness_status.engine` 与姿态 code。
 19. **设置页只显示"显式覆盖"，不显示 preset 展开值**：DSH 设置页的表单值来自 profile patch 的 `config`（以及 schema 默认值）。本插件的预设展开在 `resolveConfig` 里完成，schema 刻意没有默认值（否则会废掉预设，R37），所以 `balanced` 下输入框里 `input.mode` 会是空的，而实际运行值是 `enforce`。改任一字段只会写该字段的覆盖值，不会把 preset 固化下来；这正是"preset 仍可整体切换"的前提。
+
+20. **面板是"可选 UI"，不是第二个真相源**：数字来自进程内计数与账本尾部——账本轮转后"最近拦截"只显示当前文件里的记录；面板不做写操作，也不替代 `safeharness_status` 工具。样式为内联样式（本包在 DSH 单仓之外构建，拿不到它的 CSS Modules 预设），因此不跟随宿主主题 token 的细微变化。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。
 
 ---
 

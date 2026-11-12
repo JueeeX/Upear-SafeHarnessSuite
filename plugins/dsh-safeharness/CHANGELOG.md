@@ -1,6 +1,18 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.3.0 — 2026-11-12
+
+新增功能（T5.3 第一步）：**桌面端只读状态面板**。设置 → 内置插件 → `SafeHarness` 标签页显示版本/预设、拦截与放行计数、五个面的判定模式、规则集与账本健康、最近 10 条拦截。这是计划里最后一个未开始的功能项（P4/T5.3）的第一个可用切片。
+
+- **宿主半**（`src/panel/`）：`apply()` 检测到 `webServer` 后注册 `/safeharness` 前缀只读路由（`POST /safeharness/status`），返回固定投影（计数/模式/规则 hash 前缀/账本计数/最近拦截的 `ts`+`kind`+`reason_code`+`tool`+规则数）。注册结果写一条 `invariant_probe`（`labels.state = route_registered` / `web_server_unavailable` / `route_failed`），"面板为什么没出现"可直接查账本。
+- **浏览器半**（`src/client/`）：预构建的 `lib/client.js`（CJS 闭包工厂，唯一副作用 `window.__ModuleLoader__.load({id, factory})`）；package.json 加 `dsh.client`（`platform: web`）与 `exports["./client"]`。组件只用平台 seed 的 `react`，通过 `ctx.slots.inject('settings.plugins.tab', …)` 注册标签页（等待声明，不假设宿主一定有该槽）。
+- **构建**：新增 `scripts/build-client.mjs`（esbuild → `lib/client.js`）、`scripts/platform-modules.mjs`（浏览器模块表的 10 个 seed 说明符，作为外部依赖白名单）、`tsconfig.client.json`（DOM + `react-jsx`，`noEmit` 类型检查）；`pnpm build` / `pnpm typecheck` / `prepack` 都已包含浏览器半。devDependencies 加 `esbuild`、`@types/react`（仍是 `dependencies: {}`，运行时零依赖）。
+- **安全口径**：路由只接受 loopback Host + 同源 Origin（跨站标记直接拒），与宿主 `/api` 的浏览器栅栏同义；插件不读 `trustedHosts`，不会从 LAN 暴露。响应不含 prompt/工具参数/模型输出/webhook/凭据；内部异常只回 `panel_failed`。面板不可用时插件照常加载。
+- **测试**：新增 `tests/panel.test.ts`（5 例：载荷投影、deny 过滤与 limit、账本故障降级、引擎事实默认值、JSON 可序列化）、`tests/panel-route.test.ts`（10 例：栅栏四种拒绝、方法、未知端点、内部错误不回显、注册结果入账）、`tests/client-bundle.test.ts`（6 例：manifest、闭包工厂形状、只 require 平台模块、materialize 后注册标签页、载荷解包、失败上抛）。全套 **38 文件 / 638 用例**（公开树 35 / 620；CI 34 / 612）。
+- **真实宿主验证**（0.2.2 桌面同源 Web 壳，`dsh web`，独立 profile + 独立账本）：启动图包含 `@upear/dsh-safeharness` 行；设置 → 内置插件出现 `SafeHarness` 标签页，显示 `v1.3.0`、`balanced`、计数与账本 3 条；在会话里发一条注入话术被输入面拒绝（**无模型调用**）后，面板"最近拦截"出现 `input_denied / input_rule_hit / 规则数 1`。
+- 已知取舍：面板只读、无巡检触发按钮（`safeharness_patrol` 仍是工具/命令）；样式为内联样式（不跟随宿主主题 token）；仅 Web profile 有面板。
+- 未验证：桌面端（Electron 内嵌窗口）里的同一标签页（与本次验证的 Web 壳同 bundle，但需用户升级后确认）；真实 IM 投递与人工审批仍是前几版遗留。
 ## 1.2.2 — 2026-11-12
 
 修复（R42）：**写文档时引用一条破坏性 SQL 会被当成"在执行 SQL"而拒绝**。这是检测范围问题，不是检测能力问题。

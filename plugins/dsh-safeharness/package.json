@@ -1,6 +1,6 @@
 {
     "name":  "@upear/dsh-safeharness",
-    "version":  "1.2.2",
+    "version":  "1.3.0",
     "description":  "Agent security suite for DeepSeek Harness: input/tool/output guards, evidence ledger, posture and patrol.",
     "keywords":  [
                      "deepseek-harness",
@@ -33,8 +33,20 @@
                                         "types":  "./lib/types/invariant.d.ts",
                                         "default":  "./lib/invariant.js"
                                     },
+                    "./client":  {
+                                     "default":  "./lib/client.js"
+                                 },
                     "./package.json":  "./package.json"
                 },
+    "dsh":  {
+                "client":  {
+                               "platform":  "web",
+                               "inject":  [
+                                              "@deepseek-ai/dsh-client-runtime",
+                                              "@deepseek-ai/dsh-client-connection"
+                                          ]
+                           }
+            },
     "files":  [
                   "lib",
                   "rules",
@@ -111,6 +123,8 @@
                             "@deepseek-ai/dsh-tools":  "0.2.2-rc.1",
                             "@deepseek-ai/dsh-user-approval":  "0.2.2-rc.1",
                             "@types/node":  "^24.10.1",
+                            "@types/react":  "^19.2.2",
+                            "esbuild":  "^0.28.2",
                             "typescript":  "^5.9.3",
                             "vitest":  "^3.2.7"
                         },
@@ -120,13 +134,14 @@
                                            ]
              },
     "scripts":  {
-                    "build":  "tsc -p tsconfig.json",
+                    "build":  "tsc -p tsconfig.json \u0026\u0026 tsc -p tsconfig.client.json \u0026\u0026 node scripts/build-client.mjs",
+                    "build:client":  "node scripts/build-client.mjs",
                     "clean":  "node scripts/clean.mjs",
                     "test":  "vitest run",
                     "test:watch":  "vitest",
                     "test:golden":  "vitest run tests/golden.test.ts",
-                    "typecheck":  "tsc -p tsconfig.json --noEmit",
+                    "typecheck":  "tsc -p tsconfig.json --noEmit \u0026\u0026 tsc -p tsconfig.client.json",
                     "link:dsh":  "node scripts/link-dsh.mjs",
-                    "prepack":  "node scripts/clean.mjs \u0026\u0026 tsc -p tsconfig.json"
+                    "prepack":  "node scripts/clean.mjs \u0026\u0026 tsc -p tsconfig.json \u0026\u0026 tsc -p tsconfig.client.json \u0026\u0026 node scripts/build-client.mjs"
                 }
 }
