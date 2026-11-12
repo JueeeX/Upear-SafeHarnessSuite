@@ -49,9 +49,9 @@ function stubRuntime(options: { stateThrows?: boolean } = {}): Runtime {
       stats: { enabled: true, writable: true, records: 1, failures: 0, lastWriteAt: 5 },
       query: async () => [],
     },
-    get state(): { size: number } {
+    get state(): { size: number; list: () => unknown[] } {
       if (options.stateThrows === true) throw new Error('state exploded')
-      return { size: 0 }
+      return { size: 0, list: () => [] }
     },
     counters: { allow: 0, warn: 0, deny: 0, ask: 0, auditBlocked: 0, internalErrors: 0 },
     internalError: () => undefined,

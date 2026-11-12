@@ -20,7 +20,7 @@ import { foundSomething, RESULT_BLOCK_TEXT, TOOL_DENIAL_TEXT } from '../runtime.
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { contentDigest } from '../util/hash.js'
 import { matchNamePattern } from '../engine/tool.js'
-import { agentIdOf, argsByteLength, callIdOf, sessionIdOf, toolResultViewOf, toolViewOf } from './context.js'
+import { agentIdOf, argsByteLength, callIdOf, sessionCreatedAtOf, sessionIdOf, sessionWorkspaceOf, toolResultViewOf, toolViewOf } from './context.js'
 
 /** Maximum number of in-flight call start times we keep (defensive bound). */
 const MAX_INFLIGHT = 1024
@@ -67,6 +67,10 @@ export function installToolHooks(ctx: Context, runtime: Runtime): void {
     markStart(exec)
     const sessionId = sessionIdOf(exec.agent)
     const agentId = agentIdOf(exec.agent)
+    runtime.state.describe(sessionId, {
+      workspace: sessionWorkspaceOf(exec.agent),
+      createdAt: sessionCreatedAtOf(exec.agent),
+    })
 
     try {
       const view = toolViewOf(exec, runtime.config, ctx.tools)

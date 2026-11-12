@@ -69,4 +69,34 @@ describe('SessionStateStore', () => {
     const state = store.of(undefined)
     expect(state.sessionId).toBe('unknown')
   })
+
+  it('describes a session once and lists newest-first without mutating order', () => {
+    const store = new SessionStateStore()
+    store.describe('s1', { workspace: 'F:\\AgentSecurity\\Upear', createdAt: 1_759_000_000_000 })
+    store.count('s1', 'deny')
+    store.recordToolCall('s1', view('pwsh'))
+    store.describe('s1', { workspace: 'should-not-overwrite' })
+    const page = store.list()
+    expect(page).toEqual([{
+      sessionId: 's1',
+      workspace: 'F:\\AgentSecurity\\Upear',
+      createdAt: 1_759_000_000_000,
+      touchedAt: expect.any(Number),
+      totalCalls: 1,
+      counters: { allow: 0, deny: 1, ask: 0, warn: 0 },
+    }])
+    // A no-op describe must not invent an entry.
+    store.describe(undefined, {})
+    expect(store.size).toBe(1)
+  })
+
+  it('bounds the listed session page and keeps a bad limit usable', () => {
+    const store = new SessionStateStore()
+    for (let index = 0; index < 5; index += 1) store.of(`s${index}`)
+    expect(store.list(2)).toHaveLength(2)
+    // A non-positive or unsafe limit falls back to the default page size.
+    expect(store.list(0)).toHaveLength(5)
+    expect(store.list(Number.NaN)).toHaveLength(5)
+    expect(store.list(50)).toHaveLength(5)
+  })
 })
