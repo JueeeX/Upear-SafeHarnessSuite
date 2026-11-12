@@ -15,8 +15,25 @@
  * @module
  */
 import type { ReactNode } from 'react'
-import { PANEL_CHANNEL, PANEL_PATROL_ENDPOINT, PANEL_STATUS_ENDPOINT } from '../panel/protocol.js'
-import type { PanelPatrolReport, PanelPatrolResult, PanelPayload, PanelResult } from '../panel/protocol.js'
+import {
+  PANEL_CHANNEL,
+  PANEL_DRAFT_ENDPOINT,
+  PANEL_PATROL_ENDPOINT,
+  PANEL_RELOAD_ENDPOINT,
+  PANEL_SCHEDULE_ENDPOINT,
+  PANEL_STATUS_ENDPOINT,
+} from '../panel/protocol.js'
+import type {
+  PanelDraftResult,
+  PanelDraftValue,
+  PanelPatrolReport,
+  PanelPatrolResult,
+  PanelPayload,
+  PanelReloadResult,
+  PanelResult,
+  PanelSchedule,
+  PanelScheduleResult,
+} from '../panel/protocol.js'
 import { SafeHarnessPanel } from './panel.js'
 
 /** The slice of the browser plugin context this half uses. */
@@ -39,6 +56,12 @@ export interface PanelFace {
   readonly load: () => Promise<PanelPayload>
   /** Run one patrol on the Host (POST; the Host enforces single-flight + cooldown). */
   readonly patrol: () => Promise<PanelPatrolReport>
+  /** Ask the drafting route for one candidate rule (never applied). */
+  readonly draft: (input: { readonly description: string; readonly kind: 'inform' | 'chain' }) => Promise<PanelDraftValue>
+  /** Arm/disarm the optional patrol timer. */
+  readonly schedule: (input: { readonly enabled: boolean; readonly intervalMinutes: number | null }) => Promise<PanelSchedule>
+  /** Re-read the rule directory without restarting the host. */
+  readonly reloadRules: () => Promise<{ readonly rules: number; readonly chains: number; readonly hash: string }>
 }
 
 /** Slot this tab is contributed to (owned by the plugins settings section). */
@@ -47,6 +70,14 @@ const TAB_SLOT = 'settings.plugins.tab'
 /** Services this plugin needs from the browser context. */
 export const inject = ['slots']
 
+/** Any envelope the panel endpoints answer with. */
+type Envelope =
+  | PanelResult
+  | PanelPatrolResult
+  | PanelDraftResult
+  | PanelScheduleResult
+  | PanelReloadResult
+
 /**
  * POST one panel endpoint and unwrap its envelope.
  *
@@ -54,17 +85,18 @@ export const inject = ['slots']
  * + Origin checks, and the session cookie rides along.
  *
  * @param endpoint - channel-relative endpoint name.
+ * @param body - small JSON body (never content; the route caps it).
  * @returns the envelope's `value` on success.
  */
-async function call(endpoint: string): Promise<unknown> {
+async function call(endpoint: string, body: unknown = {}): Promise<unknown> {
   const response = await fetch(`${PANEL_CHANNEL}/${endpoint}`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error(`panel_http_${response.status}`)
-  const result = (await response.json()) as PanelResult | PanelPatrolResult
+  const result = (await response.json()) as Envelope
   if (!result.ok) throw new Error(result.error.code)
   return result.value
 }
@@ -77,6 +109,9 @@ export function apply(ctx: ClientContextLike): void {
   const face: PanelFace = {
     load: async () => (await call(PANEL_STATUS_ENDPOINT)) as PanelPayload,
     patrol: async () => (await call(PANEL_PATROL_ENDPOINT)) as PanelPatrolReport,
+    draft: async (input) => (await call(PANEL_DRAFT_ENDPOINT, input)) as PanelDraftValue,
+    schedule: async (input) => (await call(PANEL_SCHEDULE_ENDPOINT, input)) as PanelSchedule,
+    reloadRules: async () => (await call(PANEL_RELOAD_ENDPOINT)) as { rules: number; chains: number; hash: string },
   }
   ctx.slots.inject(TAB_SLOT, () => ctx.slots.register({
     name: TAB_SLOT,

@@ -21,7 +21,7 @@ import { createSidecarEngine, type SidecarEngine } from './engine/sidecar-engine
 import { Sidecar, SidecarError } from './engine/sidecar.js'
 import type { RuleSet } from './engine/types.js'
 import { tryLoadRuleSet } from './engine/rules.js'
-import { resolveLedgerDir } from './audit/paths.js'
+import { resolveLedgerDir, resolvePanelStatePath } from './audit/paths.js'
 import { createLedger } from './audit/ledger.js'
 import { Config, resolveConfig, type SafeHarnessConfig, type ResolvedConfig } from './config.js'
 import { createRuntime, type LoggerLike, type Runtime } from './runtime.js'
@@ -35,6 +35,8 @@ import { statusTool, postureTool, auditQueryTool, patrolTool, draftRuleTool } fr
 import { registerPromptSection } from './surface/prompt.js'
 import { safeharnessCommand, JUDGE_PROBE_TEXT, type JudgeCommandTarget, type DraftCommandTarget } from './surface/commands.js'
 import { registerPanelRoute } from './panel/route.js'
+import { createPatrolRunner } from './panel/patrol-runner.js'
+import { createPatrolScheduler } from './panel/schedule.js'
 import { SAFEHARNESS_SERVICE, type HookFlags, type PluginHandle, type SafeHarnessService } from './service.js'
 import { sha256Hex } from './util/hash.js'
 import { VERSION } from './version.js'
@@ -648,7 +650,53 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   // private Connection RPC channel. Only profiles that compose the `connection`
   // service (the Web GUI bundle does; headless profiles do not) get a channel,
   // and the browser tab tolerates the channel being absent on its own.
-  registerPanelRoute(ctx, { runtime, startedAt, logger, facts: { engine: engineFact }, patrol })
+  // The panel's actions share one patrol gate; the optional timer is a thin
+  // wrapper around the same runner, so a click and a tick can never overlap.
+  const patrolRunner = createPatrolRunner(patrol)
+  const schedule = createPatrolScheduler({
+    run: async () => {
+      const outcome = await patrolRunner.runScheduled()
+      if (!outcome.ok) logger.warn(`safeharness: scheduled patrol skipped (${outcome.code})`)
+    },
+    statePath: resolvePanelStatePath(),
+    logger,
+  })
+  ctx.effect(() => () => { schedule.dispose() }, 'safeharness: panel schedule')
+  const reloadRulesForPanel = (): { rules: number; chains: number; hash: string } => {
+    const reloaded = tryLoadRuleSet(rulesOptions)
+    if (!reloaded.ok) throw new Error(reloaded.error.problems.join('; ').slice(0, 200))
+    runtime.engine.reloadRules(reloaded.ruleset)
+    runtime.audit('rules_reloaded', {
+      decision: 'ok',
+      reason_code: 'panel_reload',
+      labels: { source: 'panel' },
+      metrics: { rules: reloaded.ruleset.ruleCount, chains: reloaded.ruleset.chainCount },
+    })
+    return {
+      rules: reloaded.ruleset.ruleCount,
+      chains: reloaded.ruleset.chainCount,
+      hash: reloaded.ruleset.hash.slice(0, 12),
+    }
+  }
+  registerPanelRoute(ctx, {
+    runtime,
+    startedAt,
+    logger,
+    facts: {
+      engine: engineFact,
+      rulesDir: () => runtime.config.rules.dir,
+      draft: () => ({ enabled: runtime.config.draft.enabled, maxChars: runtime.config.draft.maxChars }),
+      schedule: () => schedule.snapshot(),
+    },
+    patrolRunner,
+    draft: input => drafter.draft(input, {
+      timeoutMs: runtime.config.draft.timeoutMs,
+      maxChars: runtime.config.draft.maxChars,
+      maxTokens: runtime.config.draft.maxTokens,
+    }),
+    schedule,
+    reloadRules: reloadRulesForPanel,
+  })
   // 11) Rule-file watch (failures keep the previous rule set, never half-apply).
   if (cfg.rules.watch) {
     const dir = cfg.rules.dir.length > 0 ? resolve(cfg.rules.dir) : packagedRulesDir()

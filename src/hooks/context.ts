@@ -94,6 +94,36 @@ export function sessionCreatedAtOf(agent: SessionHeaderLike | undefined): number
   return firstNumber(agent?.session?.header?.createdAt, agent?.session?.meta?.createdAt)
 }
 
+/** Structural slice of the host's title service (0.2.2 `sessionTitle`). */
+export interface SessionTitleServiceLike {
+  get?: (session: unknown) => { readonly title?: unknown } | undefined
+}
+
+/**
+ * Latest session title the host's title service reports, when available.
+ *
+ * A title is session metadata (an explicit user rename, or a title-provider
+ * suggestion) that the panel shows so operators can pick a conversation by
+ * name instead of a UUID. It is captured structurally and defensively: a host
+ * without the service, a disposed service, or a session that is not live all
+ * degrade to `undefined` rather than failing the hook.
+ */
+export function sessionTitleOf(
+  ctx: { get(name: string): unknown },
+  agent: { session?: unknown } | undefined,
+): string | undefined {
+  try {
+    const service = ctx.get('sessionTitle') as SessionTitleServiceLike | undefined
+    if (service === undefined || typeof service.get !== 'function') return undefined
+    const title = service.get(agent?.session)?.title
+    if (typeof title !== 'string') return undefined
+    const trimmed = title.trim()
+    return trimmed.length === 0 ? undefined : trimmed.slice(0, 100)
+  } catch {
+    return undefined
+  }
+}
+
 /** Call id of a tool execution as a plain string. */
 export function callIdOf(exec: { callId?: unknown }): string | undefined {
   const id = exec.callId

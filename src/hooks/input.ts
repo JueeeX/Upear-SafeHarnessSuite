@@ -19,7 +19,7 @@ import { SidecarError } from '../engine/sidecar.js'
 import type { Decision } from '../engine/types.js'
 import { ReasonCode } from '../engine/types.js'
 import { foundSomething, type Runtime } from '../runtime.js'
-import { agentIdOf, sessionCreatedAtOf, sessionIdOf, sessionWorkspaceOf, userInputText } from './context.js'
+import { agentIdOf, sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf, userInputText } from './context.js'
 
 /** Decision used when the hardened preset cannot get input judged at all. */
 const ENGINE_UNAVAILABLE_DECISION: Decision = {
@@ -87,6 +87,7 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
     runtime.state.describe(sessionId, {
       workspace: sessionWorkspaceOf(payload.agent),
       createdAt: sessionCreatedAtOf(payload.agent),
+      title: sessionTitleOf(ctx, payload.agent),
     })
 
     // Turn accounting for the advisory budget guard (T3.5): `agent/pre-step` is the

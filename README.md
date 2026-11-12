@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.5.0` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.6.0` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -66,7 +66,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 | `approval/request` | 审批桥粗粒度判定：`allowOnce` 一次性授予 → 复用 deny 列表 → 其余 delegate；`delegate` 也写审计对，供巡检对账 | 授予 / 拒绝 / 委托 |
 | 系统提示词 | 在工具引导区（`order: 190`）注入 ≤300 字符的部署约束条款，**不含**规则正文、数量、阈值 | — |
 | 只读工具 / 命令 | 4 个 `safeharness_*` 工具 + `/safeharness` 命令，供模型与操作者自查 | — |
-| Web 面板（1.3.0 起，1.5.0 增强） | 设置 → 内置插件 → `SafeHarness` 标签页：版本/预设、拦截与放行计数（本进程）、按会话与原因展开的拦截/审批/告警事件卡片（含工具、原因、严重度、规则、项目与会话 id、时间，带红/橙/紫/绿配色与筛选）、会话列表、五个面的判定模式、规则集与账本健康、账本文件路径；1.4.0 起可**运行一次巡检**（两步确认、单飞 + 5 秒冷却）。不触发模型；数据走宿主 `webServer` 上的私有路由（loopback + 同源栅栏）。见 §4.7 | — |
+| Web 面板（1.3.0 起，1.6.0 工作台） | 设置 → 内置插件 → `SafeHarness` 标签页，四个标签：**概览**（本进程计数、防护面胶囊、会话列表、规则/账本）、**事件**（工作区/对话标题/类别/结论四个下拉筛选 + 20 条分页 + 红橙紫绿卡片）、**规则**（规则与链清单、搜索、AI 起草、重新加载规则）、**巡检**（手动两步确认 + 5–1440 分钟定时）。标题来自宿主 `sessionTitle` 服务，只用于显示。动作全部 POST-only、有单飞/冷却/body 上限；数据走宿主 `webServer` 私有路由（loopback + 同源栅栏）。见 §4.7 | — |
 | 姿态 / 巡检 | 加载时姿态门禁（可配 `failOn`）、5 项外部巡检与退出码（0/1/2）、可选多通道通知（飞书 / 钉钉 / 企业微信 / OneBot / 通用 webhook） | 拒绝加载 / FAIL |
 | 预算 | 每轮 `input+output` token 累计，越限只记一条 `budget_exceeded`（不拦截） | — |
 
@@ -122,11 +122,11 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # 651 个用例（38 个文件）
+pnpm test             # 670 个用例（40 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.5.0.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.6.0.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -140,7 +140,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.5.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.6.0.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -189,7 +189,7 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 # 3) 用一条明显的注入话术试输入防线（balanced/hardened 应被拒）
 ```
 
-> `1.2.2` 已在桌面端（DSH 桌面应用，宿主包走 app-bundle `0.2.2-rc.1`）实测：`safeharness_status` 返回 `version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`；`safeharness_posture` 无 FAIL。`1.3.0`/`1.4.0`/`1.5.0` 的面板在同一个 0.2.2 Web 壳里实测：设置 → 内置插件出现 `SafeHarness` 标签页与实时计数；1.5.0 的卡片视图按 `tool_denied` / `tool_result_flagged` / `input_denied` 分别着色并显示工具、原因、严重度、规则、项目与会话 id；1.4.0 的巡检按钮跑出 5 项检查并回写 `patrol_report`（详见 §4.7）。桌面升级方式见 §3.6 与仓库外脚本 `install-safeharness-desktop.cmd`。
+> `1.2.2` 已在桌面端（DSH 桌面应用，宿主包走 app-bundle `0.2.2-rc.1`）实测：`safeharness_status` 返回 `version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`；`safeharness_posture` 无 FAIL。`1.3.0`–`1.6.0` 的面板在同一个 0.2.2 Web 壳里实测：设置 → 内置插件出现 `SafeHarness` 标签页；1.5.0 的事件卡片按结论着色并显示工具/原因/严重度/规则/项目/会话；1.6.0 的四标签、对话标题下拉、规则清单、AI 起草（真实调用 `liao/gpt-6-luna` 产出 `curl_script_to_shell`）与定时巡检（5 分钟、状态落盘）均实测通过；1.4.0 的巡检按钮跑出 5 项检查并回写 `patrol_report`（详见 §4.7）。桌面升级方式见 §3.6 与仓库外脚本 `install-safeharness-desktop.cmd`。
 
 ### 3.6 升级与卸载
 
@@ -487,36 +487,33 @@ DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configur
 
 ---
 
-### 4.7 桌面端面板（1.3.0 起，T5.3；1.5.0 信息增强）
+### 4.7 桌面端面板（1.3.0 起，T5.3；1.6.0 工作台）
 
-设置 → **内置插件** 里会多出一个 `SafeHarness` 标签页：版本与预设、拦截/告警/审批/放行计数（本进程）、**按会话与原因展开的事件卡片**、会话列表、五个面的判定模式、规则集与账本健康、账本文件路径，以及"运行巡检"（1.4.0 起）。**只读**——唯一动作是巡检，不触发模型调用。
+设置 → **内置插件** → `SafeHarness` 标签页。1.6.0 起是四个标签的工作台：**概览 / 事件 / 规则 / 巡检**。它是只读视图；四个动作（巡检、定时、起草、重新加载规则）都有宿主侧闸门（POST-only、单飞/冷却、body 上限）。
 
-**事件卡片（1.5.0）**：每条事件回答四个问题——谁（项目目录 + 短会话 id + 时刻）、哪一面（输入 / 工具 / 工具结果 / 审批 / 预算 / 巡检 / 姿态）、拦了什么（工具名）、为什么（`reason_code` 的中文解释 + 严重度 + 规则 id）。左侧色条与徽标按结论着色：拦截/失败红、告警橙、审批紫、放行绿。参数只显示 sha256 前 8 位；规则只显示 id，永不显示规则文本或匹配内容。顶部四个筛选（全部 / 拦截 / 审批 / 告警）带计数，点会话行或卡片里的会话按钮只看该会话。
+**概览**：本进程的拦截/告警/审批/放行计数、五个防护面的彩色胶囊（强制/仅告警/透传/关闭）、会话列表（标题 + 短 id + 创建/最近 + 各计数，点一行跳到事件并按该会话过滤）、规则与账本（hash、记录数、绝对路径、引擎）。
 
-**会话与"哪个对话"**：`agent/pre-step`、`tools/pre-execute`、`approval/request` 三个接缝把 `agent.session.header.cwd` / `createdAt`（会话元数据，不是对话内容）记进插件状态；面板显示"项目名 + 短 id + 创建/最近活动时间 + 各计数"。短 id 是账本 `session` 字段（`session-<uuid>`）的前 8 位，可直接和 `/safeharness audit` 对账。**不显示会话标题**：标题是模型生成的文本，账本不存，面板也不去读会话日志——那会破坏"账本与面板只含代码/哈希/元数据"的边界。
+**事件**：四个下拉筛选——工作区、对话（**标题**优先，取不到用"项目 · 短 id"）、类别（输入/工具/工具结果/审批/预算/输出/巡检/姿态/内部错误/其他）、结论（全部/拦截/审批/告警/失败，带计数）。默认 20 条一页 + "显示更多"，不再无限堆叠。卡片按结论着色（拦截/失败红、告警橙、审批紫、放行绿），含工具、原因中文解释、严重度、规则 id、参数 sha256 前 8 位、项目、标题/短 id、时刻。**会话标题来自宿主 `sessionTitle` 服务（用户重命名或标题提供方建议），只用于显示，不进账本、不进模型上下文**；取不到就回落项目 + 短 id，不读会话日志。
 
-**计数口径**：四个指标是**本进程**计数（重启归零）；事件列表和"账本最近 N 条"是账本窗口（跨重启保留）。两者可能不相等，面板分别标注（"本进程 / 账本最近 N 条"），不做归一。
+**规则**：列出编译后的规则与链（名称/类别/严重度/来源/模式原文/本事件窗口命中数），可搜索。**AI 起草**（`POST /safeharness/draft`）：输入一句描述 → 调辅助模型返回经 loader 门校验的 YAML + 形状 warnings，**不写入、不启用**；复制 YAML 放进 rules 目录后点**重新加载规则**（`POST /safeharness/reload-rules`，失败保留旧规则集并写日志）。面板不直接改规则文件或 profile 配置。
 
-数据通路分两段：
+**巡检**：手动巡检两步确认；**定时巡检**可设 5–1440 分钟，状态写到插件自己的 `$DSH_HOME/safeharness/panel-state.json`（重启恢复；写失败降级 memory-only 并在面板标注）。调度器在宿主进程内，随插件卸载停止；手动与定时共享单飞，冷却只作用于手动点击。每次运行照旧写 `patrol_report`、按配置发通知。
 
-1. **宿主半**（`src/panel/`）：`apply()` 检测到 `webServer` 服务后，在 `/safeharness` 前缀注册一个只读路由（`POST /safeharness/status`）。注册结果写一条 `invariant_probe`（`labels.state = route_registered` / `web_server_unavailable` / `route_failed`），所以"面板为什么没出现"可以直接查账本。
-2. **浏览器半**（`src/client/`）：本包带一个**预构建**的 `lib/client.js`（CJS 闭包工厂，唯一副作用是 `window.__ModuleLoader__.load({id, factory})`）。DSH 的 client-module 注册表扫描 profile 的 Loader entry，按 package.json 的 `dsh.client` 把它编入启动图并从 `/plugins/??<id>/client.js` 一类的批处理 URL 提供；组件只用平台 seed 的 `react`，通过 `ctx.slots.inject('settings.plugins.tab', …)` 注册标签页——等待槽声明，而不是假设宿主一定有它。
+数据通路（两段）：
+
+1. **宿主半**（`src/panel/`）：`apply()` 检测到 `webServer` 后，在 `/safeharness` 前缀注册路由（`status` / `patrol` / `draft` / `schedule` / `reload-rules`）。注册结果写一条 `invariant_probe`（`labels.state = route_registered` / `web_server_unavailable` / `route_failed`），"面板为什么没出现"可直接查账本。
+2. **浏览器半**（`src/client/`）：预构建的 `lib/client.js`（CJS 闭包工厂，唯一副作用是 `window.__ModuleLoader__.load({id, factory})`）。组件只用平台 seed 的 `react`，通过 `ctx.slots.inject('settings.plugins.tab', …)` 注册标签页——等待槽声明，不假设宿主一定有它。
 
 安全口径：
 
-- 路由只接受 **loopback Host + 同源 Origin**（带跨站标记直接拒），与宿主 `/api` 的浏览器栅栏同义；插件不读 `trustedHosts`，因此**不会**从 LAN 暴露。
-- 响应是固定投影：版本、预设、计数、模式、规则 hash 前缀、账本计数与路径，以及事件（`ts` / `kind` / `decision` / `reason_code` / `tool` / `severity` / `category` / 规则 id / 规则数 / 参数 sha256 前 8 位 / 短会话 id / 项目目录）和会话摘要（短 id / 项目 / 创建与最近活动时间 / 各计数 / 工具调用数）。不含 prompt、工具参数原文、模型输出、webhook 或凭据；内部异常只返回 `panel_failed`。
+- 所有端点只接受 **loopback Host + 同源 Origin**（带跨站标记直接拒），与宿主 `/api` 的浏览器栅栏同义；插件不读 `trustedHosts`，因此**不会**从 LAN 暴露。
+- 响应是固定投影：事件（`ts`/`kind`/`decision`/`reason_code`/`tool`/`severity`/`category`/规则 id/参数 hash 前缀/短会话 id/项目/标题）、会话摘要、规则清单（操作者自己写的模式）、定时状态。不含 prompt、工具参数原文、模型输出、webhook 或凭据；内部异常只返回 `panel_failed` / `draft_failed` / `schedule_*` / `reload_failed`，不回显堆栈或消息。
+- 所有动作 POST-only 且 body ≤ 16 KiB；起草描述 ≤ 2000 字；定时间隔必须是 5–1440 的整数；起草单飞；巡检单飞 + 手动冷却。
 - 面板不可用（headless profile 没有 `webServer`，或浏览器半未构建）时插件照常加载，不抛错。
 
-**巡检触发（1.4.0，1.5.0 未改动）**：面板里有一个"巡检"区块，按钮是**两步确认**（先"运行巡检"，再"确认运行"）。宿主侧有第二道闸：`POST /safeharness/patrol` 单飞（同时只跑一次）+ 5 秒冷却（`PANEL_PATROL_COOLDOWN_MS`），因为同一个同源脚本也可能直接打这个端点。一次巡检会：
+**与 DSH 自带 UI 的边界（常见混淆）**：会话里的工具卡片（参数 / 结果 / Schema / 计时）是 **DSH 自带** 的渲染；卡片里"该操作不被平台安全策略允许。请改用其他方式，或联系管理员。"是本插件的**通用拒绝措辞**（§6.4，故意不回显具体规则或参数）。要确认是谁拦的，看账本里那条 `tool_denied`（`reason_code`、`rule_ids`、`session`）或面板事件卡片，而不是看卡片外观。
 
-1. 写一条 `patrol_report` 记录（账本因此多一行，面板刷新后账本条数会 +1）；
-2. 在配置了 `patrol.notify` 时发一条 `Upear SafeHarness: N FAIL / M WARN` 摘要（与定时巡检同一路径）；
-3. 把 5 项检查的 code/severity/detail 原样回给面板（这些本来就只含代码与计数，不含 URL/凭据/阈值）。
-
-返回的 `exitCode` 与 `/safeharness patrol` 命令同义（0 干净 / 1 有 FAIL / 2 巡检自身出错）。`GET` 请求会被拒（`method_not_allowed`），导航或 `<img>` 之类的请求无法触发它。
-
-构建与验证：`pnpm build:client` 产出 `lib/client.js`（`pnpm build` 会一并执行）。`tests/client-bundle.test.ts` 锁定"闭包工厂形状 + 只 require 平台模块 + 能注册出标签页 + 巡检请求"，`tests/panel.test.ts` 锁定载荷投影（事件过滤、窗口截断、会话短 id 与工作目录、账本/状态存储故障降级），`tests/panel-route.test.ts` 锁定栅栏、状态包络与巡检的 POST/单飞/冷却/投影。真实宿主验证：设置页出现 `SafeHarness` 标签页；一条 `tool_denied`（`pwsh` / `tool_denied_by_name` / `高`）与一条 `tool_result_flagged`（`read` / `严重` / `credential_assignment`）分别渲染成红/橙卡片，会话行显示项目与创建/最近时间，巡检按钮在 1.5.0 面板里仍跑出 5 项检查并回写 `patrol_report`。设置弹窗高度固定，内容较长时在弹窗内滚动。
+构建与验证：`pnpm build:client` 产出 `lib/client.js`（`pnpm build` 会一并执行）。`tests/client-bundle.test.ts` 锁定"闭包工厂形状 + 只 require 平台模块 + 能注册出标签页 + 动作请求"，`tests/panel.test.ts` 锁定载荷投影（事件/会话/标题/规则/定时），`tests/panel-route.test.ts` 锁定栅栏与每个端点的闸门，`tests/patrol-runner.test.ts` + `tests/schedule.test.ts` 锁定单飞/冷却/定时持久化。真实宿主验证（0.2.2 Web 壳）：标题出现在会话下拉；对话+类别筛选从 2 条收敛到 1 条；重新加载规则回 `20 条规则 · 3 条链`；AI 起草真实调用 `liao/gpt-6-luna` 产出 `curl_script_to_shell` 且切标签不丢；定时 5 分钟保存后 `panel-state.json` 为 `{"version":1,"enabled":true,"intervalMinutes":5}`；手动巡检 `FAIL 0 / OK 2 / SKIP 3`、退出码 0。设置弹窗高度固定，面板内容较长时在弹窗内滚动。
 
 ---
 ## 5. 预设与失败语义
@@ -670,7 +667,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               651 个用例（38 个文件）
+├─ tests/               670 个用例（40 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -689,7 +686,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：38 个文件 / 651 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 35 文件 / 633（630 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 34 文件 / 625（622 pass + 3 skip）
+pnpm test             # vitest：40 个文件 / 670 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 37 文件 / 652（649 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 36 文件 / 644（641 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -728,7 +725,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 18. **Python sidecar 是可选增强，不是默认路径**：需要本机 Python 与 `src/safeharness` 可 import；只接管输入面，不接管 `tools.guard`（同步无 IO 约束）。规则热更新后到子进程确认前的输入会被拒绝（hardened）或回落内置引擎（observe/balanced）。它刻意不做 Python `InformPolicy` 的 NFKC/零宽清理，以保持与内置引擎判定一致；不做这一点是**显式取舍**，见 §4.4。子进程超时只让当次请求失败、不会自动重启；连续超时会让输入面持续降级，此时应看 `safeharness_status.engine` 与姿态 code。
 19. **设置页只显示"显式覆盖"，不显示 preset 展开值**：DSH 设置页的表单值来自 profile patch 的 `config`（以及 schema 默认值）。本插件的预设展开在 `resolveConfig` 里完成，schema 刻意没有默认值（否则会废掉预设，R37），所以 `balanced` 下输入框里 `input.mode` 会是空的，而实际运行值是 `enforce`。改任一字段只会写该字段的覆盖值，不会把 preset 固化下来；这正是"preset 仍可整体切换"的前提。
 
-20. **面板是"可选 UI"，不是第二个真相源**：四个计数是**本进程**计数（重启归零），事件列表与会话列表来自账本尾部（跨重启保留）与进程内会话状态，两者在重启后可能对不上——面板分栏标注"本进程 / 账本最近 N 条"，不做归一。账本轮转后事件列表只显示当前文件里的记录。面板唯一动作是"运行巡检"（写一条 `patrol_report`、可能发通知），不做配置写入、不做账本导出、不做调度，也不替代 `safeharness_status` 工具。**不显示会话标题**：标题是模型生成文本，账本不存；面板用"项目 + 短会话 id + 创建/最近活动时间"标识对话。样式为内联样式（本包在 DSH 单仓之外构建，拿不到它的 CSS Modules 预设），配色用实心徽标而非主题 token，因此不跟随宿主主题的细微变化；设置弹窗高度固定，面板内容较长时在弹窗内滚动。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。
+20. **面板是"可选 UI + 有限动作"，不是第二个真相源**：四个计数是**本进程**计数（重启归零），事件/会话来自账本尾部与进程内状态，两者重启后可能对不上——面板分栏标注"本进程 / 账本最近 N 条"，不做归一；账本轮转后事件列表只显示当前文件里的记录。1.6.0 起面板有四个动作：运行巡检（写 `patrol_report`、可能通知）、定时巡检（5–1440 分钟，状态写 `$DSH_HOME/safeharness/panel-state.json`）、AI 起草（一次辅助模型调用，返回草稿，**不写入不启用**）、重新加载规则（重读 rules 目录，失败保留旧规则集）。它仍然**不写规则文件、不写 profile 配置、不做账本导出、不做通用调度**，也不替代 `safeharness_status` 工具。**会话标题来自宿主 `sessionTitle` 服务**（用户重命名或标题提供方建议），只用于面板显示，不进账本、不进模型上下文；取不到时回落"项目 + 短会话 id + 创建/最近时间"，面板不读会话日志。样式为内联样式（本包在 DSH 单仓之外构建，拿不到 CSS Modules 预设），配色用实心徽标而非主题 token；设置弹窗高度固定，面板内容较长时在弹窗内滚动。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。
 
 ---
 
