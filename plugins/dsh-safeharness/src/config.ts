@@ -194,10 +194,58 @@ function keepAbsent<S>(inner: S): S {
 }
 
 /**
+ * Cross-copy identity of a schemastery `.volatile()` reference.
+ *
+ * A volatile field resolves to a `Volatile<T>` box (cosmokit), not to `T`: the
+ * DSH settings surface updates that box in place when the profile patch changes,
+ * so a plugin that snapshots the box value on the next restart would go stale.
+ * The symbol is shared process-wide, so a duck-typed check needs no runtime
+ * dependency on cosmokit (this package does not import it).
+ */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+/** True for a schemastery volatile reference (a cosmokit `Volatile<T>`). */
+function isVolatileRef(value: unknown): value is { get: () => unknown } {
+  return value !== null && typeof value === 'object' && VOLATILE_WRITE in value
+}
+
+/**
+ * Deep-unwrap every volatile reference into its current plain value.
+ *
+ * The host validates a plugin entry through {@link Config}, so `apply()` receives
+ * `.volatile()` fields as boxes; every consumer in this package wants plain data.
+ * Callers that need live values read {@link Config} through the loader's
+ * `loader/volatile-update` event and call `applyHotConfig()` again.
+ *
+ * @param value - a resolved config value that may contain volatile references.
+ * @returns the same shape with every volatile reference replaced by `.get()`.
+ */
+export function unwrapVolatile(value: unknown): unknown {
+  if (isVolatileRef(value)) return unwrapVolatile(value.get())
+  if (Array.isArray(value)) return value.map((item) => unwrapVolatile(item))
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) out[key] = unwrapVolatile(item)
+    return out
+  }
+  return value
+}
+
+/**
  * Schemastery schema for the entry config. Deliberately defaultless: see the
  * module comment. `.description()` strings are what a configuration UI renders.
+ *
+ * Fields marked `.volatile()` are the subset the DSH settings page may edit live:
+ * values the plugin can apply without remounting its fiber. Everything else
+ * (preset, engine/rules/audit/rules paths, credential-bearing notification
+ * destinations) stays patch-only: a settings write to those remounts the entry,
+ * and a rejected value is rolled back by the host's configuration editor.
+ *
+ * The declared type stays the plain shape: `apply()` receives live boxes for the
+ * volatile fields but {@link resolveConfig} unwraps them before any consumer sees
+ * the value.
  */
-export const Config: z<SafeHarnessConfig> = z.object({
+export const Config = z.object({
   preset: z.union(['observe', 'balanced', 'hardened'] as const)
     .description('Deployment posture preset: observe / balanced / hardened.'),
   engine: z.object({
@@ -216,17 +264,17 @@ export const Config: z<SafeHarnessConfig> = z.object({
   }).description('Rule loading.'),
 
   input: z.object({
-    mode: z.union(['off', 'warn', 'enforce'] as const).description('Input guard mode.'),
-    maxChars: z.number().description('Truncate user text beyond this many characters.'),
+    mode: z.union(['off', 'warn', 'enforce'] as const).volatile().description('Input guard mode.'),
+    maxChars: z.number().min(1).volatile().description('Truncate user text beyond this many characters.'),
   }).description('Input guard (agent/pre-step).'),
 
   tools: z.object({
-    mode: z.union(['off', 'warn', 'enforce'] as const).description('Tool guard mode.'),
+    mode: z.union(['off', 'warn', 'enforce'] as const).volatile().description('Tool guard mode.'),
     denyTools: keepAbsent(z.array(z.string())).description('Tool name patterns always denied.'),
     askTools: keepAbsent(z.array(z.string())).description('Tool name patterns that require approval.'),
     denyTags: keepAbsent(z.array(z.string())).description('Semantic tags denied outright.'),
-    maxArgsBytes: z.number().description('Maximum serialized argument size in bytes.'),
-    trajectory: z.boolean().description('Track per-session tool sequence for chain rules.'),
+    maxArgsBytes: z.number().min(1).volatile().description('Maximum serialized argument size in bytes.'),
+    trajectory: z.boolean().volatile().description('Track per-session tool sequence for chain rules.'),
     tagOverrides: keepAbsent(z.array(z.object({
       pattern: z.string().description('Tool name glob.'),
       tags: keepAbsent(z.array(z.string())).description('Tags applied when the glob matches.'),
@@ -234,26 +282,26 @@ export const Config: z<SafeHarnessConfig> = z.object({
   }).description('Tool guard (pre-execute / guard).'),
 
   results: z.object({
-    mode: z.union(['off', 'warn', 'enforce'] as const).description('Tool result scan mode.'),
+    mode: z.union(['off', 'warn', 'enforce'] as const).volatile().description('Tool result scan mode.'),
     blockOn: keepAbsent(z.array(z.string())).description('Finding categories blocked in enforce mode.'),
   }).description('Tool result guard (post-execute).'),
 
   output: z.object({
-    mode: z.union(['off', 'warn', 'enforce-buffer'] as const).description('Output review mode.'),
-    bufferTimeoutMs: z.number().description('Wall-clock cap on buffering in enforce-buffer mode.'),
-    bufferMaxChars: z.number().description('Character cap on buffered output before degrading to warn.'),
+    mode: z.union(['off', 'warn', 'enforce-buffer'] as const).volatile().description('Output review mode.'),
+    bufferTimeoutMs: z.number().min(1).volatile().description('Wall-clock cap on buffering in enforce-buffer mode.'),
+    bufferMaxChars: z.number().min(1).volatile().description('Character cap on buffered output before degrading to warn.'),
     judge: z.object({
-      enabled: z.boolean().description('Enable the optional semantic judge.'),
-      scope: z.union(['flagged', 'always'] as const).description('Judge only structurally flagged output, or all output.'),
-      provider: z.string().description('Judge provider route.'),
-      model: z.string().description('Judge model id.'),
-      maxChars: z.number().description('Output characters fed to the judge.'),
-      timeoutMs: z.number().description('Judge deadline.'),
+      enabled: z.boolean().volatile().description('Enable the optional semantic judge.'),
+      scope: z.union(['flagged', 'always'] as const).volatile().description('Judge only structurally flagged output, or all output.'),
+      provider: z.string().volatile().description('Judge provider route.'),
+      model: z.string().volatile().description('Judge model id.'),
+      maxChars: z.number().min(1).volatile().description('Output characters fed to the judge.'),
+      timeoutMs: z.number().min(1).volatile().description('Judge deadline.'),
     }).description('Semantic judge.'),
   }).description('Output review (llm/stream).'),
 
   approval: z.object({
-    mode: z.union(['delegate', 'policy'] as const).description('Approval bridge mode.'),
+    mode: z.union(['delegate', 'policy'] as const).volatile().description('Approval bridge mode.'),
     allowOnce: keepAbsent(z.array(z.string())).description('Tool name patterns granted once.'),
   }).description('Approval bridge.'),
 
@@ -291,18 +339,18 @@ export const Config: z<SafeHarnessConfig> = z.object({
   }).description('Patrol.'),
 
   budget: z.object({
-    maxTokensPerTurn: z.number().description('Per-turn token budget; 0 disables.'),
+    maxTokensPerTurn: z.number().min(0).step(1).volatile().description('Per-turn token budget; 0 disables.'),
   }).description('Budget guard.'),
 
   draft: z.object({
-    enabled: z.boolean().description('Enable LLM-assisted rule drafting (tool + command); drafts are never applied.'),
-    provider: z.string().description('Drafting provider route; empty reuses the judge route.'),
-    model: z.string().description('Drafting model id; empty reuses the judge route.'),
-    maxChars: z.number().description('Description characters sent to the drafting model.'),
-    timeoutMs: z.number().description('Drafting deadline; on expiry the draft fails, nothing is applied.'),
-    maxTokens: z.number().description('Completion budget for one draft.'),
+    enabled: z.boolean().volatile().description('Enable LLM-assisted rule drafting (tool + command); drafts are never applied.'),
+    provider: z.string().volatile().description('Drafting provider route; empty reuses the judge route.'),
+    model: z.string().volatile().description('Drafting model id; empty reuses the judge route.'),
+    maxChars: z.number().min(1).volatile().description('Description characters sent to the drafting model.'),
+    timeoutMs: z.number().min(1).volatile().description('Drafting deadline; on expiry the draft fails, nothing is applied.'),
+    maxTokens: z.number().min(1).volatile().description('Completion budget for one draft.'),
   }).description('LLM-assisted rule drafting (draft only).'),
-})
+}) as unknown as z<SafeHarnessConfig>
 
 /** One posture finding's severity vocabulary (mirrors the Python patrol). */
 export type { PostureSeverity } from './engine/types.js'
@@ -565,6 +613,7 @@ function deepFreeze<T>(value: T): T {
  * Expand a preset and validate an operator config into a {@link ResolvedConfig}.
  *
  * @param raw - the (possibly partial) config a profile passed to the plugin.
+ *   `.volatile()` fields may be live boxes; they are unwrapped at entry.
  * @returns the fully populated, frozen config.
  * @throws ConfigError listing every problem when a field is unacceptable. Presets
  *   and base defaults guarantee presence, so problems are only ever wrong types,
@@ -572,15 +621,18 @@ function deepFreeze<T>(value: T): T {
  */
 export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
   const problems: string[] = []
+  // `apply()` may receive `.volatile()` fields as live boxes (the host validates
+  // through {@link Config}); this package only ever consumes plain values.
+  const plain = unwrapVolatile(raw) as SafeHarnessConfig
   // `preset` is read before any other default is applied: an absent preset means
   // the factory default (`balanced`), never the first member of the enum (which
   // would silently turn a defaultless config into `observe`).
-  const preset = raw.preset === undefined
+  const preset = plain.preset === undefined
     ? (BASE_DEFAULTS.preset as PresetId)
-    : oneOf(raw.preset, ['observe', 'balanced', 'hardened'] as const, 'preset', problems)
+    : oneOf(plain.preset, ['observe', 'balanced', 'hardened'] as const, 'preset', problems)
   const merged = mergeDeep(
     mergeDeep(BASE_DEFAULTS, PRESET_OVERRIDES[preset]),
-    raw,
+    plain,
   ) as SafeHarnessConfig
 
   const engine = merged.engine ?? {}

@@ -15,8 +15,12 @@ describe('resolveConfig — host-validated config (R37)', () => {
     // host (M4 live finding). `keepAbsent` keeps absence absent.
     const validated = Config({}) as Record<string, unknown>
     expect(validated['posture']).toEqual({})
-    expect(validated['results']).toEqual({})
+    // `.volatile()` scalars DO materialize (as live boxes holding undefined); they
+    // must unwrap to "absent" and leave the preset in charge, not pre-empt it.
+    expect(resolveConfig(validated as never).input.mode).toBe('enforce')
+    expect(resolveConfig(validated as never).results.blockOn).toEqual(['credential_leak'])
     expect(JSON.stringify(validated)).not.toContain('"failOn"')
+    expect(JSON.stringify(validated)).not.toContain('"blockOn"')
   })
 
   it('still expands the hardened preset after host validation', () => {

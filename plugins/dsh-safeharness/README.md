@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.2.0` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.2.1` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -93,7 +93,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 ### 2.4 审计、姿态、巡检、预算
 
 - **审计**：单行 JSON、哈希链（`prev_sha256`）、按字段名脱敏、按大小轮转；只存哈希与长度，不存原文（详见 §6）。
-- **姿态**（9 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。
+- **姿态**（10 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。
 - **巡检**（5 项）：`audit_rate`（拒绝速率异常）、`health_probe`（GET 探针）、`config_drift`（与上次姿态报告对比）、`ledger_reconcile`（`tool_asked` vs `approval_decided` 对账）、`notify`（可选，多个通道）。退出码 `0` 干净、`1` 有 FAIL、`2` 巡检自身出错；巡检函数**从不抛异常**。
 - **预算**：`budget.maxTokensPerTurn > 0` 时按轮累计，越限只 warn（一个回合只记一条）。
 
@@ -120,11 +120,11 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # tsc -> lib/
-pnpm test             # 597 个用例（33 个文件）
+pnpm test             # 605 个用例（34 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.2.0.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.2.1.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -138,7 +138,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.2.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.2.1.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -206,7 +206,7 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 
 ## 4. 配置
 
-配置从 profile patch 的 entry `config` 传入，同时注册为 settings 命名空间 `safeharness`（设置变更即时重编译规则；审计目录变更需重启，日志会说明）。
+配置从 profile patch 的 entry `config` 传入。宿主 0.2.2-rc.1 的设置页会**自动**从插件导出的 `Config` 生成表单：标了 `.volatile()` 的字段可在线改、即时生效（不重挂载），其余字段（`preset`、`engine`、`rules`、`audit`、通知地址等）仍只在 patch 里改——写这些字段会重挂载 entry，坏值由宿主配置编辑器回滚。详见 §4.5。
 
 ```yaml
 config:
@@ -436,6 +436,23 @@ engine:
 
 **要求**：本机 Python（实测 3.14.7）+ 本仓 `src/safeharness` 源码可 import。tarball 里带 `scripts/safeharness_sidecar.py`，但 Python 框架本身不打包——`--framework` 指向你的仓库 checkout。
 
+### 4.5 桌面端设置页（1.2.1）
+
+DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configure` / `write`），不是早期的"注册命名空间 + watch"。插件不再注册命名空间：
+
+- 入口 `Config` 中标记 `.volatile()` 的字段会出现在桌面端 **设置 → 插件** 的 safeharness 表单里。
+- 写入走宿主的 `configEditor`：只改 profile patch 里该 entry 的 `config`；Loader 把新值提交到运行中的 fiber（`loader/volatile-update`），插件据此重编译规则并替换运行时配置，账本记一条 `rules_reloaded`。
+- 一次写入可能产生多条 Loader 事件（配置编辑器 reconcile + profile watcher）；插件按结构相等去重，账本只记一条。
+- 表单显示的是"你在 patch 里显式写的值"；由 `preset` 展开出来的默认值不是 schema 默认值，因此不会作为占位值显示（R37 的代价，见已知限制 10 / 19）。
+
+**可在线编辑（volatile）**：`input.mode`、`input.maxChars`、`tools.mode`、`tools.maxArgsBytes`、`tools.trajectory`、`results.mode`、`output.mode`、`output.bufferTimeoutMs`、`output.bufferMaxChars`、`output.judge.*`（enabled / scope / provider / model / maxChars / timeoutMs）、`approval.mode`、`budget.maxTokensPerTurn`、`draft.*`（enabled / provider / model / maxChars / timeoutMs / maxTokens）。
+
+**仍只读（patch-only）**：`preset`、`engine.*`、`rules.*`、`audit.*`、`posture.*`、`patrol.*`（含 webhook / secret / token，凭据不进设置页）、`tools.denyTools` / `askTools` / `denyTags` / `tagOverrides`、`results.blockOn`、`approval.allowOnce`。改这些字段会让 entry 重挂载；非法值由宿主的配置编辑器回滚。
+
+**兼容**：若宿主仍提供旧的 `register(ns, schema, { base })` API，插件走旧路径并在 `watch` 里热更新。`safeharness_status.seams.settings` 只有在真正检测到 settings 服务后才为 `true`——该服务在插件注入的 `tools` / `systemPrompt` 之后才启动，加载瞬间读不到（`ctx.inject` 是顺序安全的读法）。
+
+**真实宿主验证（2026-11-12）**：在 `safeharness-dev`（与桌面同 bundle 组合）上启动后 `settings.describe()` 出现 `ns: safeharness`（`auto: true`，含上述 volatile 子树）；通过 `configEditor.edit` 把 `input.mode` 改为 `off`、`maxChars` 改为 4321 后，插件运行时 `runtime.config.input` 立即变为 `off` / 4321，账本恰好一条 `rules_reloaded`，`seams.settings: true`。
+
 ---
 
 ## 5. 预设与失败语义
@@ -482,7 +499,7 @@ engine:
 
 ```json
 {"v":1,"ts":"2026-11-11T01:47:20.963Z","seq":1,"kind":"plugin_loaded","decision":"ok",
- "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.2.0",
+ "preset":"observe","ruleset_hash":"d53dedc1…","plugin_version":"1.2.1",
  "metrics":{"rule_count":20,"chain_count":3},"sha256":"…"}
 ```
 
@@ -553,7 +570,7 @@ DSH 的 agent loop 跑在 Node 进程内，安全钩子必须在**同一次调�
 | L2 VERIFY 语义复核 | `output.judge`（走宿主 `ctx.llm`） | 仅输出侧，可选 |
 | L3 CONSTRAIN 工具网关 | `tools/pre-execute` + `ctx.tools.guard` + 标签/轨迹链 | 已移植；**无** capability token / HMAC 回执（DSH 审批 seam 不携带参数） |
 | L4 审计与监督 | NDJSON 哈希链账本 + posture + patrol + budget | 简化移植（不含数据库/看板） |
-| 策略中心热生效 | settings 命名空间 + `rules.watch` | 已移植；**无** UI 与人工闸门 |
+| 策略中心热生效 | `Config.volatile()` 字段 + 宿主设置页 + `rules.watch` | 已移植：可在线改模式/阈值/judge 路由；无独立 UI、无人工闸门 |
 | 多智能体 FSM / 租户隔离 / MCP 守卫 / 前端 | — | **不移植**（属于平台侧，与本插件职责无关） |
 
 ### 不要这样用
@@ -586,14 +603,14 @@ plugins/dsh-safeharness/
 ├─ rules/               inform.yaml（20 条）+ chains.yaml（3 条）
 ├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml / cordis.patch.notify.example.yml / cordis.patch.sidecar.example.yml
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
-├─ tests/               597 个用例（33 个文件）
+├─ tests/               605 个用例（34 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
 设计约束（为什么代码长这样）：
 
 1. **判定与 IO 分离**：`src/engine` 是纯函数，输入文本 → 判定，便于测试与移植；`hooks` 只做 DSH 事件签名到纯函数的转换。
-2. **装配顺序**：配置 → judge/LLM 门禁 → 规则 → 账本 → 运行时 → 宿主面探测 + `plugin_loaded` + 姿态门禁 → 提供服务 → 注册各面 → 工具/命令/设置 → 规则监听。硬门禁在**注册任何监听器之前**执行，拒绝加载时不留半装配。
+2. **装配顺序**：配置 → judge/LLM 门禁 → 规则 → 账本 → 运行时 → 宿主面探测 + `plugin_loaded` + 姿态门禁 → 提供服务 → 注册各面 → 工具/命令/设置面检测 → 规则监听。硬门禁在**注册任何监听器之前**执行，拒绝加载时不留半装配。
 3. **fail-closed**：执行面任何异常/未知状态 → deny；观察面异常 → 记录并继续。
 4. **零运行时依赖**：只用 Node 内置模块；`@deepseek-ai/*` 全部是 optional peer，由宿主提供。
 5. **同步 guard**：`ctx.tools.guard()` 的判定必须是同步、无 IO、有界的，异常即 deny。
@@ -605,7 +622,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # tsc -> lib/
-pnpm test             # vitest：33 个文件 / 597 个用例（内部含黄金语料、sidecar 一致性与失败矩阵）。公开树 30 文件 / 579（576 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 29 文件 / 571（568 pass + 3 skip）
+pnpm test             # vitest：34 个文件 / 605 个用例（内部含黄金语料、sidecar 一致性与失败矩阵）。公开树 31 文件 / 587（584 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 30 文件 / 579（576 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -642,6 +659,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 16. **真实模型冒烟只做过一次最小会话**：用真实 OpenAI 兼容端点（`gpt-6-luna`）跑通一轮 observe：`usage_input=29280 / usage_output=26`、judge `status=ok`（`judge_ms=7319`）。不同供应商在工具调用形态、流式分片、usage 上报上的差异仍需各自冒烟；`/safeharness judge probe` 就是为此准备的自检入口。
 17. **规则起草只是"草稿"**：模型给的正则可能过宽（误杀）也可能过窄（漏检），插件只保证"结构与语法能过 loader 门"，不保证语义正确。`1.1.1` 起会对**明显过窄的形状**（纯字面量、短于 12 字符、单词元、chain 字面工具名）给出 `warnings`，但那仍然只是形状判断，最终要靠人看。起草需要一条可用的辅助路由（默认复用 judge 路由）；路由不可用时工具返回 `unavailable`，不会退回本地启发式，也不会静默生成一条看起来能用的规则。
 18. **Python sidecar 是可选增强，不是默认路径**：需要本机 Python 与 `src/safeharness` 可 import；只接管输入面，不接管 `tools.guard`（同步无 IO 约束）。规则热更新后到子进程确认前的输入会被拒绝（hardened）或回落内置引擎（observe/balanced）。它刻意不做 Python `InformPolicy` 的 NFKC/零宽清理，以保持与内置引擎判定一致；不做这一点是**显式取舍**，见 §4.4。子进程超时只让当次请求失败、不会自动重启；连续超时会让输入面持续降级，此时应看 `safeharness_status.engine` 与姿态 code。
+19. **设置页只显示"显式覆盖"，不显示 preset 展开值**：DSH 设置页的表单值来自 profile patch 的 `config`（以及 schema 默认值）。本插件的预设展开在 `resolveConfig` 里完成，schema 刻意没有默认值（否则会废掉预设，R37），所以 `balanced` 下输入框里 `input.mode` 会是空的，而实际运行值是 `enforce`。改任一字段只会写该字段的覆盖值，不会把 preset 固化下来；这正是"preset 仍可整体切换"的前提。
 
 ---
 

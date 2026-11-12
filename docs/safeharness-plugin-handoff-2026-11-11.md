@@ -8,7 +8,7 @@
 
 ## 0. 一句话现状
 
-我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.2.0**（2026-11-12）；计划内 M0–M5 全部完成（含 T5.1 Python sidecar、T5.2 规则起草），**只剩 T5.3 客户端 UI 面板未开始**。桌面端仍装 1.1.1（需按 §9.1 升级到 1.2.0）。
+我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.2.1**（2026-11-12）；计划内 M0–M5 全部完成（含 T5.1 Python sidecar、T5.2 规则起草、P3 设置面），**只剩 T5.3 客户端 UI 面板未开始**。桌面端仍装 1.1.1（需按 §9.1 升级到 1.2.1）。
 
 ---
 
@@ -17,15 +17,15 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | `1.2.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/acceptance-m4.test.ts` 会断言） |
+| 当前版本 | `1.2.1`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
-| 桌面端插件 | 仍装 `1.1.1`（profile `desktop`，tarball 安装）；升级包 `upear-dsh-safeharness-1.2.0.tgz` 已打到 `plugin-tarballs`，安装脚本 TGZ 行已改，**需用户退出 DSH 后双击脚本升级** |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` 已发布 `v1.2.0` |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.2.0 功能提交与文档提交（见 §14 自检） |
-| 测试 | 本机 `pnpm test` = **33 文件 / 597 用例**全绿（含 sidecar 13+7+4+3 与内部一致性 1 例） |
-| 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 新增 §12.10） |
-| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.0 证据见 `M5-sidecar.md`） |
-| 下一步 | T5.3 客户端 UI（独立分支）或 §11.3 设置面缺口 / R42 SQL 误报收敛（1.2.1），详见 §11 |
+| 桌面端插件 | 仍装 `1.1.1`（profile `desktop`，tarball 安装）；升级包 `upear-dsh-safeharness-1.2.1.tgz` 已打到 `plugin-tarballs`，安装脚本 TGZ 行已改，**需用户退出 DSH 后双击脚本升级** |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` 已发布 `v1.2.1` |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.2.1 功能提交与文档提交（见 §14 自检） |
+| 测试 | 本机 `pnpm test` = **34 文件 / 605 用例**全绿（含 sidecar 13+7+4+3、设置面 8 与内部一致性 1 例） |
+| 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 新增 §12.10，1.2.1 新增 §12.11） |
+| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.1 证据见 `evidence/1.2.1-settings-surface.md`） |
+| 下一步 | T5.3 客户端 UI（独立分支），或 R42 SQL 误报收敛（1.2.2 候选），详见 §11 |
 
 ---
 
@@ -134,6 +134,7 @@ F:\AgentSecurity\Upear\
 | GA `1.0.0` | ✅ | 版本转正 + CHANGELOG + tarball 验收（21 条账本）+ tag/CI |
 | M5 T5.2 规则起草 | ✅ | `1.1.0`；`1.1.1` 加"弱草稿警告" |
 | **M5 T5.1 Python sidecar** | **✅ `1.2.0`** | 第 1 步传输层 + 第 2 步接线：`engine` 配置段、`scripts/safeharness_sidecar.py`、`SidecarEngine`、姿态 code `engine_sidecar_unavailable`、一致性 30/30、干净 profile 冷启动两态；证据 `evidence/M5-sidecar.md` |
+| **P3 设置面（桌面设置页）** | **✅ `1.2.1`** | 根因是 0.2.2-rc.1 的 `settings` 是表单服务（`describe`/`configure`）而非旧 `register`，且表单只收 `.volatile()` 字段。已加 volatile 子集、`unwrapVolatile`、`loader/volatile-update` 在线生效与去重、`ctx.inject` 延迟检测；真实宿主 API 验证通过；证据 `evidence/1.2.1-settings-surface.md` |
 | M5 T5.3 客户端 UI 面板 | ❌ 未开始 | 评估见 §11.2 |
 
 **M4 遗留的四个"未验证项"已全部关闭**（2026-11-11）：HMR 重载 ✅、真实模型冒烟 ✅、桌面端命令 UI（`/safeharness status`、`judge probe`、`draft`）✅、跨 turn 预算 ✅。证据在 `evidence/GA-verification.md`、`M5-budget-crossturn.md`。
@@ -144,8 +145,8 @@ F:\AgentSecurity\Upear\
 
 | 文件 | 职责 / 关键不变量 |
 |---|---|
-| `index.ts`（~29 KB） | 组合根 `apply()`：配置 → 门禁 → provide → 钩子 → 工具 → 命令 → 设置热更新。**门禁必须在任何 seam 注册之前**（R36）；1.2.0 起在 `plugin_loaded` 前拉起 sidecar（失败不抛、由姿态报告） |
-| `config.ts`（~37 KB） | schemastery `Config` + `resolveConfig`；数组一律 `keepAbsent`（R37：缺数组不能被物化成 `[]`）；1.2.0 新增 `engine` 段（`kind: sidecar` 无 `command` → 加载期拒绝）；错误只报 index/字段名，不回显 webhook |
+| `index.ts`（~30 KB） | 组合根 `apply()`：配置 → 门禁 → provide → 钩子 → 工具 → 命令 → 设置面/在线配置。**门禁必须在任何 seam 注册之前**（R36）；1.2.0 起在 `plugin_loaded` 前拉起 sidecar（失败不抛、由姿态报告）；1.2.1 起监听 `loader/volatile-update` 并用 `ctx.inject(['settings'])` 延迟检测设置服务 |
+| `config.ts`（~39 KB） | schemastery `Config` + `resolveConfig`；数组一律 `keepAbsent`（R37：缺数组不能被物化成 `[]`）；1.2.0 新增 `engine` 段（`kind: sidecar` 无 `command` → 加载期拒绝）；1.2.1 加 `.volatile()` 在线子集、`.min()/step()` 与 `unwrapVolatile`（入口还原 cosmokit box）；错误只报 index/字段名，不回显 webhook |
 | `runtime.ts` / `state.ts` / `service.ts` / `invariant.ts` | 运行时聚合、会话轨迹（64/会话、256 LRU）、`safeharness` 服务、`@upear/dsh-safeharness/invariant` 入口；1.2.0 起 `reconfigure()` 会把新配置转给引擎（修掉热更新后阈值陈旧） |
 | `engine/index.ts` | `SecurityEngine` 实现（同步）；`rulesetHash` 由规则内容哈希；1.2.0 起 `config` 可热更新（`reconfigure`） |
 | `engine/rules.ts`（30 KB） | 规则装载/校验/编译/哈希；`RULE_REGEX_FLAGS = 'iu'`；拒绝 Python-only 语法 |
@@ -158,7 +159,7 @@ F:\AgentSecurity\Upear\
 | `draft/rule.ts`（23 KB） | 规则起草纯核心：nonce 包装描述、JSON 严格解析、字段白名单、loader 级校验、ReDoS/控制字符拒绝、YAML 渲染、**形状警告** |
 | `notify/channels.ts` | 5 种通知信封 + 钉钉加签 + 多通道（每通道 3 s、`notified` 仅全成功、零 URL 泄漏） |
 | `patrol/index.ts` | 5 个检查 + 退出码 + 通知汇总 + 对账 |
-| `posture/checks.ts` + `report.ts` | 9 个 code 三态 |
+| `posture/checks.ts` + `report.ts` | 10 个 code 三态（1.2.0 起含 `engine_sidecar_unavailable`） |
 | `audit/ledger.ts`（27 KB）/ `redact.ts` / `types.ts` / `paths.ts` | NDJSON 哈希链、脱敏、轮转、查询；`redact` 只留哈希/长度 |
 | `surface/tools.ts`（13 KB） | 5 个工具：`safeharness_status` / `_posture` / `_patrol` / `_audit_query` / `_draft_rule` |
 | `surface/commands.ts`（13 KB） | `/safeharness status|posture|rules|audit [n]|patrol [check…]|judge [probe]|draft <…> [--chain]` |
@@ -166,6 +167,7 @@ F:\AgentSecurity\Upear\
 | `budget.ts` | 每 turn token 计数；`turn` 来自宿主 `agent/pre-step`，一轮只记一条越限 |
 | `util/hash.ts` / `util/yaml.ts`（22 KB） | sha256/canonical JSON；自带 YAML 解析器（规则文件用） |
 | `version.ts` | `VERSION`，与 `package.json` 同步（`tests/version.test.ts` 断言） |
+| `cordis-events.d.ts` | 1.2.1 新增：声明宿主事件 `loader/volatile-update`（Cordis 类型面未含），让设置面监听器保持类型检查 |
 
 ---
 
@@ -339,11 +341,24 @@ node plugins/dsh-safeharness/scripts/fake-openai.mjs --port 18080 --scenario too
 
 DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...], platform: 'web' }`、导出 `./client`、用 `tsdown` 打 React 包、通过 `SlotCore`（`@deepseek-ai/dsh-client-ui-slots`）注册到宿主插槽（声明/注入/store/selector 一整套）。参考包：`profiles/node_modules/@deepseek-ai/dsh-client-ui-*`。**无法在无头环境验证**，只能开浏览器看。工作量按天算，作为独立分支做。
 
-### 11.3 计划外的小缺口（1 小时级，见效快）
+### 11.3 设置面（✅ 已完成，1.2.1）
 
-桌面端 `seams.settings = false`（`ctx.get('settings')` 为空，1.2.0 在桌面会话里实测仍为 false），所以插件配置**只能在 `cordis.patch.yml` 里改**，设置页看不到。要先查清 desktop 组合里为什么没有 settings 服务（`dsh-settings` / `dsh-settings-file` 包都在 profile 里），再决定是插入服务还是换配置入口。
+**此前的错误判断**：以为桌面端缺 settings 服务，或只是启动顺序问题。实测结论是两点叠加：
 
-### 11.4 R42：SQL 扫描误报收敛（1.2.1 候选）
+1. 0.2.2-rc.1 的 `settings` 服务是表单服务（方法：`describe` / `configure` / `write` / `update` / `mutate`），**没有** 0.1.0-rc.5 类型源里的 `register(ns, schema)`；旧代码 `typeof settingsService.register === 'function'` 永远为 false。
+2. 设置页只为 `Config` 中 `.volatile()` 的字段生成表单（`volatileForm()` 无 volatile 字段 → entry 直接不出现在 `describe()` 里）。插件原先没有标任何 volatile 字段。
+
+**1.2.1 的接入方式（改代码前先读）**：
+
+- `Config` 标记在线子集 `.volatile()`（README §4.5 有完整白名单）；其他字段保持 patch-only。数值字段补 `.min()/step()`，防止设置页写入下次启动无法通过 `resolveConfig` 的值。
+- 宿主把 volatile 字段解析成 cosmokit `Volatile<T>` box（`Symbol.for('cosmokit.volatile.write')`）；`config.ts` 的 `unwrapVolatile` 在 `resolveConfig` 入口还原为普通值。
+- 在线生效走 Loader 事件 `loader/volatile-update`（只派发给该 fiber 的监听器）。监听器重新 `resolveConfig(config)`，与 `runtime.config` 结构相等则跳过（一次设置写入会触发多事件），否则 `applyHotConfig`。
+- 设置服务用 `ctx.inject(['settings'], …)` 延迟读：它在 `tools`/`systemPrompt` 之后才启动，加载期 `ctx.get` 恒为 undefined。旧宿主若仍有 `register`，继续走旧 `watch` 路径。
+- `seams.settings` 因此只有在服务真正出现后才是 true；状态工具读的是同一个 `hooks` 对象，所以之后能如实显示。
+
+**验证方式（不需要 GUI）**：在 `safeharness-dev`（与桌面同 bundle 组合）启动后，用宿主 `settings.describe()` 检查 `ns: safeharness` 是否出现；用 `configEditor.edit(entry, …)` 改 `input.mode`，读插件 `runtime.config` 确认即时生效，并核对账本恰好一条 `rules_reloaded`。2026-11-12 实测通过。
+
+### 11.4 R42：SQL 扫描误报收敛（1.2.2 候选）
 
 `tools/pre-execute` 会对**所有**工具的字符串参数跑危险 SQL 判定，于是"写文档/写命令时引用一条 SQL"会被当成执行 SQL。1.2.0 实现期间再次踩到（`pwsh` 命令里带完整删表字面量被 `tool_denied_by_args` 拒绝）。收敛方向：按工具分类扫描（只对 name/tag 命中 `sql|db|query|shell|exec` 的执行面工具做 SQL 判定，`write`/`edit` 跳过 SQL 但保留凭据扫描）。**这是检测语义变更**，必须单独发版并补差分测试。证据：`evidence/R42-sql-scan-false-positive.md`。
 
@@ -356,7 +371,7 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 
 ### 11.6 其他
 
-- 桌面端升级到 1.2.0：**完全退出 DSH**（含托盘）→ 双击 `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.2.0）→ 重启。升级后 `safeharness_status` 应显示 `version: 1.2.0`，且 `engine.kind: builtin`（桌面 patch 未开 sidecar）。
+- 桌面端升级到 1.2.1：**完全退出 DSH**（含托盘）→ 双击 `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.2.1）→ 重启。升级后 `safeharness_status` 应显示 `version: 1.2.1`、`engine.kind: builtin`，且 `seams.settings: true`（设置页此时应能看到 safeharness 表单）。
 - GitHub Release 附件（需 `gh auth login`，见 §9.4 注）。
 - npm 发布：计划明确 v1 不发（无 `@upear` scope 权限）；tarball + 本地安装即交付形态。
 
@@ -402,6 +417,8 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 22. **写含破坏性 SQL 字面量的文档/文件会被本插件自己拦掉**（`write` 工具的 args 会被 SQL 规则扫到，实测报 `该操作不被平台安全策略允许`；本文第一版就因此被拦）。要么改写措辞，要么临时把 `tools.mode` 调成 `warn`——这是"误报"的一个现实例子（写文档不等于执行 SQL），值得后续把 SQL 扫描面收敛到"代码/命令类参数"。**1.2.0 实现期间再次踩到**：`pwsh` 命令里带完整删表字面量会被 `tool_denied_by_args` 拒绝，用字符串拼接（`'DR'+'OP'`）绕开；写 sidecar 冒烟脚本时同理。
 23. **sidecar 的失败语义不要"顺手改成放行"**：`evaluateInputAsync` 拒绝时，hook 必须按预设决定（balanced 回落内置、hardened 拒绝），不要让引擎自己 catch 后返回 allow。规则热更新后的 `sidecar_rules_stale`、未知规则名 `sidecar_unknown_rule` 都是**故意拒绝**，不是 bug。
 24. **改 sidecar 相关代码后必须重跑 `tests/sidecar-parity.test.ts`**（本机有 Python 时）：它是"两个引擎同判"的唯一守门人；改了 `composeInputDecision`、规则 seq 或 sidecar 的匹配方式而 parity 仍绿，才算没破坏语义。
+25. **0.2.2-rc.1 的 settings 不是命名空间注册**：`ctx.settings.register(ns, schema)` 在这个宿主上不存在（那是 0.1.0-rc.5 的 API），设置页是 `SettingsForms` 从插件 `Config` 的 `.volatile()` 字段**自动**生成的。改设置相关代码只照 0.1.0 类型源写会得到"永远 false 的 seam"，且不会有任何报错。
+26. **`.volatile()` 的值是 box，不是原值**：宿主解析出的配置里，volatile 字段是 `{ get(), [Symbol.for('cosmokit.volatile.write')] }`。任何消费前必须 `unwrapVolatile`（本仓 `config.ts` 在 `resolveConfig` 入口统一做）；不要 `typeof value === 'string'` 直接判，否则会把它当成"类型错误"。schema 里给 volatile 数值字段补 `.min()`/`.step()`，保证设置页写入不会制造下次启动无法加载的配置。
 
 ---
 
@@ -419,11 +436,11 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 
 ```powershell
 cd F:\AgentSecurity\Upear
-git log --oneline -3                       # 期望 HEAD = 1.2.0 功能提交 + 文档提交；dsh/main = v1.2.0 发布提交
-git rev-parse dsh/main                     # 期望 1cb5d55（公开仓 v1.2.0 发布提交）
+git log --oneline -3                       # 期望 HEAD = 1.2.1 功能提交 + 文档提交；dsh/main = v1.2.1 发布提交
+git rev-parse dsh/main                     # 期望 1.2.1 发布提交
 cd plugins\dsh-safeharness
-pnpm build; pnpm test                      # 期望 33 文件 / 597 全绿
-Get-Content C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\package.json | ConvertFrom-Json | % version   # 桌面端升级后期望 1.2.0（未升级则为 1.1.1，属正常）
+pnpm build; pnpm test                      # 期望 34 文件 / 605 全绿
+Get-Content C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\package.json | ConvertFrom-Json | % version   # 桌面端升级后期望 1.2.1（未升级则为 1.1.1，属正常）
 Get-Content C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson | Measure-Object | % Count   # 约 900+ 行，链连续
 ```
 
@@ -449,7 +466,7 @@ cd F:\AgentSecurity\Upear\plugins\dsh-safeharness
 pnpm build; pnpm test; pnpm pack --pack-destination ./dist
 
 # 装到某个 profile（应用需退出，仅 desktop 受限）
-& $DSH plugin --profile <profile> add "file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.2.0.tgz"
+& $DSH plugin --profile <profile> add "file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.2.1.tgz"
 & $DSH plugin --profile <profile> remove @upear/dsh-safeharness
 
 # 无头跑一轮
@@ -469,4 +486,4 @@ Invoke-RestMethod -Uri 'https://api.github.com/repos/JueeeX/JueeeX-Upear-SafeHar
 
 ## 16. 交接时的一句话总结
 
-**插件已 GA（1.0.0）并迭代到 1.2.0（可选 Python 输入引擎），本地全绿、公开仓库已发布 v1.2.0；计划内只剩 T5.3 客户端 UI 面板未开始。** 桌面端还停在 1.1.1，用户退出 DSH 后双击 `install-safeharness-desktop.cmd` 即升级。想继续做功能就开 T5.3 的独立分支；想"收口"就补 §11.3 的设置面缺口、§11.5 的两个部署验证，或把 §11.4 的 SQL 扫描误报收敛成 1.2.1。
+**插件已 GA（1.0.0）并迭代到 1.2.1（可选 Python 输入引擎 + 桌面设置面），本地全绿、公开仓库已发布 v1.2.1；计划内只剩 T5.3 客户端 UI 面板未开始。** 桌面端还停在 1.1.1，用户退出 DSH 后双击 `install-safeharness-desktop.cmd` 即升级（1.2.1 后设置页可见 safeharness 表单）。想继续做功能就开 T5.3 的独立分支；想"收口"就补 §11.5 的两个部署验证，或把 §11.4 的 SQL 扫描误报收敛成 1.2.2。

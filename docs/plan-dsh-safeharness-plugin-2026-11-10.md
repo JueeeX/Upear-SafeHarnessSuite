@@ -1083,6 +1083,20 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | D16 | 不可用语义：observe/balanced 记录一次 + 回落内置引擎；hardened 拒绝输入（含 `input.mode: warn`）、加载期不可用拒绝加载；姿态新增 `engine_sidecar_unavailable`（FAIL），hardened `failOn` 含它 | 与 §7 "执行面 fail-closed / 观察面记录并继续"一致；姿态 FAIL 是"配置了却没跑起来"的诚实表述，是否拦加载交给 `failOn`（与 `sandbox_danger_full_access` 同构） |
 | D17 | 1.2.0 只装 sidecar；R42 的扫描面收敛留到 1.2.1 | 两个验收面不混：sidecar 是新增可选能力（默认行为不变），R42 是检测语义变更，需要独立的差分测试与发布说明 |
 
+### 12.11 1.2.1 设置面新增风险与决策（2026-11-12）
+
+| # | 风险 / 偏差 | 实测事实 | 处理与影响 |
+|---|---|---|---|
+| R45 | **settings API 漂移**：插件按 0.1.0-rc.5 类型源实现 `register(ns, schema) + watch`，宿主 0.2.2-rc.1 只有表单服务（`describe`/`configure`/`write`/`update`/`mutate`） | 桌面端 `seams.settings` 从 1.0.0 到 1.2.0 一直是 false，且**无任何报错**（`typeof register === 'function'` 静默为假） | 1.2.1：新旧两路都保留——旧宿主有 `register` 走旧 watch；新宿主实现表单面。检测改用 `ctx.inject(['settings'], …)` 延迟读（服务在 `tools`/`systemPrompt` 之后启动，加载期 `ctx.get` 恒 undefined）。真实宿主 API 验证：`settings.describe()` 出现 safeharness，`configEditor.edit` 后运行值即时变化 |
+| R46 | **设置页只为 `.volatile()` 字段生成表单**；volatile 值解析成 cosmokit box，不是原值 | `volatileForm()` 无 volatile 字段 → entry 不出现在 `describe()`；`Config({})` 现在把 volatile 字段物化成 box（有 `Symbol.for('cosmokit.volatile.write')`），旧代码 `typeof === 'string'` 判型会误报 | `config.ts` 入口 `unwrapVolatile`；volatile 数值字段补 `.min()/step()`，保证设置页写入的值在下次启动仍能通过 `resolveConfig`；`tests/settings-surface.test.ts` 锁定白名单与 box 还原 |
+| R47 | **一次设置写入触发多次 Loader 事件**（configEditor reconcile + profile watcher），会重复 `rules_reloaded` 并放大规则重编译 | 实测一次 edit 出现多条事件/记录 | 监听器先 `resolveConfig`，与 `runtime.config` 结构相等则跳过；fiber 拆除后不再处理；测试断言"两次 emit 只记一条" |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D18 | 在线可编辑子集限定为模式/阈值/judge 路由/审批模式/预算/起草；`preset`、`engine`、`rules`、`audit`、`posture`、`patrol`（含 webhook/secret/token）与所有数组字段保持 patch-only | 凭据不进设置页（账本零回声纪律）；结构性/路由级字段改错会让下次启动无法加载，保留"重挂载 + 宿主回滚"这条安全路径；数组的 schemastery form 渲染未验证，不冒险 |
+| D19 | 在线生效走 `loader/volatile-update` + `applyHotConfig`，不把 `runtime.config` 改成响应式 | 保持"一次 apply 一个冻结快照"的既有不变量（R3/失败语义），只在事件到达时重算；旧宿主仍有 `settings.register().watch` 时继续用旧路径 |
+| D20 | R42（SQL 扫描误报收敛）顺延到 **1.2.2**，不与设置面修复同版发布 | 1.2.1 是"修一个静默失效的集成面"，不改检测语义；R42 是语义变更，需要自己的差分测试与发布说明（延续 D17 的分版原则） |
+
 ---
 
 ## 13. Day-0 接手清单（逐条执行，不要跳）
