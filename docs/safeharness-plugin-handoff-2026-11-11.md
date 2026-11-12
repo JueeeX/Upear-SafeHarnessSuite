@@ -507,7 +507,7 @@ cd F:\AgentSecurity\Upear\plugins\dsh-safeharness
 pnpm build; pnpm test; pnpm pack --pack-destination ./dist
 
 # 装到某个 profile（应用需退出，仅 desktop 受限）
-& $DSH plugin --profile <profile> add "file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.5.0.tgz"
+& $DSH plugin --profile <profile> add "file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.6.0.tgz"
 & $DSH plugin --profile <profile> remove @upear/dsh-safeharness
 
 # 无头跑一轮
