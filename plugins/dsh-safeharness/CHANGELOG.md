@@ -1,6 +1,18 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.4.0 — 2026-11-12
+
+新增功能（T5.3 第二步）：**面板里可以运行巡检**。1.3.0 的面板是纯只读；这一版给它加了唯一一个动作，并把"写"的闸做在宿主侧。
+
+- **端点**：`POST /safeharness/patrol`。`GET` 被拒（`method_not_allowed`），导航或 `<img>` 之类无法触发；浏览器栅栏与 `status` 同一套（loopback Host + 同源 Origin）。
+- **宿主侧闸门**：单飞（同时只跑一次，重复调用回 `patrol_in_progress`）+ 5 秒冷却（`PANEL_PATROL_COOLDOWN_MS`，回 `patrol_cooldown`）。闸门在路由里而不是按钮里——同源脚本可以直接打端点。
+- **语义与 `/safeharness patrol` 一致**：跑 5 项检查（`audit_rate` / `health_probe` / `config_drift` / `ledger_reconcile` / `notify`），写一条 `patrol_report`，配置了 `patrol.notify` 时发一条 `Upear SafeHarness: N FAIL / M WARN` 摘要；返回 `exitCode`（0/1/2）、summary 与 findings（code/severity/detail 都是只含代码与计数的既有契约）。
+- **面板**：新增"巡检"区块，**两步确认**（运行巡检 → 确认运行 / 取消），运行中显示状态，完成后展示 FAIL/WARN/OK/SKIP、退出码、通知是否送达与 5 项明细；完成后面板自动刷新状态（账本条数 +1）。错误码映射为中文提示（冷却/进行中/未接入/失败），不显示宿主原始报错文本。
+- **测试**：新增 7 例（`tests/panel-route.test.ts` +7：POST 投影、GET 拒绝、冷却、单飞、未接入、runner 抛错、栅栏；`tests/client-bundle.test.ts` +1：巡检请求与解包）。全套 **38 文件 / 646 用例**（公开树 35 / 628；CI 34 / 620）。
+- **真实宿主验证**（0.2.2 Web 壳，独立 profile + 独立账本）：面板点"运行巡检" → 确认 → 返回 5 项检查（`health_probe` 因未配探针为 SKIP，其余 OK）与 `exitCode: 0`；账本新增一条 `patrol_report`，面板计数随之刷新。
+- 仍不做：配置写入、账本导出、定时巡检的面板化（定时仍靠 OS 计划任务跑 `dsh` 命令或外部 cron）。
+- 未验证：桌面端（Electron 窗口）里的巡检按钮（与本次 Web 壳同 bundle，需用户升级后确认）。
 ## 1.3.0 — 2026-11-12
 
 新增功能（T5.3 第一步）：**桌面端只读状态面板**。设置 → 内置插件 → `SafeHarness` 标签页显示版本/预设、拦截与放行计数、五个面的判定模式、规则集与账本健康、最近 10 条拦截。这是计划里最后一个未开始的功能项（P4/T5.3）的第一个可用切片。

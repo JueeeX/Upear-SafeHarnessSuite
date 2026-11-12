@@ -8,7 +8,7 @@
 
 ## 0. 一句话现状
 
-我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.3.0**（2026-11-12）；计划内 M0–M5 全部完成（含 T5.1 Python sidecar、T5.2 规则起草、P3 设置面、R42 扫描收敛与 **T5.3 客户端面板第一步**）。桌面端当前装的是 **1.2.2**（1.3.0 的面板在同一个 0.2.2 Web 壳上端到端验过，桌面端需退出 DSH → 跑安装脚本 → 重启才会出现）。T5.3 还剩第二步：巡检触发与写操作。
+我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.4.0**（2026-11-12）；计划内 M0–M5 已全部完成，包括 **T5.3 客户端面板**（1.3.0 只读面板 + 1.4.0 面板内巡检触发）。桌面端已升级到 **1.3.0** 并实测；**1.4.0 待用户退出 DSH → 跑安装脚本 → 重启**（面板与巡检按钮要重启后生效）。T5.3 剩余可选项：账本片段导出、定时巡检面板化；两个部署验证（真实 IM、真实人工审批）仍未做。
 
 ---
 
@@ -17,15 +17,15 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | `1.3.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
+| 当前版本 | `1.4.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
-| 桌面端插件 | 运行 **1.2.2**（2026-11-12 实测 `version: 1.2.2`、`seams.settings: true`、`engine.kind: builtin`）。**1.3.0 已发布待装**：退出 DSH（含托盘）→ `plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.3.0）→ 重启；面板要重启后才出现在 设置 → 内置插件 |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = **`b6b10c3`**，tag **`v1.3.0`** 指向同一提交（首次发布 `155acac` 漏了 `tsconfig.client.json`，已在 `b6b10c3` 修正并重打 tag）。CI：推送成功，但本机 `api.github.com` 超时，本次未能读到 runs 状态，需要时在网页确认 |
+| 桌面端插件 | 运行 **1.3.0**（用户 2026-11-12 升级后本会话实测 `safeharness_status.version = 1.3.0`，面板已在 设置 → 内置插件 出现）。**1.4.0 已发布待装**：退出 DSH（含托盘）→ `plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.4.0）→ 重启 |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = **`0de3d44`**，tag **`v1.4.0`** 指向同一提交（v1.3.0 首次发布 `155acac` 漏了 `tsconfig.client.json`，已在 `b6b10c3` 修正并重打 tag）。CI：推送成功；本机 `api.github.com` 超时，runs 状态未读，需要时在网页确认 |
 | 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.3.0 功能提交 `96a4913`、发布清单修正 `39db2db`（`github` 备份远端同步 main 与 v1.2.0–v1.3.0 标签） |
-| 测试 | 本机 `pnpm test` = **38 文件 / 638 用例**全绿（含 sidecar 13+7+4+3、设置面 8、SQL 扫面 12、面板 5+10+浏览器半契约 6）；公开树 35 文件 / 620（617 pass + 3 skip），CI 剔除 perf 后 34 文件 / 612（609 pass + 3 skip） |
+| 测试 | 本机 `pnpm test` = **38 文件 / 646 用例**全绿（含 sidecar 13+7+4+3、设置面 8、SQL 扫面 12、面板 5+17+浏览器半契约 7）；公开树 35 文件 / 628（625 pass + 3 skip），CI 剔除 perf 后 34 文件 / 620（617 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 §12.10、1.2.1 §12.11、1.2.2 §12.12） |
-| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 见 `evidence/R42-sql-scan-convergence.md`，1.3.0 见 `evidence/1.3.0-panel.md`） |
-| 下一步 | **T5.3 第二步**（面板的巡检触发/写操作，见 §11.2）或收口（§11.5 两个部署验证）；只读面板已在 1.3.0 交付 |
+| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 见 `evidence/R42-sql-scan-convergence.md`，1.3.0 见 `evidence/1.3.0-panel.md`，1.4.0 见 `evidence/1.4.0-panel-patrol.md`） |
+| 下一步 | 收口：§11.5 的两个部署验证（真实 IM 投递、真实人工审批）；T5.3 只剩可选项（账本导出、定时巡检面板化） |
 
 ---
 
@@ -133,7 +133,7 @@ F:\AgentSecurity\Upear\
 | M4 硬化与 RC | ✅ | T4.1–T4.6；hardened 门禁两态、tarball 全链路、兼容矩阵 |
 | GA `1.0.0` | ✅ | 版本转正 + CHANGELOG + tarball 验收（21 条账本）+ tag/CI |
 | M5 T5.2 规则起草 | ✅ | `1.1.0`；`1.1.1` 加"弱草稿警告" |
-| M5 T5.3 客户端面板 | 🟡 第一步 | `1.3.0`：只读面板（设置 → 内置插件 → `SafeHarness`）+ 预构建 client bundle；巡检触发/写操作待第二步 |
+| M5 T5.3 客户端面板 | ✅ | `1.3.0`：只读面板 + 预构建 client bundle；`1.4.0`：面板内两步确认的巡检触发（POST 单飞 + 5 秒冷却 + GET 拒绝）；账本导出与定时面板化仍为可选项 |
 | **M5 T5.1 Python sidecar** | **✅ `1.2.0`** | 第 1 步传输层 + 第 2 步接线：`engine` 配置段、`scripts/safeharness_sidecar.py`、`SidecarEngine`、姿态 code `engine_sidecar_unavailable`、一致性 30/30、干净 profile 冷启动两态；证据 `evidence/M5-sidecar.md` |
 | **P3 设置面（桌面设置页）** | **✅ `1.2.1`** | 根因是 0.2.2-rc.1 的 `settings` 是表单服务（`describe`/`configure`）而非旧 `register`，且表单只收 `.volatile()` 字段。已加 volatile 子集、`unwrapVolatile`、`loader/volatile-update` 在线生效与去重、`ctx.inject` 延迟检测；真实宿主 API 验证通过；证据 `evidence/1.2.1-settings-surface.md` |
 | **R42 SQL 扫描收敛** | **✅ `1.2.2`** | `tools.sqlScan`（默认 `execution`）只扫执行面工具，`write`/`edit` 不再因引用 SQL 被拒；无法识别的工具仍扫；`all` 可回退。单测 12 例 + 真实宿主两态差分；证据 `evidence/R42-sql-scan-convergence.md` |
@@ -365,7 +365,8 @@ node plugins/dsh-safeharness/scripts/fake-openai.mjs --port 18080 --scenario too
 - 客户端 bundle 必须**预构建并随 tarball 发布**；缺文件时宿主 client-module 注册表在激活扫描里聚合抛错 → 整个 GUI 白屏，不是"少一个面板"。
 - 0.2.2 壳用**批量 URL**（`plugins/??a/client.js,b/client.js&rev=…`）预取 bundle，直接 `GET /plugins/<id>/client.js` 是 404，属正常；验证只能开浏览器（headless Edge + CDP 可自动化，见 evidence 里的脚本思路）。
 - 无头验证：先 `dsh <profile> --port <p> --no-open` 起 Web 壳，用 CDP 连上去点击路径（账号菜单 → 设置 → 内置插件 → SafeHarness），再截图/取 `innerText`。
-- 第二步（未做）：面板里触发巡检（`safeharness_patrol` 已是工具/命令，需要一条写操作路由 + 二次确认）、导出账本片段按钮。
+- **第二步（1.4.0 已完成）**：面板里加"运行巡检"——两步确认，`POST /safeharness/patrol`，宿主侧单飞 + 5 秒冷却 + `GET` 拒绝；返回 `patrol_report` 的投影（5 项检查、退出码、是否通知），完成后面板自动刷新状态。改这块必须先看 `evidence/1.4.0-panel-patrol.md`：闸门在路由不在按钮（同源脚本可直接打端点），别把冷却/单飞挪进 UI。
+- 仍未做：账本片段导出按钮；定时巡检面板化（调度仍靠 OS 计划任务/外部 cron，插件不做调度器）。
 
 ### 11.3 设置面（✅ 已完成，1.2.1）
 
@@ -473,7 +474,7 @@ cd F:\AgentSecurity\Upear
 git log --oneline -3                       # 期望 HEAD = 1.2.2 之后的最新文档提交；dsh/main = 1.2.2 发布提交
 git rev-parse dsh/main                     # 期望 1.2.2 发布提交（tag v1.2.2 指同一提交）
 cd plugins\dsh-safeharness
-pnpm build; pnpm test                      # 期望 38 文件 / 638 全绿（build 含浏览器半）
+pnpm build; pnpm test                      # 期望 38 文件 / 646 全绿（build 含浏览器半）
 Get-Content C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\package.json | ConvertFrom-Json | % version   # 桌面端实测 1.2.2（2026-11-12 已升级）
 Get-Content C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson | Measure-Object | % Count   # 约 2000+ 行，链连续
 ```
@@ -500,7 +501,7 @@ cd F:\AgentSecurity\Upear\plugins\dsh-safeharness
 pnpm build; pnpm test; pnpm pack --pack-destination ./dist
 
 # 装到某个 profile（应用需退出，仅 desktop 受限）
-& $DSH plugin --profile <profile> add "file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.3.0.tgz"
+& $DSH plugin --profile <profile> add "file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.4.0.tgz"
 & $DSH plugin --profile <profile> remove @upear/dsh-safeharness
 
 # 无头跑一轮
@@ -520,4 +521,4 @@ Invoke-RestMethod -Uri 'https://api.github.com/repos/JueeeX/JueeeX-Upear-SafeHar
 
 ## 16. 交接时的一句话总结
 
-**插件已 GA（1.0.0）并迭代到 1.3.0（可选 Python 输入引擎 + 桌面设置面 + SQL 扫描范围收敛 + 桌面只读面板），本地全绿、公开仓库已发布 v1.2.2、1.3.0 同轮发布；桌面端待用户升级到 1.3.0。** T5.3 的只读面板已交付，第二步（巡检触发/写操作）与 §11.5 的两个部署验证是剩余项。 想继续做功能就开 T5.3 的独立分支；想"收口"就补 §11.5 的两个部署验证（真实 IM 投递、真实人工审批）——它们都需要用户侧凭据或预设切换，代码侧没有剩余必做项。
+**插件已 GA（1.0.0）并迭代到 1.3.0（可选 Python 输入引擎 + 桌面设置面 + SQL 扫描范围收敛 + 桌面只读面板），本地全绿、公开仓库已发布 v1.2.2、1.3.0 同轮发布；桌面端待用户升级到 1.3.0。** T5.3 的面板与面板内巡检触发都已交付；剩余的是 §11.5 的两个部署验证（真实 IM 投递、真实人工审批）与面板可选增强（账本导出、定时巡检面板化）。 想继续做功能就开 T5.3 的独立分支；想"收口"就补 §11.5 的两个部署验证（真实 IM 投递、真实人工审批）——它们都需要用户侧凭据或预设切换，代码侧没有剩余必做项。

@@ -648,7 +648,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   // private Connection RPC channel. Only profiles that compose the `connection`
   // service (the Web GUI bundle does; headless profiles do not) get a channel,
   // and the browser tab tolerates the channel being absent on its own.
-  registerPanelRoute(ctx, { runtime, startedAt, logger, facts: { engine: engineFact } })
+  registerPanelRoute(ctx, { runtime, startedAt, logger, facts: { engine: engineFact }, patrol })
   // 11) Rule-file watch (failures keep the previous rule set, never half-apply).
   if (cfg.rules.watch) {
     const dir = cfg.rules.dir.length > 0 ? resolve(cfg.rules.dir) : packagedRulesDir()

@@ -13,6 +13,9 @@ export const PANEL_CHANNEL = '/safeharness'
 /** Endpoint on that channel that returns {@link PanelPayload}. */
 export const PANEL_STATUS_ENDPOINT = 'status'
 
+/** Endpoint that runs one patrol and returns its report. */
+export const PANEL_PATROL_ENDPOINT = 'patrol'
+
 /**
  * One denial as the panel shows it. Deliberately a projection, not the ledger
  * record: the ledger may grow fields, and the GUI must never be the reason a
@@ -106,5 +109,39 @@ export interface PanelError {
   readonly error: { readonly code: string; readonly message: string }
 }
 
+/** One patrol finding (codes and counts only — patrol's own contract). */
+export interface PanelFinding {
+  /** Check code (`audit_rate`, `health_probe`, …). */
+  readonly code: string
+  /** FAIL / WARN / OK / SKIP. */
+  readonly severity: string
+  /** Short, non-configured detail. */
+  readonly detail: string
+}
+
+/** One completed patrol, as the panel renders it. */
+export interface PanelPatrolReport {
+  /** ISO-8601 UTC timestamp of the run. */
+  readonly ranAt: string
+  /** Process-style exit code: 0 clean, 1 FAIL, 2 patrol itself errored. */
+  readonly exitCode: 0 | 1 | 2
+  /** Finding counts. */
+  readonly summary: { readonly fail: number; readonly warn: number; readonly ok: number; readonly skip: number; readonly clean: boolean }
+  /** Findings, in the order the checks ran. */
+  readonly findings: readonly PanelFinding[]
+  /** Whether every configured notification channel accepted the message. */
+  readonly notified: boolean
+  /** Set only when patrol itself failed (exit 2). */
+  readonly internalError?: string
+}
+
+/** Successful patrol envelope. */
+export interface PanelPatrolOk {
+  readonly ok: true
+  readonly value: PanelPatrolReport
+}
+
+/** What a patrol call resolves to. */
+export type PanelPatrolResult = PanelPatrolOk | PanelError
 /** What one panel RPC call resolves to. */
 export type PanelResult = PanelOk | PanelError
