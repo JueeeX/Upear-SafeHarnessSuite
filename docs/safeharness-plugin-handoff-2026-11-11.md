@@ -444,7 +444,7 @@ DSH 的 UI 插件是"客户端半包"：包要声明 `dsh.client: { inject: [...
 
 ```powershell
 cd F:\AgentSecurity\Upear
-git log --oneline -3                       # 期望 HEAD = 9be6e57（1.2.1 + perf 稳定性）；dsh/main = 1eacd42
+git log --oneline -3                       # 期望 HEAD = 1.2.1 之后的最新文档提交（9be6e57 或更新）；dsh/main = 1eacd42
 git rev-parse dsh/main                     # 期望 1eacd42（= v1.2.1 tag f1297b3 + 一个 test-only 提交）
 cd plugins\dsh-safeharness
 pnpm build; pnpm test                      # 期望 34 文件 / 605 全绿
