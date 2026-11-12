@@ -51,6 +51,12 @@ export interface FakeHost {
   readonly disposers: (() => unknown)[]
   /** Services readable through `ctx.get`. */
   readonly services: Map<string, unknown>
+  /**
+   * Publish a service after the host was built. Cordis starts a fiber only once
+   * every injected service is available; the fake reproduces that by running the
+   * queued `inject()` callbacks when this method satisfies them.
+   */
+  activateService(name: string, value: unknown): void
   /** Invoke every listener of one event with a `next` waterfall. */
   emit(event: string, ...args: unknown[]): Promise<unknown>
   /**
@@ -118,12 +124,30 @@ export function createFakeHost(options: FakeHostOptions = {}): { host: FakeHost;
   const promptSections: { name: string; order: number; text: string; complete?: boolean }[] = []
   const disposers: (() => unknown)[] = []
   const services = new Map<string, unknown>(Object.entries(options.services ?? {}))
+  /** Callbacks waiting for their injected services, oldest first. */
+  const pendingInject: (() => boolean)[] = []
+
+  const attemptInjects = (): void => {
+    for (const attempt of [...pendingInject]) {
+      if (!attempt()) continue
+      pendingInject.splice(pendingInject.indexOf(attempt), 1)
+    }
+  }
 
   const ctx: Record<string, unknown> = {
     on(event: string, handler: (...args: unknown[]) => unknown) {
       const list = listeners.get(event) ?? []
       list.push({ event, handler })
       listeners.set(event, list)
+      return () => {}
+    },
+    inject(deps: string[], callback: (child: unknown) => unknown) {
+      const attempt = (): boolean => {
+        if (!deps.every((dep) => services.has(dep))) return false
+        callback(ctx)
+        return true
+      }
+      if (!attempt()) pendingInject.push(attempt)
       return () => {}
     },
     effect(execute: () => unknown) {
@@ -136,6 +160,7 @@ export function createFakeHost(options: FakeHostOptions = {}): { host: FakeHost;
     },
     provide(name: string, value: unknown) {
       services.set(name, value)
+      attemptInjects()
       return () => {}
     },
     logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -168,6 +193,10 @@ export function createFakeHost(options: FakeHostOptions = {}): { host: FakeHost;
     promptSections,
     disposers,
     services,
+    activateService(name, value) {
+      services.set(name, value)
+      attemptInjects()
+    },
     async emit(event, ...args) {
       const list = listeners.get(event) ?? []
       if (list.length === 0) throw new Error(`no listener registered for ${event}`)

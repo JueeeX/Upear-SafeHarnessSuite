@@ -1,6 +1,19 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.2.1 — 2026-11-12
+
+修复：**桌面端设置页看不到、也改不了 safeharness 配置**（P3 §11.3）。这是宿主 0.2.2-rc.1 的 settings API 与插件按 0.1.0-rc.5 类型源实现之间的差异，不是配置错误。
+
+- **根因（两处，实测确认）**：① 0.2.2-rc.1 的 `settings` 是表单服务（`describe`/`configure`/`write`），**没有** `register(ns, schema)`；旧代码只认 `register`，所以 `seams.settings` 永远 false。② 设置页只为 `Config` 里标了 `.volatile()` 的字段生成表单；插件原先一个都没标，于是 entry 不出现在 `describe()` 结果里。
+- **设置面接入**：`Config` 的在线可编辑子集加 `.volatile()`（输入/工具/结果/输出/judge/审批/预算/起草）；`preset`、`engine`、`rules`、`audit`、`posture`、`patrol`（含 webhook/secret/token）与数组字段保持 patch-only。数值字段补 `.min()/step()`，保证设置页写入的值不会让下次启动的 `resolveConfig` 拒绝。
+- **在线生效**：监听 Loader 的 `loader/volatile-update`（只派发给本 fiber 的监听器），重新 `resolveConfig` 后走 `applyHotConfig`：重编译规则、替换运行时配置、记一条 `rules_reloaded`。一次设置写入可能触发多次事件，按结构相等去重；fiber 拆除后不再处理。
+- **配置兼容**：`resolveConfig` 入口新增 `unwrapVolatile`，把宿主解析出的 `.volatile()` box 还原为普通值；预设展开与校验逻辑不变（R37 保留）。公开的 `Config` 类型仍按普通形状声明，因为消费侧永远经过 `resolveConfig`。
+- **设置服务检测**：改用 `ctx.inject(['settings'], …)` 延迟读（`settings` 在插件注入的 `tools`/`systemPrompt` 之后才启动）；旧宿主仍有 `register` 时继续走旧 watch 路径。`safeharness_status.seams.settings` 此时如实为 true。
+- **测试**：新增 `tests/settings-surface.test.ts`（8 例：volatile 白名单、凭据字段不可在线编辑、box 还原、延迟检测、旧 register 兼容、volatile-update 生效与去重、非法更新保留旧配置）；全套 **34 文件 / 605 用例**。真实宿主冒烟：`safeharness-dev` 上 `settings.describe()` 出现 safeharness，`configEditor.edit` 改 `input.mode: off` 后运行时立即生效且账本恰好一条 `rules_reloaded`。
+- 文档：README 新增 §4.5（设置页与 volatile 白名单）、已知限制第 19 条（表单不显示 preset 展开值）；handoff §11.3 改写。
+- 未验证：真实 GUI 点击路径（本次用宿主 `configEditor`/`settings.describe` API 验证，行为等价）；真实 IM 投递与人工审批仍未验证。
+
 ## 1.2.0 — 2026-11-12
 
 新增功能（M5 T5.1 第 2 步）：**可选的 Python 输入引擎**（sidecar）。默认仍是内置 TypeScript 引擎，行为与 1.1.1 完全一致；只有显式配置 `engine.kind: sidecar` 才启用。

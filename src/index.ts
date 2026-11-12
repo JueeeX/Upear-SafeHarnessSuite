@@ -440,8 +440,13 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   }
   ctx.provide(SAFEHARNESS_SERVICE, service)
 
+  // Set during fiber teardown so a config update racing the disposal cannot touch
+  // a ledger that is already closing.
+  let disposed = false
+
   // Everything below is owned by the fiber: disposers are managed by Cordis.
   ctx.effect(() => () => {
+    disposed = true
     // Stop the child first: after `ledger.close()` its records would be dropped.
     void sidecarEngine?.stop()
     void ledger.close()
@@ -574,28 +579,68 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     logger.info('safeharness: command service absent in this profile; /safeharness is unavailable')
   }
 
-  // 10) Settings hot reload (optional seam: headless profiles may omit it).
-  const settingsService = ctx.get('settings') as
-    | { register?: (ns: SettingsNamespace, schema: unknown, options?: object) => { watch?: (cb: (next: SafeHarnessConfig) => void | Promise<void>) => () => void } }
-    | undefined
-  if (settingsService !== undefined && typeof settingsService.register === 'function') {
+  // 10) Live configuration.
+  //
+  // 10a) Host 0.2.2-rc.1 settings shape: the host derives settings pages from the
+  // plugin's own `Config` and commits `.volatile()` fields into the running fiber
+  // without a remount. The Loader then emits `loader/volatile-update` to listeners
+  // owned by that fiber, so this listener sees only this entry's updates. `config`
+  // is the resolved object `apply()` received; its volatile refs are updated in
+  // place, which is why re-resolving it here reads the new values.
+  //
+  // A settings write can reach this listener more than once (the configuration
+  // editor reconciles the patch, and the profile watcher may reload it again). The
+  // cheap equality check keeps the ledger to one `rules_reloaded` per real change.
+  ctx.on('loader/volatile-update', () => {
+    if (disposed) return
     try {
-      const scope = settingsService.register(SETTINGS_NS, Config, { base: config })
-      hooks.settings = true
-      scope.watch?.((next) => {
-        try {
-          const nextCfg = resolveConfig(next)
-          applyHotConfig(runtime, nextCfg, rulesOptions, logger)
-        } catch (error) {
-          // A rejected settings write is the settings service's problem; we keep
-          // the last good config and say so loudly (§7, hot-update failure).
-          logger.warn(`safeharness: rejected settings update, keeping previous config: ${describe(error)}`)
-        }
-      })
+      const next = resolveConfig(config)
+      if (sameConfig(runtime.config, next)) return
+      applyHotConfig(runtime, next, rulesOptions, logger)
     } catch (error) {
-      runtime.internalError('settings', error)
+      // Same contract as the legacy path: keep the last good config, say so loudly.
+      logger.warn(`safeharness: rejected live config update, keeping previous config: ${describe(error)}`)
     }
-  }
+  })
+
+  // 10b) Report the settings seam honestly. The service starts after the services
+  // this plugin injects, so a load-time `ctx.get('settings')` is always undefined
+  // in a real host; `ctx.inject` is the ordering-safe read. A host that still
+  // exposes the older namespace-registration API gets the legacy watch path.
+  ctx.inject(['settings'], (settingsCtx) => {
+    const settingsService = settingsCtx.get('settings') as
+      | {
+        register?: (ns: SettingsNamespace, schema: unknown, options?: object) => { watch?: (cb: (next: SafeHarnessConfig) => void | Promise<void>) => () => void }
+        configure?: (...args: unknown[]) => unknown
+        describe?: (...args: unknown[]) => unknown
+      }
+      | undefined
+    if (settingsService === undefined) return
+    if (typeof settingsService.register === 'function') {
+      try {
+        const scope = settingsService.register(SETTINGS_NS, Config, { base: config })
+        hooks.settings = true
+        scope.watch?.((next) => {
+          try {
+            const nextCfg = resolveConfig(next)
+            applyHotConfig(runtime, nextCfg, rulesOptions, logger)
+          } catch (error) {
+            // A rejected settings write is the settings service's problem; we keep
+            // the last good config and say so loudly (§7, hot-update failure).
+            logger.warn(`safeharness: rejected settings update, keeping previous config: ${describe(error)}`)
+          }
+        })
+      } catch (error) {
+        runtime.internalError('settings', error)
+      }
+      return
+    }
+    if (typeof settingsService.configure === 'function' && typeof settingsService.describe === 'function') {
+      // The pages come from `Config` + the volatile fields; nothing to register.
+      hooks.settings = true
+      logger.info('safeharness: settings service detected; configuration pages are host-driven')
+    }
+  })
 
   // 11) Rule-file watch (failures keep the previous rule set, never half-apply).
   if (cfg.rules.watch) {
@@ -681,4 +726,19 @@ function installRuleWatch(
 /** One-line error description for logs. */
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Cheap structural equality for two resolved configs.
+ *
+ * Every field is plain JSON data (no functions, no cycles) and the object is
+ * small, so stringifying is safe here. Used only to swallow duplicate Loader
+ * `loader/volatile-update` events produced by one settings write.
+ */
+function sameConfig(a: ResolvedConfig, b: ResolvedConfig): boolean {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
 }
