@@ -20,8 +20,8 @@
 | 当前版本 | `1.3.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
 | 桌面端插件 | 运行 **1.2.2**（2026-11-12 实测 `version: 1.2.2`、`seams.settings: true`、`engine.kind: builtin`）。**1.3.0 已发布待装**：退出 DSH（含托盘）→ `plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.3.0）→ 重启；面板要重启后才出现在 设置 → 内置插件 |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = `0e6049f`，tag **`v1.2.2`** 指同一提交，CI `completed/success` |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = `c584c36`（1.2.2 功能 + 发布文档提交；工作区备份远端 `github` 已同步同名 main 与 v1.2.0–v1.2.2 标签） |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = **`b6b10c3`**，tag **`v1.3.0`** 指向同一提交（首次发布 `155acac` 漏了 `tsconfig.client.json`，已在 `b6b10c3` 修正并重打 tag）。CI：推送成功，但本机 `api.github.com` 超时，本次未能读到 runs 状态，需要时在网页确认 |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.3.0 功能提交 `96a4913`、发布清单修正 `39db2db`（`github` 备份远端同步 main 与 v1.2.0–v1.3.0 标签） |
 | 测试 | 本机 `pnpm test` = **38 文件 / 638 用例**全绿（含 sidecar 13+7+4+3、设置面 8、SQL 扫面 12、面板 5+10+浏览器半契约 6）；公开树 35 文件 / 620（617 pass + 3 skip），CI 剔除 perf 后 34 文件 / 612（609 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 §12.10、1.2.1 §12.11、1.2.2 §12.12） |
 | 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 见 `evidence/R42-sql-scan-convergence.md`，1.3.0 见 `evidence/1.3.0-panel.md`） |
