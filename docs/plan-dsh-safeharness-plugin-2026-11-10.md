@@ -859,7 +859,7 @@ pnpm test:golden        # 一致性
   **全部完成（1.2.0，2026-11-12）**——第 1 步（2026-11-11）交付进程边界与传输：`src/engine/sidecar.ts` + `tests/sidecar.test.ts`(9→13) + `tests/helpers/fake-sidecar.mjs`；第 2 步交付接线与配置：`scripts/safeharness_sidecar.py`（6 个 method、规则下发、只读零回声）、`src/engine/sidecar-engine.ts`（`evaluateInputAsync`，仅输入面）、`engine` 配置段（默认 `builtin`）、姿态 code `engine_sidecar_unavailable`（10 项）+ hardened `failOn`、`/safeharness status` 的 `engine` 块；失败语义：observe/balanced 记录并回落内置引擎，hardened 拒绝输入/拒绝加载；一致性 `tests/sidecar-parity.test.ts` 30/30；干净 profile tarball 冷启动两态（正常 / command 指向不存在文件）见 `evidence/M5-sidecar.md` §3。全套 33 文件 / 597 用例。
 - [x] T5.2 LLM 辅助规则起草工具（草稿不落地，PUT/设置才生效）
   证据：`evidence/M5-drafting.md` + `tests/draft.test.ts`(29) + `examples/cordis.patch.draft.example.yml` → 工具 `safeharness_draft_rule` 与 `/safeharness draft [--chain]`；只返回经 loader 校验的 YAML（`applied:false`），不写文件、不重载；起草请求带 `DRAFT_REQUEST_MARK` 跳过评审与预算；1.1.0 tarball 在干净 profile 冷启动通过。未验证：真实模型起草（需桌面端升级后手敲一次）
-- [x] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）——**1.3.0 第一步完成**：只读面板进宿主设置页；巡检触发与写操作留第二步
+- [x] T5.3 客户端 UI 面板（独立 client 包：状态、最近拦截、巡检结果）——**1.3.0 第一步**：只读面板进宿主设置页；**1.4.0 第二步**：面板内两步确认运行巡检（宿主侧单飞 + 冷却）；**1.5.0 第三步**：事件卡片（工具/原因/严重度/规则/项目与会话 id/时间 + 红橙紫绿配色 + 筛选）、会话列表、账本路径、模式彩色胶囊。剩可选项：账本片段导出、定时巡检面板化（明确不做调度）。
 
 ### 9.1 dev profile 的 patch 行
 
@@ -1130,7 +1130,7 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 |---|---|---|
 | D24 | 1.2.2 之后**不再开补丁版本**做文档/README 修整；文档改动直接进 `main`，公开树用 doc-only 提交同步，不动 `package.json`/tag（沿用 D21） | 版本号 = 交付物；README 里的旧 tgz 文件名、姿态 code 数（9→10）属于文档缺陷，不影响 tarball 行为 |
 
-**下一步**：只剩 T5.3 客户端 UI 面板（§9 T5.3，评估见交接文档 §11.2）。它是**独立 client 包**，不改动本插件主包的行为与配置面；先在 DSH 客户端插件 API 上做可行性验证（manifest 契约、slot 注册、数据通道），再决定是否按天投入。
+**下一步**：T5.3 已在 1.3.0/1.4.0/1.5.0 三步内完成（只读面板 → 巡检动作 → 信息增强）。代码侧计划项全部收口；剩余为可选项与两个部署验证（真实 IM 投递、真实人工审批），见交接文档 §11.2/§14。
 
 ### 12.14 1.3.0 客户端面板第一步（T5.3，2026-11-12）
 
@@ -1166,8 +1166,25 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 **验收证据**：`evidence/1.4.0-panel-patrol.md`。
 
----
+### 12.16 1.5.0 面板信息增强（T5.3 第三步，2026-11-12）
 
+用户反馈（原文）："感觉可用的信息很少，过于简洁了，也看不出是哪个对话，拦截了哪个工具，不够详细，因为什么原因拦截，也没有什么颜色展示（比如拦截时红色）。" 1.3.0/1.4.0 面板只有计数 + 最近 10 条 `deny` 的裸代码，确实回答不了"谁、哪一面、哪个工具、为什么"。
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V1 | 账本记录已含 `session` / `tool` / `reason_code` / `severity` / `category` / `rule_ids` / `args_sha256`，但 1.3.0 的投影只取了 5 个字段 | 事件卡片可以做到"原因 + 严重度 + 规则 + 短会话 id + 参数哈希前缀"，全部是既有粗粒度字段，不新增泄露面 |
+| V2 | 账本 `session` 是 `session-<uuid>`；DSH 会话头有 `cwd` / `createdAt`（会话元数据，非对话内容） | 三个接缝（`agent/pre-step`、`tools/pre-execute`、`approval/request`）把 `header.cwd` / `createdAt` 记进插件状态；面板显示"项目 + 短 id + 创建/最近时间"，不读会话日志、不显示模型生成的标题 |
+| V3 | 顶部计数是进程内 `runtime.counters`，账本窗口跨重启；两者会不相等 | 面板分别标注"本进程 / 账本最近 N 条"，不做归一（归一反而会掩盖重启） |
+| V4 | `tool_result`（含被拒调用的 error 结果）是纯观察记录，混进事件列表会显示成"内部错误" | 服务端投影显式排除 `kind === 'tool_result'`；只有 `tool_result_flagged` / `tool_denied` / `approval_*` / `posture` / `patrol` / `budget` / `error` 进入事件列表 |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D32 | 事件列表从账本尾部 200 条取非放行记录（最多 60），不新增查询参数接口 | 面板是只读窗口，不是查询语言；筛选在浏览器端做，宿主路由保持两个端点 |
+| D33 | 会话标识 = 项目 + 短 id + 时间，**不显示标题** | 标题是模型生成文本，账本不存；为显示它去解压/解析会话日志会破坏"面板只含代码/哈希/元数据"的边界 |
+| D34 | 配色用实心徽标而非宿主主题 token | 本包在 DSH 单仓之外构建，拿不到其 CSS Modules/主题变量；白字实心块在浅色/深色壳里都可读 |
+| D35 | 计数与事件分栏标注口径，不做"重启后仍显示历史计数"的补偿 | 计数是"本进程发生了什么"，账本是"历史上发生了什么"；混在一起会让巡检/对账失去意义 |
+
+**验收证据**：`evidence/1.5.0-panel-detail.md`（含三张真机截图）。
 
 ---
 
