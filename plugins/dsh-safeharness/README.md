@@ -120,7 +120,7 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # tsc -> lib/
-pnpm test             # 596 个用例（33 个文件）
+pnpm test             # 597 个用例（33 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
@@ -586,7 +586,7 @@ plugins/dsh-safeharness/
 ├─ rules/               inform.yaml（20 条）+ chains.yaml（3 条）
 ├─ examples/            cordis.patch.example.yml / cordis.patch.judge.example.yml / cordis.patch.notify.example.yml / cordis.patch.sidecar.example.yml
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
-├─ tests/               596 个用例（33 个文件）
+├─ tests/               597 个用例（33 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -605,7 +605,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # tsc -> lib/
-pnpm test             # vitest：33 个文件 / 596 个用例（内部含黄金语料、sidecar 一致性与失败矩阵；公开树不含内部语料测试文件，数量以 CI 为准。CI 另剔除 tests/perf.test.ts）
+pnpm test             # vitest：33 个文件 / 597 个用例（内部含黄金语料、sidecar 一致性与失败矩阵）。公开树 30 文件 / 579（576 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 29 文件 / 571（568 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
