@@ -12,7 +12,7 @@
 
 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里是一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核/语义评审、审批桥、NDJSON 哈希链账本、姿态自检、巡检/通知、规则起草）装进 DSH 的执行生命周期。
 
-当前版本 **1.8.0**（2026-11-12）。M0–M5 全部完成，T5.3 客户端面板的最后一个可选项（账本片段导出）也已完成；1.8.0 新增**自定义模型**（URL + Key + 协议 + 模型，可一键设为评审路由）。桌面 profile 已于 16:48 安装 1.8.0 并重启（应用进程 16:49 启动），也就是说**桌面端现在应已运行 1.8.0**；若窗口里仍是旧面板，完全退出（含托盘）重启一次即可。
+当前版本 **1.8.1**（2026-11-12）。M0–M5 全部完成；1.8.0 增加自定义模型与账本导出，1.8.1 收紧高熵误报并**在桌面 profile 打开 `results.mode: enforce`**：含 `password=` / `sk-…` 的工具结果会在进入模型前被整条替换（已真机验证）。桌面 profile 已于 19:02 重启并运行 1.8.1；若窗口里仍是旧版本，完全退出（含托盘）后按 §9 升级。
 
 剩余没有代码缺口，只有两个**环境验证**：真实飞书/钉钉/企业微信 webhook 投递（用户无法提供 webhook）和真实人工审批（需要 `approval: ask` 预设 + 人工点击）。这两项不影响代码收尾，部署时补验即可。
 
@@ -23,16 +23,16 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | `1.8.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
+| 当前版本 | `1.8.1`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用在 `D:\dsh` |
-| 桌面端插件 | 桌面 profile 已指向 `upear-dsh-safeharness-1.8.0.tgz`；`desktop/node_modules/@upear/dsh-safeharness/package.json` 版本 1.8.0；应用 16:49 重启 |
-| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（已指向 1.8.0；运行前必须完全退出 DSH，包括托盘） |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`0b66794`**，tag **`v1.8.0`** |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.8.0 功能提交 `bc35d9b`、发布记录 `6c68789`；`github` 备份远端已同步 main 与 v1.8.0 标签 |
-| 测试 | 本机 **41 文件 / 694 用例**全绿；公开树 **38 文件 / 676**（673 pass + 3 skip）；CI 口径 **37 / 668**（665 + 3，另剔除 `tests/perf.test.ts`） |
-| tarball | `dist/upear-dsh-safeharness-1.8.0.tgz`，318,016 B，sha256 `F87C435195190F70D5F4C790BAFCC283485709769C615F9E71CC42C3514E1EA2` |
-| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，不提交；1.8.0 见 `1.8.0-provider-export.md` 与两张截图） |
-| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9、决策/风险 §12；1.8.0 见 §12.19） |
+| 桌面端插件 | 桌面 profile 已指向 `upear-dsh-safeharness-1.8.1.tgz`；`desktop/node_modules/@upear/dsh-safeharness/package.json` 版本 1.8.1；应用 19:02 重启，`results.mode: enforce` |
+| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（已指向 1.8.1；运行前必须完全退出 DSH，包括托盘） |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`0062f4f`**，tag **`v1.8.1`**（tag 对象 `350b6c7...`） |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.8.1 修复提交 `1fa45a6`（其后还有本文档提交）；`github` 备份远端已同步 main 与 v1.8.1 标签 |
+| 测试 | 本机 **41 文件 / 697 用例**全绿；公开树 **38 文件 / 679**（676 pass + 3 skip）；CI 口径 **37 / 671**（668 + 3，另剔除 `tests/perf.test.ts`） |
+| tarball | `dist/upear-dsh-safeharness-1.8.1.tgz`，318,953 B，sha256 `6071F100735B8262F5BED99EC47BA3C5A5595E8101DE5D09BBDD775B7909C61C` |
+| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，不提交；1.8.0 见 `1.8.0-provider-export.md` 与两张截图，1.8.1 见 `1.8.1-results-enforce.md`） |
+| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9、决策/风险 §12；1.8.0 见 §12.19，1.8.1 见 §12.20） |
 | 公开 README | 插件 README 的 §4.7（面板）、§4.8（顺序/覆盖/评审模型）是给用户的正式说明 |
 
 ---
@@ -111,7 +111,7 @@ plugins/dsh-safeharness/
 ├─ rules/                      packaged inform/chains YAML（20 规则 + 3 链）
 ├─ scripts/                    build-client / clean / link-dsh / publish-public /
 │                              fake-openai / session-dump / safeharness_sidecar.py
-├─ tests/                      41 个文件 / 694 用例
+├─ tests/                      41 个文件 / 697 用例
 ├─ README.md / CHANGELOG.md
 └─ evidence/                   本机证据（gitignore）
 ```
@@ -295,7 +295,7 @@ cd F:\AgentSecurity\Upear\plugins\dsh-safeharness
 node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit
 node node_modules/typescript/bin/tsc -p tsconfig.client.json
 
-# 全量测试（本机 41 文件 / 694 用例）
+# 全量测试（本机 41 文件 / 697 用例）
 node node_modules/vitest/vitest.mjs run
 node node_modules/vitest/vitest.mjs run tests/panel-settings.test.ts   # 单文件
 
@@ -309,7 +309,7 @@ node scripts/build-client.mjs
 npm pack --pack-destination dist
 ```
 
-`lib/` 是**构建产物**，被 `.gitignore` 忽略；公开仓库不提交 `lib/`，但 tarball 包含。公开树测试口径 38 / 676（内部语料缺 3 skip）；CI 剔除 `tests/perf.test.ts` → 37 / 668。
+`lib/` 是**构建产物**，被 `.gitignore` 忽略；公开仓库不提交 `lib/`，但 tarball 包含。公开树测试口径 38 / 679（676 pass + 3 skip）；CI 剔除 `tests/perf.test.ts` → 37 / 671。
 
 测试重点：
 
@@ -472,12 +472,14 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 
 ## 9. 当前桌面端状态与升级
 
-- 桌面 profile 依赖：`file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.8.0.tgz`
-- `desktop/node_modules/@upear/dsh-safeharness/package.json` 版本 **1.8.0**
-- 桌面应用进程 16:49 启动（安装完成后重启）
-- 安装脚本：`C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 指向 1.8.0）
+- 桌面 profile 依赖：`file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.8.1.tgz`
+- `desktop/node_modules/@upear/dsh-safeharness/package.json` 版本 **1.8.1**
+- 桌面应用进程 19:02 启动（安装完成后重启）；`results.mode: enforce` 已生效
+- 安装脚本：`C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 指向 1.8.1）
 
 **升级/重装**：完全退出 DSH（含托盘）→ 双击脚本 → 重启。若面板/版本没变，检查 `desktop` 的 `package.json` 依赖与 `node_modules` 版本，或看账本 `plugin_loaded` 里的 `version` label。
+
+**结果层强制拦截的代价**：任何含凭据形态的工具结果（测试 fixture、文档示例、`.credentials.yaml`）都会被整条替换，这是预期行为；开发插件请用 `safeharness-dev`（observe）。
 
 ---
 
@@ -492,7 +494,8 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 7. **`llm-pi-ai` 被 home patch / `--patch` overlay 覆盖时**，`settings.update('llm-pi-ai')` 可能被宿主拒绝（teammate 在 overlay profile 实测到）；正常 profile 可用。添加自定义模型失败时不会破坏现有配置。
 8. **面板动作有限**：不写规则文件、不做通用调度、不提供 provider 编辑（只能添加/删除同名重建）；导出只在浏览器端保存。
 9. **CI 状态未在本地读取**（`api.github.com` 超时）；push 成功，runs 需要在网页确认。
-10. **旧文档里的“桌面 1.6.0”已过时**：现在是 1.8.0 profile。
+10. **结果层强制拦截的代价**：任何含凭据形态的工具结果（含测试 fixture、文档示例、`.credentials.yaml`）都会被整条替换；输出层仍是 `warn`，若把结果层关掉，模型仍可能把密钥写进回答。开发插件时用 `safeharness-dev`（observe）。
+11. **旧文档里的“桌面 1.6.0”已过时**：现在是 1.8.1 profile。
 
 ---
 
@@ -500,12 +503,12 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 
 按优先级：
 
-1. **确认桌面 1.8.0 面板**：设置 → 内置插件 → SafeHarness → 自定义模型，用本机 Ollama（`http://127.0.0.1:11434/v1`，协议 openai-completions，Key 随便填）或现有 liao 路由验证添加/删除/probe。
+1. **确认桌面 1.8.1 面板（并确认 `modes.results=enforce`）**：设置 → 内置插件 → SafeHarness → 自定义模型，用本机 Ollama（`http://127.0.0.1:11434/v1`，协议 openai-completions，Key 随便填）或现有 liao 路由验证添加/删除/probe。
 2. **通知自测按钮（可选）**：在巡检页加“发送测试通知”，复用 `notify` 通道，只发一句固定摘要；在没有真实 webhook 时也能验证配置形状与发送路径（不替代真实投递）。
 3. **审批演练 harness（可选）**：建一个 `approval: ask` 的 dev profile，用需要审批的工具调用走一遍 delegate/policy，补上“真实人工审批”证据。
 4. **真实 webhook 验证**：用户提供飞书/钉钉/企微 webhook 后，配置 `patrol.notify` 并跑一次巡检；这是部署验收项，不是代码项。
 5. **provider 编辑/CAS（可选）**：settings 加 expectedRevision 做并发保护；自定义 provider 支持改 URL/模型而不是删除重建。
-6. **CI**：在网页确认 v1.8.0 的 runs 绿。
+6. **CI**：在网页确认 v1.8.1 的 runs 绿。
 
 ---
 
@@ -534,12 +537,12 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 
 1. **读**：本文 §0–§10；需要历史细节再读旧 handoff 与 README §4.7/§4.8。
 2. **核环境**：`$env:DSH_HOME`、`D:\dsh\resources\runtime\cli\bin\dsh.cmd --version`、Node `v25.8.2`、Python（若 sidecar）。
-3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（应只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`）；`git log --oneline -3` 应看到 `6c68789` / `bc35d9b`；`git remote -v` 确认 `dsh`/`github`，不要碰 `origin`。
-4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.0` 应分别指向 `0b66794...` 与 tag 对象。
-5. **构建/测试**：按 §6 跑 tsc + vitest，期望 694 passed。
-6. **起 dev host**：§8.1，打开面板，确认五个标签、版本 1.8.0、设置页读到 `providerConfigurable: true`。
-7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `/safeharness audit 20`；确认 `plugin_loaded` 的 `version` 是 1.8.0、`ruleset_hash` 存在。
-8. **看桌面**：确认桌面 profile 依赖 1.8.0、应用已重启；若没有，按 §9 升级。
+3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（应只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`）；`git log --oneline -3` 应看到 `1fa45a6` 与随后的文档提交；`git remote -v` 确认 `dsh`/`github`，不要碰 `origin`。
+4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.1` 应分别指向 `0062f4f...` 与 tag 对象 `350b6c7...`。
+5. **构建/测试**：按 §6 跑 tsc + vitest，期望 697 passed。
+6. **起 dev host**：§8.1，打开面板，确认五个标签、版本 1.8.1、设置页读到 `providerConfigurable: true`。
+7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `/safeharness audit 20`；确认 `plugin_loaded` 的 `version` 是 1.8.1、`ruleset_hash` 存在。
+8. **看桌面**：确认桌面 profile 依赖 1.8.1、应用已重启、`results=enforce`；若没有，按 §9 升级。
 9. **做一次只读 smoke**：设置 → 内置插件 → SafeHarness，截一张概览/设置图；不要开定时巡检。
 10. **清理**：按 §8.4；删 `panel-state.json`，确认无测试 provider/凭据残留。
 
@@ -548,7 +551,7 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 ## 14. 常见问题（FAQ）
 
 **Q：面板里“工作区/对话”还是选不了？**
-A：先看 `$DSH_HOME/safeharness/sessions.json` 是否存在、是否有历史会话；面板选项来自它 ∪ 账本事件。如果没有历史行，重启一次宿主并产生一条真实会话。确认版本是 1.7.0+（1.8.0 当前）。
+A：先看 `$DSH_HOME/safeharness/sessions.json` 是否存在、是否有历史会话；面板选项来自它 ∪ 账本事件。如果没有历史行，重启一次宿主并产生一条真实会话。确认版本是 1.7.0+（1.8.1 当前）。
 
 **Q：拒绝消息“该操作不被平台安全策略允许（SafeHarness 安全插件）”是谁的？**
 A：卡片 UI 是 DSH 自带；这句话是本插件 `TOOL_DENIAL_TEXT`。要确认是谁拦的，看账本 `tool_denied` 或面板事件。
@@ -576,14 +579,18 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 |---|---|
 | 1.8.0 证据 | `plugins/dsh-safeharness/evidence/1.8.0-provider-export.md` |
 | 1.8.0 截图 | `evidence/1.8.0-panel-settings-providers.png`、`evidence/1.8.0-panel-export.png` |
+| 1.8.1 证据 | `plugins/dsh-safeharness/evidence/1.8.1-results-enforce.md`（含前后账本对照与真机验证） |
 | 1.7.0 证据 | `evidence/1.7.0-panel-workbench.md` + 5 张截图 |
 | 1.6.0 证据 | `evidence/1.6.0-panel-workbench.md` + 4 张截图 |
 | 研究笔记 | `docs/1.7.0-notes-q4-q5.md`（顺序/覆盖/judge 模型） |
-| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.19 |
+| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.19（1.8.0）、§12.20（1.8.1） |
 | 旧交接 | `docs/safeharness-plugin-handoff-2026-11-11.md`（历史坑与早期决策） |
 | 1.8.0 本地提交 | `bc35d9b`（功能）、`6c68789`（发布记录） |
 | 1.8.0 公开提交 | `0b66794`，tag `v1.8.0`（tag 对象 `708539e...`） |
 | 1.8.0 tarball | 318,016 B，sha256 `F87C435195190F70D5F4C790BAFCC283485709769C615F9E71CC42C3514E1EA2` |
+| 1.8.1 本地提交 | `1fa45a6`（修复） |
+| 1.8.1 公开提交 | `0062f4f`，tag `v1.8.1`（tag 对象 `350b6c7...`） |
+| 1.8.1 tarball | 318,953 B，sha256 `6071F100735B8262F5BED99EC47BA3C5A5595E8101DE5D09BBDD775B7909C61C` |
 
 **安全纪律（每次改代码/证据/文档前重温）**：
 
