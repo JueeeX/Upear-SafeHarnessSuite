@@ -21,11 +21,13 @@ import { createSidecarEngine, type SidecarEngine } from './engine/sidecar-engine
 import { Sidecar, SidecarError } from './engine/sidecar.js'
 import type { RuleSet } from './engine/types.js'
 import { tryLoadRuleSet } from './engine/rules.js'
-import { resolveLedgerDir, resolvePanelStatePath } from './audit/paths.js'
+import { resolveLedgerDir, resolvePanelStatePath, resolveSessionIndexPath } from './audit/paths.js'
 import { createLedger } from './audit/ledger.js'
 import { Config, resolveConfig, type SafeHarnessConfig, type ResolvedConfig } from './config.js'
 import { createRuntime, type LoggerLike, type Runtime } from './runtime.js'
+import { SessionStateStore } from './state.js'
 import { installInputHook } from './hooks/input.js'
+import { sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf } from './hooks/context.js'
 import { installToolHooks } from './hooks/tools.js'
 import { installLlmHook, createJudgeFor, createDrafterFor } from './hooks/llm.js'
 import { installApprovalHook } from './hooks/approval.js'
@@ -35,6 +37,7 @@ import { statusTool, postureTool, auditQueryTool, patrolTool, draftRuleTool } fr
 import { registerPromptSection } from './surface/prompt.js'
 import { safeharnessCommand, JUDGE_PROBE_TEXT, type JudgeCommandTarget, type DraftCommandTarget } from './surface/commands.js'
 import { registerPanelRoute } from './panel/route.js'
+import { createPanelSettingsHost } from './panel/settings.js'
 import { createPatrolRunner } from './panel/patrol-runner.js'
 import { createPatrolScheduler } from './panel/schedule.js'
 import { SAFEHARNESS_SERVICE, type HookFlags, type PluginHandle, type SafeHarnessService } from './service.js'
@@ -356,7 +359,11 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     }
   }
   const engine: Engine = sidecarEngine ?? createEngine(ruleset, cfg)
-  const runtime = createRuntime({ config: cfg, engine, ledger, logger })
+  // Metadata-only index: workspace path and latest session title, so the panel's
+  // workspace/conversation filters still make sense after a restart. Never prompt
+  // text, tool arguments or model output (see state.ts and README §limits).
+  const sessionState = new SessionStateStore({ path: resolveSessionIndexPath(), logger })
+  const runtime = createRuntime({ config: cfg, engine, ledger, logger, state: sessionState })
 
   const hooks: HookFlags = {
     input: false,
@@ -450,6 +457,9 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   // Everything below is owned by the fiber: disposers are managed by Cordis.
   ctx.effect(() => () => {
     disposed = true
+    // Flush the metadata index before the process goes away; the ledger closes
+    // after it so a late record still lands.
+    sessionState.dispose()
     // Stop the child first: after `ledger.close()` its records would be dropped.
     void sidecarEngine?.stop()
     void ledger.close()
@@ -458,7 +468,14 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   ctx.on('session/event', (session, event) => {
     try {
       runtime.state.observe(event as { type: string; seq: number; time: number })
-      void session
+      // Titles are produced by the host's title provider as events arrive, not
+      // before the first pre-step. Capturing on every event means the metadata
+      // index learns a rename/suggestion without waiting for the next turn.
+      runtime.state.describe(sessionIdOf({ session }), {
+        workspace: sessionWorkspaceOf({ session }),
+        createdAt: sessionCreatedAtOf({ session }),
+        title: sessionTitleOf(ctx, { session }),
+      })
     } catch (error) {
       runtime.internalError('session/event', error)
     }
@@ -678,6 +695,9 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
       hash: reloaded.ruleset.hash.slice(0, 12),
     }
   }
+  // The judge/drafting settings tab writes through the host's own settings
+  // service; every read is lazy because `settings` starts after this plugin.
+  const panelSettings = createPanelSettingsHost(ctx, runtime, logger)
   registerPanelRoute(ctx, {
     runtime,
     startedAt,
@@ -686,6 +706,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
       engine: engineFact,
       rulesDir: () => runtime.config.rules.dir,
       draft: () => ({ enabled: runtime.config.draft.enabled, maxChars: runtime.config.draft.maxChars }),
+      judge: () => panelSettings.judgeFact(),
       schedule: () => schedule.snapshot(),
     },
     patrolRunner,
@@ -696,6 +717,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     }),
     schedule,
     reloadRules: reloadRulesForPanel,
+    settings: panelSettings,
   })
   // 11) Rule-file watch (failures keep the previous rule set, never half-apply).
   if (cfg.rules.watch) {

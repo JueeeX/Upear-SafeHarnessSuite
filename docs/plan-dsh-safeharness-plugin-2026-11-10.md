@@ -1207,6 +1207,29 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 **验收证据**：`evidence/1.6.0-panel-workbench.md`（含四张真机截图）。
 
+### 12.18 1.7.0 筛选修复、评审设置与来源标记（T5.3 后续，2026-11-12）
+
+用户反馈：工作区/对话下拉"还是选不了"、拒绝措辞看不出是本插件、面板仍丑、问 DSH 插件有没有优先级以及 judge 模型是什么/怎么在面板里设。
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V6 | 1.6.0 的工作区/对话选项只来自本进程内存；重启后账本有事件、内存表为空 → 两个下拉只有"全部/未知项目" | 新增 `$DSH_HOME/safeharness/sessions.json` 元数据索引（id/workspace/createdAt/title/touchedAt），启动恢复为 `historical` 行；选项再并上账本事件里出现过的 session id |
+| V7 | 标题由宿主 `sessionTitle` 服务在事件流里生成；只在下一次 pre-step 采会晚一轮 | `session/event` 也采一次标题；仍只用于显示，不进账本/模型上下文 |
+| V8 | 四个模型可见的拒绝措辞没有来源 | 统一加 `（SafeHarness 安全插件）`，保留"不点名规则/阈值/参数"的口径 |
+| V9 | 面板配色只跟 `prefers-color-scheme`，在白弹窗里渲染成黑卡片；KPI 3+1 换行；保存后跳回概览 | 改为跟随宿主 `color-scheme`/`data-theme`；2×2 KPI；保存后留在设置页（面板半 1.7.0） |
+| V10 | 用户问 judge 模型与面板设置；judge 配置只能改 profile YAML | 新增 `POST /safeharness/settings`（read/save/probe）：经宿主 `settings` 服务写 volatile 字段 → `cordis.patch.yml` → 热更新；probe 只回状态/耗时 |
+| V11 | 用户问 DSH 插件优先级，以及安全插件是否该挂最前 | 0.2.2 无数值优先级；四处安全接缝改 `{prepend:true}` 最佳努力 + `tools.guard` 单调兜底；README §4.8 与 `docs/1.7.0-notes-q4-q5.md` 写清边界 |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D41 | 会话元数据索引只存显示字段，不存计数/trail/prompt/参数/输出 | 面板要跨重启辨识对话；计数是进程事实，存盘会制造"第二个真相源" |
+| D42 | 索引 tmp+rename 原子写、750ms 合并、损坏忽略、卸载 flush | 标题每步都可能变；不能每条事件写盘，也不能让坏文件阻止插件加载 |
+| D43 | 评审设置走宿主 `settings` 服务，不新建配置存储 | 复用宿主校验/热更新/权限模型；自写 YAML 会绕过 loader 门并制造第二份配置 |
+| D44 | 面板只允许改 judge 的 enabled/scope/provider/model/maxChars/timeout 与 draft 路由；不暴露 preset/audit/tools 模式 | 高风险面（预设、账本、拦截模式）仍需操作者改 profile；面板设置解决的是"评审用哪个模型"这类低风险高频项 |
+| D45 | 顺序口径写"prepend 最佳努力 + guard 单调兜底"，不承诺绝对第一 | Cordis waterfall 允许更早监听器拦截/改写；承诺绝对优先是假保证，必须如实写 |
+
+**验收证据**：`evidence/1.7.0-panel-workbench.md`（含五张真机截图）。
+
 ---
 
 

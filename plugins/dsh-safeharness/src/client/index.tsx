@@ -21,18 +21,24 @@ import {
   PANEL_PATROL_ENDPOINT,
   PANEL_RELOAD_ENDPOINT,
   PANEL_SCHEDULE_ENDPOINT,
+  PANEL_SETTINGS_ENDPOINT,
   PANEL_STATUS_ENDPOINT,
 } from '../panel/protocol.js'
 import type {
   PanelDraftResult,
   PanelDraftValue,
+  PanelJudgeProbe,
   PanelPatrolReport,
   PanelPatrolResult,
   PanelPayload,
+  PanelProbeResult,
   PanelReloadResult,
   PanelResult,
   PanelSchedule,
   PanelScheduleResult,
+  PanelSettingsPatch,
+  PanelSettingsResult,
+  PanelSettingsValue,
 } from '../panel/protocol.js'
 import { SafeHarnessPanel } from './panel.js'
 
@@ -62,6 +68,12 @@ export interface PanelFace {
   readonly schedule: (input: { readonly enabled: boolean; readonly intervalMinutes: number | null }) => Promise<PanelSchedule>
   /** Re-read the rule directory without restarting the host. */
   readonly reloadRules: () => Promise<{ readonly rules: number; readonly chains: number; readonly hash: string }>
+  /** Read the judge/drafting routes and the provider catalog (1.7.0 `settings` endpoint). */
+  readonly loadSettings: () => Promise<PanelSettingsValue>
+  /** Save a partial route change; the Host validates and hot-reloads it. */
+  readonly saveSettings: (patch: PanelSettingsPatch) => Promise<PanelSettingsValue>
+  /** Probe the judge route once; returns status and timing only, never the reply. */
+  readonly probeJudge: () => Promise<PanelJudgeProbe>
 }
 
 /** Slot this tab is contributed to (owned by the plugins settings section). */
@@ -77,6 +89,8 @@ type Envelope =
   | PanelDraftResult
   | PanelScheduleResult
   | PanelReloadResult
+  | PanelSettingsResult
+  | PanelProbeResult
 
 /**
  * POST one panel endpoint and unwrap its envelope.
@@ -112,6 +126,12 @@ export function apply(ctx: ClientContextLike): void {
     draft: async (input) => (await call(PANEL_DRAFT_ENDPOINT, input)) as PanelDraftValue,
     schedule: async (input) => (await call(PANEL_SCHEDULE_ENDPOINT, input)) as PanelSchedule,
     reloadRules: async () => (await call(PANEL_RELOAD_ENDPOINT)) as { rules: number; chains: number; hash: string },
+    // The settings endpoint is new in 1.7.0: on an older Host build the route
+    // answers `unknown_endpoint`, which the settings tab renders as a readable
+    // "server not ready" notice instead of breaking the panel.
+    loadSettings: async () => (await call(PANEL_SETTINGS_ENDPOINT, { op: 'read' })) as PanelSettingsValue,
+    saveSettings: async (patch) => (await call(PANEL_SETTINGS_ENDPOINT, { op: 'save', patch })) as PanelSettingsValue,
+    probeJudge: async () => (await call(PANEL_SETTINGS_ENDPOINT, { op: 'probe' })) as PanelJudgeProbe,
   }
   ctx.slots.inject(TAB_SLOT, () => ctx.slots.register({
     name: TAB_SLOT,

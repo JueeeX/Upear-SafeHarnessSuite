@@ -147,6 +147,7 @@ describe('buildPanelPayload', () => {
     expect(payload.eventWindow).toEqual({ scanned: 0, kept: 0, since: null })
     // Drafting and the timer default to off when the host wires no facts.
     expect(payload.draft).toEqual({ enabled: false, maxChars: 0 })
+    expect(payload.judge).toEqual({ enabled: false, scope: 'flagged', provider: '', model: '', available: false })
     expect(payload.schedule).toEqual({ enabled: false, intervalMinutes: null, nextAt: null, lastRunAt: null, persisted: false })
     expect(payload.rulesDetail).toHaveLength(2)
     expect(payload.rulesDetail[0]).toEqual({
@@ -199,6 +200,24 @@ describe('buildPanelPayload', () => {
     expect(wide.sessionDetails[0]?.id).toBe(
       (many.at(-1) as SessionSummary).sessionId.slice('session-'.length, 'session-'.length + 8),
     )
+  })
+
+  it('keeps a conversation that appears only in the ledger selectable', async () => {
+    const ts = '2026-11-12T02:00:00.000Z'
+    const { runtime } = stubRuntime({
+      query: async () => [{ ts, kind: 'tool_denied', decision: 'deny', reason_code: 'tool_denied_by_name', session: 'session-deadbeef-0001' }],
+    })
+    const payload = await buildPanelPayload(runtime, Date.now())
+    expect(payload.sessionDetails).toEqual([{
+      id: 'deadbeef',
+      lastSeenAt: Date.parse(ts),
+      calls: 0,
+      allow: 0,
+      warn: 0,
+      deny: 0,
+      ask: 0,
+      historical: true,
+    }])
   })
 
   it('projects the ledger tail into enforcement events, dropping allow/ok bulk', async () => {

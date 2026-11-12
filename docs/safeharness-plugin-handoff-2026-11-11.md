@@ -8,7 +8,7 @@
 
 ## 0. 一句话现状
 
-我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.4.0**（2026-11-12）；计划内 M0–M5 已全部完成，包括 **T5.3 客户端面板**（1.3.0 只读面板 + 1.4.0 面板内巡检触发）。桌面端已升级到 **1.3.0** 并实测；**1.4.0 待用户退出 DSH → 跑安装脚本 → 重启**（面板与巡检按钮要重启后生效）。T5.3 剩余可选项：账本片段导出、定时巡检面板化；两个部署验证（真实 IM、真实人工审批）仍未做。
+我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.7.0**（2026-11-12）；计划内 M0–M5 已全部完成，包括 **T5.3 客户端面板**（1.3.0 只读 → 1.4.0 巡检 → 1.5.0 事件卡片 → 1.6.0 四标签工作台 → 1.7.0 五标签 + 跨重启筛选 + 评审设置）。桌面端已升级到 **1.6.0** 并实测；**1.7.0 待用户退出 DSH → 跑安装脚本 → 重启**（五标签、筛选与设置页要重启后生效）。T5.3 剩余可选项：账本片段导出；两个部署验证（真实 IM、真实人工审批）仍未做。
 
 ---
 
@@ -17,15 +17,15 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | `1.6.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
+| 当前版本 | `1.7.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
-| 桌面端插件 | 运行 **1.4.0**（本会话实测运行中宿主 `/safeharness/status` 返回 `version: 1.4.0`）。**1.6.0 已发布待装**：退出 DSH（含托盘）→ `plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.6.0）→ 重启；升级后看设置 → 内置插件 → SafeHarness 的四标签、对话标题下拉、规则/起草与定时巡检 |
+| 桌面端插件 | 运行 **1.6.0**（用户 2026-11-12 截图确认）。**1.7.0 已发布待装**：退出 DSH（含托盘）→ `plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.7.0）→ 重启；升级后看设置 → 内置插件 → SafeHarness 的五标签、跨重启工作区/对话筛选与设置页 |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = **`024b02e`**，tag **`v1.6.0`** 指向同一提交（`5f694d8` 是 1.5.0）。CI：推送成功；本机 `api.github.com` 超时，runs 状态未读，需要时在网页确认 |
 | 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.6.0 功能提交 `3cd6727`、1.5.0 `971898f`、1.4.0 `cb3c1f8`、1.3.0 `96a4913`、发布清单修正 `39db2db`（`github` 备份远端同步 main 与 v1.2.0–v1.6.0 标签） |
-| 测试 | 本机 `pnpm test` = **40 文件 / 670 用例**全绿（含 sidecar 13+7+4+3、设置面 8、SQL 扫面 12、面板 9+23+浏览器半契约 7、状态 9、调度 7、巡检闸 4）；公开树 37 文件 / 652（649 pass + 3 skip），CI 剔除 perf 后 36 文件 / 644（641 pass + 3 skip） |
+| 测试 | 本机 `pnpm test` = **41 文件 / 688 用例**全绿（新增面板设置 9、状态持久化 3、面板历史 1、路由设置 5）；公开树 38 文件 / 670（667 pass + 3 skip），CI 剔除 perf 后 37 文件 / 662（659 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 §12.10、1.2.1 §12.11、1.2.2 §12.12） |
-| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 见 `evidence/R42-sql-scan-convergence.md`，1.3.0 见 `evidence/1.3.0-panel.md`，1.4.0 见 `evidence/1.4.0-panel-patrol.md`，1.5.0 见 `evidence/1.5.0-panel-detail.md`，1.6.0 见 `evidence/1.6.0-panel-workbench.md` 与四张截图） |
-| 下一步 | 收口：§11.5 的两个部署验证（真实 IM 投递、真实人工审批）；T5.3 四步已交付，只剩可选项（账本片段导出） |
+| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 见 `evidence/R42-sql-scan-convergence.md`，1.3.0 见 `evidence/1.3.0-panel.md`，1.4.0 见 `evidence/1.4.0-panel-patrol.md`，1.5.0 见 `evidence/1.5.0-panel-detail.md`，1.6.0 见 `evidence/1.6.0-panel-workbench.md`，1.7.0 见 `evidence/1.7.0-panel-workbench.md` 与五张截图） |
+| 下一步 | 收口：§11.5 的两个部署验证（真实 IM 投递、真实人工审批）；T5.3 只剩可选项（账本片段导出） |
 
 ---
 
@@ -460,6 +460,10 @@ node plugins/dsh-safeharness/scripts/fake-openai.mjs --port 18080 --scenario too
 32. **改了浏览器半（`src/client/`）只重建不够，还要重启宿主**：`dsh web` 在启动时把 client bundle 的 `rev` 编进批处理 URL，`pnpm build:client` 之后页面刷新仍可能拿旧 bundle（缓存/rev 不变）。改 UI 的验证流程是：重建 → 重启宿主（`job_kill` 旧进程）→ 重开页面 → 必要时在会话里发一句话让 `agent/pre-step` 重新写入会话元数据（进程重启后 `sessionDetails` 是空的）。另外设置弹窗高度固定（约 746px），面板内容长时要在弹窗内滚动；CDP 截图前先滚到目标区块，否则只截到上半屏。
 33. **会话标题从宿主 `sessionTitle` 服务取，不要解析会话日志**：0.2.2 有 `ctx.get("sessionTitle")`（`SessionTitleService.get(session)?.title`），标题可能是用户重命名或标题提供方建议。1.6.0 在三个接缝把它写进 `SessionState.title`（latest-wins），只用于面板显示；它不进账本、不进模型上下文，取不到就回落"项目 + 短 id"。不要为了标题去解压 `session.v4.jsonl.zstd`——那会同时引入模型生成文本与宿主内部格式两个依赖。
 34. **面板标签页要全部挂载，定时状态要写插件自有文件**：条件渲染（`tab === 'x' ? <Comp/> : null`）会让起草结果、筛选和巡检结果在切标签时清空（1.6.0 第一版实测踩到，改成 `display:none` 保留）。定时巡检状态存 `$DSH_HOME/safeharness/panel-state.json`（不是 profile 配置）；**用真实 `$DSH_HOME` 做完验证后必须删掉它**，否则用户升级后桌面端会继承"每 5 分钟跑一次巡检"。
+35. **筛选选项不能只来自进程内存**：1.6.0 的工作区/对话下拉只读 `runtime.state`（本进程会话表）。重启后账本还有事件、内存表空了，两个下拉永远只有"全部/未知项目"，用户看到的就是"选不了"。1.7.0 增加 `$DSH_HOME/safeharness/sessions.json`（只有 id/workspace/createdAt/title/touchedAt），启动时恢复为 `historical` 行；选项还要并上账本里出现过的会话 id。**验证方法**：发消息 → 重启宿主 → 面板下拉仍有历史会话与标题。
+36. **跟随宿主主题，不要只信 `prefers-color-scheme`**：设置弹窗是白色而 OS/headless 可能是 dark，只看媒体查询会把面板画成黑卡片嵌在白弹窗里（1.7.0 第一版实测）。检测顺序：`documentElement.dataset.dsThemeSource`/`data-theme` → inline `color-scheme` → computed `color-scheme` → body 背景亮度，最后才回落到媒体查询。
+37. **DSH 没有插件优先级**：顺序只有监听器注册序（`prepend` = `unshift`，后 prepend 者更靠前）与按 scope 分层的 `tools.guard`；`tools/pre-execute` 是 waterfall，更早的监听器不调 `next()` 就不会执行我们，调了也能丢弃我们的 deny。1.7.0 的策略是四处 `{prepend:true}` 最佳努力（tools/pre-execute、agent/pre-step、llm/stream、approval/request）+ `ctx.tools.guard` 单调兜底；文档只能承诺"尽力靠前"，不能承诺绝对第一。详见 `docs/1.7.0-notes-q4-q5.md`。
+38. **评审设置必须走宿主 `settings` 服务**：不要自己写 profile YAML。`settings.update(entryId, patch)` 只接受 **volatile** 字段，写 `cordis.patch.yml` 后经 loader 热更新 → `applyHotConfig`；entryId 用 `configEditor.entries()` 按包名匹配，找不到就报只读。验证时改 `judge.timeoutMs` 4000→4100→4000，**改完要还原**，否则会把测试值留在 dev profile。设置保存成功后面板必须留在“设置”标签（1.7.0 第一版保存后跳回概览，已修）。
 
 ---
 

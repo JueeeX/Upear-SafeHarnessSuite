@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.6.0` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.7.0` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -66,7 +66,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 | `approval/request` | 审批桥粗粒度判定：`allowOnce` 一次性授予 → 复用 deny 列表 → 其余 delegate；`delegate` 也写审计对，供巡检对账 | 授予 / 拒绝 / 委托 |
 | 系统提示词 | 在工具引导区（`order: 190`）注入 ≤300 字符的部署约束条款，**不含**规则正文、数量、阈值 | — |
 | 只读工具 / 命令 | 4 个 `safeharness_*` 工具 + `/safeharness` 命令，供模型与操作者自查 | — |
-| Web 面板（1.3.0 起，1.6.0 工作台） | 设置 → 内置插件 → `SafeHarness` 标签页，四个标签：**概览**（本进程计数、防护面胶囊、会话列表、规则/账本）、**事件**（工作区/对话标题/类别/结论四个下拉筛选 + 20 条分页 + 红橙紫绿卡片）、**规则**（规则与链清单、搜索、AI 起草、重新加载规则）、**巡检**（手动两步确认 + 5–1440 分钟定时）。标题来自宿主 `sessionTitle` 服务，只用于显示。动作全部 POST-only、有单飞/冷却/body 上限；数据走宿主 `webServer` 私有路由（loopback + 同源栅栏）。见 §4.7 | — |
+| Web 面板（1.3.0 起，1.7.0 五标签工作台） | 设置 → 内置插件 → `SafeHarness` 标签页，五个标签：**概览**（本进程计数、防护面胶囊、评审状态、会话列表、规则/账本）、**事件**（工作区/对话标题/类别/结论四重筛选 + 搜索 + 20 条分页）、**规则**（规则与链清单、搜索、AI 起草、重新加载规则）、**巡检**（手动两步确认 + 5–1440 分钟定时）、**设置**（语义评审与起草路由、模型目录、连接测试、经宿主 settings 服务写入）。工作区/对话选项跨重启保留（`sessions.json` 元数据索引 + 账本会话并集）；标题来自宿主 `sessionTitle` 服务，只用于显示。全部 POST-only、有单飞/冷却/body 上限；数据走宿主 `webServer` 私有路由（loopback + 同源栅栏）。见 §4.7 / §4.8 | — |
 | 姿态 / 巡检 | 加载时姿态门禁（可配 `failOn`）、5 项外部巡检与退出码（0/1/2）、可选多通道通知（飞书 / 钉钉 / 企业微信 / OneBot / 通用 webhook） | 拒绝加载 / FAIL |
 | 预算 | 每轮 `input+output` token 累计，越限只记一条 `budget_exceeded`（不拦截） | — |
 
@@ -122,11 +122,11 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # 670 个用例（40 个文件）
+pnpm test             # 688 个用例（41 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.6.0.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.7.0.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -140,7 +140,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.6.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.7.0.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -189,7 +189,7 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 # 3) 用一条明显的注入话术试输入防线（balanced/hardened 应被拒）
 ```
 
-> `1.2.2` 已在桌面端（DSH 桌面应用，宿主包走 app-bundle `0.2.2-rc.1`）实测：`safeharness_status` 返回 `version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`；`safeharness_posture` 无 FAIL。`1.3.0`–`1.6.0` 的面板在同一个 0.2.2 Web 壳里实测：设置 → 内置插件出现 `SafeHarness` 标签页；1.5.0 的事件卡片按结论着色并显示工具/原因/严重度/规则/项目/会话；1.6.0 的四标签、对话标题下拉、规则清单、AI 起草（真实调用 `liao/gpt-6-luna` 产出 `curl_script_to_shell`）与定时巡检（5 分钟、状态落盘）均实测通过；1.4.0 的巡检按钮跑出 5 项检查并回写 `patrol_report`（详见 §4.7）。桌面升级方式见 §3.6 与仓库外脚本 `install-safeharness-desktop.cmd`。
+> `1.2.2` 已在桌面端（DSH 桌面应用，宿主包走 app-bundle `0.2.2-rc.1`）实测：`safeharness_status` 返回 `version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`；`safeharness_posture` 无 FAIL。`1.3.0`–`1.7.0` 的面板在同一个 0.2.2 Web 壳里实测：设置 → 内置插件出现 `SafeHarness` 标签页；1.5.0 的事件卡片按结论着色；1.6.0 的四标签、标题下拉、规则清单、AI 起草（真实调用 `liao/gpt-6-luna`）与定时巡检；1.7.0 的五标签、跨重启工作区/对话筛选（历史行带标题与项目）、评审设置保存（`judge.timeoutMs` 往返）与真实 judge probe（`status: ok / 3685ms`）均实测通过；1.4.0 的巡检按钮跑出 5 项检查并回写 `patrol_report`（详见 §4.7 / §4.8）。桌面升级方式见 §3.6 与仓库外脚本 `install-safeharness-desktop.cmd`。
 
 ### 3.6 升级与卸载
 
@@ -487,33 +487,63 @@ DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configur
 
 ---
 
-### 4.7 桌面端面板（1.3.0 起，T5.3；1.6.0 工作台）
+### 4.7 桌面端面板（1.3.0 起；1.7.0 五标签工作台）
 
-设置 → **内置插件** → `SafeHarness` 标签页。1.6.0 起是四个标签的工作台：**概览 / 事件 / 规则 / 巡检**。它是只读视图；四个动作（巡检、定时、起草、重新加载规则）都有宿主侧闸门（POST-only、单飞/冷却、body 上限）。
+设置 → **内置插件** → `SafeHarness` 标签页。1.7.0 起是五个标签的工作台：**概览 / 事件 / 规则 / 巡检 / 设置**。它是只读视图 + 五个受限动作（巡检、定时、起草、重新加载规则、保存评审/起草路由），每个动作都有宿主侧闸门（POST-only、单飞/冷却、body 上限、字段校验）。面板跟随宿主主题（读 `documentElement` 的 `color-scheme` / `data-theme`），不再只靠 `prefers-color-scheme`。
 
-**概览**：本进程的拦截/告警/审批/放行计数、五个防护面的彩色胶囊（强制/仅告警/透传/关闭）、会话列表（标题 + 短 id + 创建/最近 + 各计数，点一行跳到事件并按该会话过滤）、规则与账本（hash、记录数、绝对路径、引擎）。
+**概览**：本进程的拦截/告警/审批/放行计数、五个防护面的彩色胶囊（强制/仅告警/透传/关闭）、语义评审状态（启用/范围/路由）、会话列表（标题 + 短 id + 项目 + 创建/最近 + 各计数，**历史**标注，点一行跳到事件并按该会话过滤）、规则与账本（hash、记录数、绝对路径、引擎、规则目录）、最近 3 条需要关注的事件。
 
-**事件**：四个下拉筛选——工作区、对话（**标题**优先，取不到用"项目 · 短 id"）、类别（输入/工具/工具结果/审批/预算/输出/巡检/姿态/内部错误/其他）、结论（全部/拦截/审批/告警/失败，带计数）。默认 20 条一页 + "显示更多"，不再无限堆叠。卡片按结论着色（拦截/失败红、告警橙、审批紫、放行绿），含工具、原因中文解释、严重度、规则 id、参数 sha256 前 8 位、项目、标题/短 id、时刻。**会话标题来自宿主 `sessionTitle` 服务（用户重命名或标题提供方建议），只用于显示，不进账本、不进模型上下文**；取不到就回落项目 + 短 id，不读会话日志。
+**事件**：工作区、对话、类别（输入/工具/工具结果/审批/预算/输出/巡检/姿态/内部错误/其他）、结论（全部/拦截/审批/告警/失败，带计数）四重筛选 + 文本搜索 + 每页 20 条“显示更多”。对话标签优先标题，其次“项目 basename · 短 id”，同名标题保留短 id 后缀；只有存在无工作区事件时才出现“未记录工作区”。点一行展开规则 id、原因代码、严重度；不显示参数或输出内容。
 
-**规则**：列出编译后的规则与链（名称/类别/严重度/来源/模式原文/本事件窗口命中数），可搜索。**AI 起草**（`POST /safeharness/draft`）：输入一句描述 → 调辅助模型返回经 loader 门校验的 YAML + 形状 warnings，**不写入、不启用**；复制 YAML 放进 rules 目录后点**重新加载规则**（`POST /safeharness/reload-rules`，失败保留旧规则集并写日志）。面板不直接改规则文件或 profile 配置。
+**筛选为什么以前选不了**：1.6.0 的选项只来自**本进程内存**的会话表。重启后账本还有事件、内存表却空了，于是两个下拉永远只有“全部 / 未知项目”。1.7.0 把会话**显示元数据**持久化到 `$DSH_HOME/safeharness/sessions.json`（只有 `sessionId / workspace / createdAt / title / touchedAt`；没有计数、trail、prompt、参数或输出），重启后这些会话以“历史”行回到选项里；选项还会并上账本事件中出现过的会话，所以即使索引丢了也能按 id 选。文件用 tmp+rename 原子写、750ms 合并、损坏时忽略、卸载时 flush。
+
+**规则**：列出编译后的规则与链（名称/类别/严重度/来源/模式原文/本事件窗口命中数），可搜索。**AI 起草**（`POST /safeharness/draft`）：输入一句描述 → 调辅助模型返回经 loader 门校验的 YAML + 形状 warnings，**不写入、不启用**；复制 YAML 放进 rules 目录后点**重新加载规则**（`POST /safeharness/reload-rules`，失败保留旧规则集并写日志）。
 
 **巡检**：手动巡检两步确认；**定时巡检**可设 5–1440 分钟，状态写到插件自己的 `$DSH_HOME/safeharness/panel-state.json`（重启恢复；写失败降级 memory-only 并在面板标注）。调度器在宿主进程内，随插件卸载停止；手动与定时共享单飞，冷却只作用于手动点击。每次运行照旧写 `patrol_report`、按配置发通知。
 
+**设置**（`POST /safeharness/settings`，`op: read | save | probe`）：
+
+- **语义评审**：启用开关、评审范围（只评审已标记输出 / 全部输出）、供应方、模型、送入评审的最大字符数、超时。供应方/模型下拉来自宿主 `llm` 服务的真实目录（`listProviders` + `listModels`，缓存 30s，上限 24 个 provider / 600 个 model）；留空表示使用宿主默认路由。
+- **规则起草路由**：起草供应方/模型（留空跟随评审路由）。`draft.enabled` 仍由 profile 配置控制，面板不写这一项。
+- **测试连接**：`op: probe` 发一次最小结构化请求，只回 `status / verdict / 耗时`，**不回模型回复文本**。
+- **写入路径**：`settings.update(entryId, patch)` → 宿主写 `cordis.patch.yml` → loader 热更新 → 本插件 `applyHotConfig`。只改 **volatile** 字段；字段校验（`maxChars` 500–200000、`timeoutMs` 500–60000、启用时 provider/model 必填）在写之前完成；失败只回 `settings_invalid` / `settings_write_failed` 等粗粒度码，不转发宿主原文。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
+- **只读原因**：profile 没有 `settings` 服务、或找不到本插件的可编辑 entry 时，页面照常显示并说明“只读”，不假装能保存。
+
 数据通路（两段）：
 
-1. **宿主半**（`src/panel/`）：`apply()` 检测到 `webServer` 后，在 `/safeharness` 前缀注册路由（`status` / `patrol` / `draft` / `schedule` / `reload-rules`）。注册结果写一条 `invariant_probe`（`labels.state = route_registered` / `web_server_unavailable` / `route_failed`），"面板为什么没出现"可直接查账本。
+1. **宿主半**（`src/panel/`）：`apply()` 检测到 `webServer` 后，在 `/safeharness` 前缀注册路由（`status` / `patrol` / `draft` / `schedule` / `reload-rules` / `settings`）。注册结果写一条 `invariant_probe`（`labels.state = route_registered` / `web_server_unavailable` / `route_failed`），“面板为什么没出现”可直接查账本。
 2. **浏览器半**（`src/client/`）：预构建的 `lib/client.js`（CJS 闭包工厂，唯一副作用是 `window.__ModuleLoader__.load({id, factory})`）。组件只用平台 seed 的 `react`，通过 `ctx.slots.inject('settings.plugins.tab', …)` 注册标签页——等待槽声明，不假设宿主一定有它。
 
 安全口径：
 
 - 所有端点只接受 **loopback Host + 同源 Origin**（带跨站标记直接拒），与宿主 `/api` 的浏览器栅栏同义；插件不读 `trustedHosts`，因此**不会**从 LAN 暴露。
-- 响应是固定投影：事件（`ts`/`kind`/`decision`/`reason_code`/`tool`/`severity`/`category`/规则 id/参数 hash 前缀/短会话 id/项目/标题）、会话摘要、规则清单（操作者自己写的模式）、定时状态。不含 prompt、工具参数原文、模型输出、webhook 或凭据；内部异常只返回 `panel_failed` / `draft_failed` / `schedule_*` / `reload_failed`，不回显堆栈或消息。
-- 所有动作 POST-only 且 body ≤ 16 KiB；起草描述 ≤ 2000 字；定时间隔必须是 5–1440 的整数；起草单飞；巡检单飞 + 手动冷却。
+- 响应是固定投影：事件（`ts`/`kind`/`decision`/`reason_code`/`tool`/`severity`/`category`/规则 id/参数 hash 前缀/短会话 id/项目/标题）、会话摘要、规则清单（操作者自己写的模式）、定时状态、评审/起草路由与模型目录。不含 prompt、工具参数原文、模型输出、webhook 或凭据；内部异常只返回 `panel_failed` / `draft_failed` / `schedule_*` / `reload_failed` / `settings_*`，不回显堆栈或消息。
+- 所有动作 POST-only 且 body ≤ 16 KiB；起草描述 ≤ 2000 字；定时间隔必须是 5–1440 的整数；起草单飞；巡检单飞 + 手动冷却；设置字段有独立取值范围。
 - 面板不可用（headless profile 没有 `webServer`，或浏览器半未构建）时插件照常加载，不抛错。
 
-**与 DSH 自带 UI 的边界（常见混淆）**：会话里的工具卡片（参数 / 结果 / Schema / 计时）是 **DSH 自带** 的渲染；卡片里"该操作不被平台安全策略允许。请改用其他方式，或联系管理员。"是本插件的**通用拒绝措辞**（§6.4，故意不回显具体规则或参数）。要确认是谁拦的，看账本里那条 `tool_denied`（`reason_code`、`rule_ids`、`session`）或面板事件卡片，而不是看卡片外观。
+**与 DSH 自带 UI 的边界（常见混淆）**：会话里的工具卡片（参数 / 结果 / Schema / 计时）是 **DSH 自带** 的渲染；卡片里“该操作不被平台安全策略允许（SafeHarness 安全插件）。请改用其他方式，或联系管理员。”是本插件的**通用拒绝措辞**（§6.4，故意不回显具体规则或参数；1.7.0 起带来源标记）。要确认是谁拦的，看账本里那条 `tool_denied`（`reason_code`、`rule_ids`、`session`）或面板事件卡片，而不是看卡片外观。
 
-构建与验证：`pnpm build:client` 产出 `lib/client.js`（`pnpm build` 会一并执行）。`tests/client-bundle.test.ts` 锁定"闭包工厂形状 + 只 require 平台模块 + 能注册出标签页 + 动作请求"，`tests/panel.test.ts` 锁定载荷投影（事件/会话/标题/规则/定时），`tests/panel-route.test.ts` 锁定栅栏与每个端点的闸门，`tests/patrol-runner.test.ts` + `tests/schedule.test.ts` 锁定单飞/冷却/定时持久化。真实宿主验证（0.2.2 Web 壳）：标题出现在会话下拉；对话+类别筛选从 2 条收敛到 1 条；重新加载规则回 `20 条规则 · 3 条链`；AI 起草真实调用 `liao/gpt-6-luna` 产出 `curl_script_to_shell` 且切标签不丢；定时 5 分钟保存后 `panel-state.json` 为 `{"version":1,"enabled":true,"intervalMinutes":5}`；手动巡检 `FAIL 0 / OK 2 / SKIP 3`、退出码 0。设置弹窗高度固定，面板内容较长时在弹窗内滚动。
+构建与验证：`pnpm build:client` 产出 `lib/client.js`（`pnpm build` 会一并执行）。`tests/client-bundle.test.ts` 锁定“闭包工厂形状 + 只 require 平台模块 + 能注册出标签页 + 动作请求”，`tests/panel.test.ts` 锁定载荷投影（事件/会话/历史/标题/规则/评审/定时），`tests/panel-route.test.ts` 锁定栅栏与每个端点的闸门，`tests/panel-settings.test.ts` 锁定校验/写入路径/只读降级，`tests/state.test.ts` 锁定元数据持久化，`tests/patrol-runner.test.ts` + `tests/schedule.test.ts` 锁定单飞/冷却/定时持久化。真实宿主验证（0.2.2 Web 壳，桌面同源 dev profile）：重启后历史会话带 `Greeting` 标题与 `F:\AgentSecurity\Upear` 工作区回到列表；工作区筛选从 20 条收敛到 2 条，对话下拉列出标题 + 短 id；设置页读到 `configurable: true`、`available: true` 与真实 provider 目录；`judge.timeoutMs` 4000→4100→4000 往返成功；填 `liao/gpt-6-luna` 后 probe 返回 `status: ok / verdict: allow / 3685ms`；新建会话发消息后 `sessions.json` 写出且标题被采集。设置弹窗高度固定，面板内容较长时在弹窗内滚动。
+
+---
+
+### 4.8 插件顺序、工具覆盖与评审模型
+
+**DSH 有没有插件优先级？** 0.2.2 **没有**数值优先级或“安全插件自动排最前”的机制。顺序只有两种：同一事件名下的**监听器注册序**（Cordis `on` 的 `prepend` 是 `unshift`，所以**后** prepend 的监听器反而更靠前），以及 `tools.guard`（按 scope 分层、单调不可撤销，在 `tools/pre-execute` 与审批**之后**、dispatch 之前执行）。`tools/pre-execute` 是 waterfall：更早的监听器如果不调用 `next()`，后面的监听器（包括本插件）根本不会执行；它调用 `next()` 后若丢弃我们返回的 `deny`，也可以把拒绝改写成放行。这是宿主组合层的固有属性，插件无法单方面保证“绝对第一”。
+
+**本插件的策略**：四个安全关键接缝（`tools/pre-execute`、`agent/pre-step`、`llm/stream`、`approval/request`）都用 `{ prepend: true }` 注册，尽最大努力先看到调用；同时保留 `ctx.tools.guard` 作为**单调兜底**（即使某个 pre-execute 监听器改写了结果，guard 仍按自己的规则拒绝）。文档口径因此是“prepend 最佳努力 + guard 单调兜底”，不是“保证最先执行”。另外，`prepend` 抢在审批弹窗之前拒绝，`guard` 在用户批准之后仍能兜底——两者不是重复，而是两道时序不同的闸。
+
+**覆盖到哪些工具？** 所有经 `ctx.tools` 调用的工具都走同一条 `tools/pre-execute` 管线：内置工具、**MCP** 工具、**技能**加载、**子代理**、**工作流/PTC** 里的工具调用都在调用级被判（子代理共享同一注册表与事件树）。覆盖的终点要说清楚：shell 命令**内部**再启动的子进程/二次命令、工具的网络副作用、技能正文（宿主按本地可信内容加载）、模型推理流（`reasoning-delta` 不审）、MCP server 自身的行为，以及工具体**开始执行之后**的副作用，都不在“已防护”范围；它们只能靠结果扫描、账本与巡检间接观察。
+
+**judge 用的是什么模型？** 三个东西要分开：
+
+| 名称 | 做什么 | 模型 | 何时运行 |
+|---|---|---|---|
+| 语义评审 judge | 审**模型输出**（可选的额外模型调用） | profile 配置 `output.judge.provider/model`；本机桌面为 `liao/gpt-6-luna` | `output.judge.enabled` 且输出有文本；`scope: flagged` 只审结构规则已命中的输出，`always` 审全部 |
+| Python sidecar | 异步**输入**判定（规则集与内置引擎同源） | **不用模型** | `engine.kind: sidecar` 且启用；本机未启用 |
+| 规则起草 | 把一句自然语言描述变成候选 YAML | `draft.provider/model`，留空回落 judge 路由 | 面板/命令触发，单飞 |
+
+面板“设置”页读写的正是第一、三行的路由；它只改配置，不改变“judge 只审输出、sidecar 只审输入”的分工。
 
 ---
 ## 5. 预设与失败语义
@@ -667,7 +697,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               670 个用例（40 个文件）
+├─ tests/               688 个用例（41 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -686,7 +716,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：40 个文件 / 670 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 37 文件 / 652（649 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 36 文件 / 644（641 pass + 3 skip）
+pnpm test             # vitest：41 个文件 / 688 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 38 文件 / 670（667 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 37 文件 / 662（659 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -725,7 +755,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 18. **Python sidecar 是可选增强，不是默认路径**：需要本机 Python 与 `src/safeharness` 可 import；只接管输入面，不接管 `tools.guard`（同步无 IO 约束）。规则热更新后到子进程确认前的输入会被拒绝（hardened）或回落内置引擎（observe/balanced）。它刻意不做 Python `InformPolicy` 的 NFKC/零宽清理，以保持与内置引擎判定一致；不做这一点是**显式取舍**，见 §4.4。子进程超时只让当次请求失败、不会自动重启；连续超时会让输入面持续降级，此时应看 `safeharness_status.engine` 与姿态 code。
 19. **设置页只显示"显式覆盖"，不显示 preset 展开值**：DSH 设置页的表单值来自 profile patch 的 `config`（以及 schema 默认值）。本插件的预设展开在 `resolveConfig` 里完成，schema 刻意没有默认值（否则会废掉预设，R37），所以 `balanced` 下输入框里 `input.mode` 会是空的，而实际运行值是 `enforce`。改任一字段只会写该字段的覆盖值，不会把 preset 固化下来；这正是"preset 仍可整体切换"的前提。
 
-20. **面板是"可选 UI + 有限动作"，不是第二个真相源**：四个计数是**本进程**计数（重启归零），事件/会话来自账本尾部与进程内状态，两者重启后可能对不上——面板分栏标注"本进程 / 账本最近 N 条"，不做归一；账本轮转后事件列表只显示当前文件里的记录。1.6.0 起面板有四个动作：运行巡检（写 `patrol_report`、可能通知）、定时巡检（5–1440 分钟，状态写 `$DSH_HOME/safeharness/panel-state.json`）、AI 起草（一次辅助模型调用，返回草稿，**不写入不启用**）、重新加载规则（重读 rules 目录，失败保留旧规则集）。它仍然**不写规则文件、不写 profile 配置、不做账本导出、不做通用调度**，也不替代 `safeharness_status` 工具。**会话标题来自宿主 `sessionTitle` 服务**（用户重命名或标题提供方建议），只用于面板显示，不进账本、不进模型上下文；取不到时回落"项目 + 短会话 id + 创建/最近时间"，面板不读会话日志。样式为内联样式（本包在 DSH 单仓之外构建，拿不到 CSS Modules 预设），配色用实心徽标而非主题 token；设置弹窗高度固定，面板内容较长时在弹窗内滚动。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。
+20. **面板是“可选 UI + 有限动作”，不是第二个真相源**：四个计数是**本进程**计数（重启归零）；事件来自账本尾部，会话来自“持久化元数据索引 ∪ 账本事件”，两者重启后可能对不上——面板把“本进程计数 / 历史会话”分开标注，不做归一；账本轮转后事件列表只显示当前文件里的记录。1.7.0 起面板有五个动作：运行巡检（写 `patrol_report`、可能通知）、定时巡检（5–1440 分钟，状态写 `$DSH_HOME/safeharness/panel-state.json`）、AI 起草（一次辅助模型调用，返回草稿，**不写入不启用**）、重新加载规则（重读 rules 目录，失败保留旧规则集）、保存评审/起草路由（经宿主 `settings` 服务写 `cordis.patch.yml` 的 volatile 字段并热更新；没有 `settings` 服务或找不到可编辑 entry 时只读）。它仍然**不写规则文件、不做账本导出、不做通用调度**，也不替代 `safeharness_status` 工具。**会话标题来自宿主 `sessionTitle` 服务**（用户重命名或标题提供方建议），与工作区/创建时间一起写入 `$DSH_HOME/safeharness/sessions.json`（只有 `sessionId / workspace / createdAt / title / touchedAt`，无计数、trail、prompt、参数或输出）；标题只用于面板显示，不进账本、不进模型上下文，取不到时回落“项目 + 短会话 id”。样式跟随宿主主题（读 `documentElement` 的 `color-scheme`/`data-theme`），设置弹窗高度固定，面板内容较长时在弹窗内滚动。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。插件顺序是“prepend 最佳努力 + guard 单调兜底”，不是绝对优先；详见 §4.8。
 
 ---
 

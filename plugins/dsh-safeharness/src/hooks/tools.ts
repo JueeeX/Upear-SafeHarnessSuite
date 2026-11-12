@@ -145,7 +145,7 @@ export function installToolHooks(ctx: Context, runtime: Runtime): void {
         ? { kind: 'deny', reason: TOOL_DENIAL_TEXT }
         : next()
     }
-  })
+  }, { prepend: true })
 
   // ---------------------------------------------------------------------------
   // (b) ctx.tools.guard — synchronous, in-memory only, cannot be overridden

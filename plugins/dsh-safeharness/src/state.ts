@@ -9,6 +9,8 @@
  * @module
  */
 import type { SessionView, ToolTrailEntry, ToolView } from './engine/types.js'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 /** Maximum tool calls retained per session for chain evaluation. */
 export const MAX_TRAIL = 64
@@ -16,6 +18,34 @@ export const MAX_TRAIL = 64
 export const MAX_SESSIONS = 256
 /** Default page size for {@link SessionStateStore.list}. */
 export const MAX_LISTED_SESSIONS = 50
+
+/** Format version of the plugin-owned session metadata index. */
+export const SESSION_INDEX_VERSION = 1
+
+/** How long metadata writes are coalesced before touching the disk. */
+export const SESSION_PERSIST_DELAY_MS = 750
+
+/** Longest workspace path or title kept in the index (display bounds). */
+const MAX_WORKSPACE_CHARS = 512
+const MAX_TITLE_CHARS = 100
+
+/** Logger seam for persistence failures (matches what `apply()` owns). */
+export interface SessionIndexLogger {
+  error(message: string, ...rest: unknown[]): void
+}
+
+/** Options for {@link SessionStateStore}. */
+export interface SessionStoreOptions {
+  /**
+   * Absolute path of the plugin-owned metadata index. When omitted the store is
+   * memory-only (unit tests, headless probes).
+   */
+  readonly path?: string
+  /** Logger used once per distinct persistence failure. */
+  readonly logger?: SessionIndexLogger
+  /** Coalescing delay; injectable so tests do not sleep. */
+  readonly persistDelayMs?: number
+}
 
 /** Aggregate counters across all live sessions. */
 export interface CounterSnapshot {
@@ -50,6 +80,12 @@ export interface SessionState {
    * never sent to a model by this plugin.
    */
   title?: string
+  /**
+   * True for a row restored from the persisted index that this process has not
+   * touched yet. Its counters/trail start at zero because they are per process,
+   * while the workspace/title are durable display metadata.
+   */
+  historical: boolean
 }
 
 /** Read-only, panel-facing summary of one tracked session. */
@@ -62,6 +98,8 @@ export interface SessionSummary {
   readonly createdAt?: number
   /** Latest title the host reported, when known. */
   readonly title?: string
+  /** True when only persisted metadata is known (no call this process). */
+  readonly historical?: boolean
   /** Last time the session produced an event (epoch ms). */
   readonly touchedAt: number
   /** Tool calls observed for this session. */
@@ -87,6 +125,22 @@ export interface SessionEventLike {
  */
 export class SessionStateStore {
   private readonly sessions = new Map<string, SessionState>()
+  private readonly path: string | undefined
+  private readonly logger: SessionIndexLogger | undefined
+  private readonly persistDelayMs: number
+  private persistTimer: ReturnType<typeof setTimeout> | undefined
+  private disposed = false
+  private lastPersistError: string | undefined
+
+  /**
+   * @param options - optional disk index path, logger and coalescing delay.
+   */
+  constructor(options: SessionStoreOptions = {}) {
+    this.path = options.path
+    this.logger = options.logger
+    this.persistDelayMs = options.persistDelayMs ?? SESSION_PERSIST_DELAY_MS
+    if (this.path !== undefined) this.restore()
+  }
 
   /** Get (or create) the state for one session id. */
   of(sessionId: string | undefined): SessionState {
@@ -94,6 +148,8 @@ export class SessionStateStore {
     const existing = this.sessions.get(key)
     if (existing !== undefined) {
       existing.touchedAt = Date.now()
+      // A restored row becomes live the first time a hook sees it.
+      existing.historical = false
       // Refresh LRU order: Map preserves insertion order, so re-insert.
       this.sessions.delete(key)
       this.sessions.set(key, existing)
@@ -105,6 +161,7 @@ export class SessionStateStore {
       totalCalls: 0,
       counters: { allow: 0, deny: 0, ask: 0, warn: 0 },
       touchedAt: Date.now(),
+      historical: false,
     }
     this.sessions.set(key, created)
     this.evictIfNeeded()
@@ -147,9 +204,24 @@ export class SessionStateStore {
   describe(sessionId: string | undefined, facts: { workspace?: string; createdAt?: number; title?: string }): void {
     if (facts.workspace === undefined && facts.createdAt === undefined && facts.title === undefined) return
     const state = this.of(sessionId)
-    if (state.workspace === undefined && facts.workspace !== undefined) state.workspace = facts.workspace
-    if (state.createdAt === undefined && facts.createdAt !== undefined) state.createdAt = facts.createdAt
-    if (facts.title !== undefined && facts.title.length > 0) state.title = facts.title
+    state.historical = false
+    let changed = false
+    if (state.workspace === undefined && facts.workspace !== undefined) {
+      state.workspace = facts.workspace.slice(0, MAX_WORKSPACE_CHARS)
+      changed = true
+    }
+    if (state.createdAt === undefined && facts.createdAt !== undefined) {
+      state.createdAt = facts.createdAt
+      changed = true
+    }
+    if (facts.title !== undefined && facts.title.length > 0) {
+      const title = facts.title.slice(0, MAX_TITLE_CHARS)
+      if (state.title !== title) {
+        state.title = title
+        changed = true
+      }
+    }
+    if (changed) this.schedulePersist()
   }
 
   /**
@@ -169,6 +241,7 @@ export class SessionStateStore {
         ...(state.workspace === undefined ? {} : { workspace: state.workspace }),
         ...(state.createdAt === undefined ? {} : { createdAt: state.createdAt }),
         ...(state.title === undefined ? {} : { title: state.title }),
+        ...(state.historical ? { historical: true } : {}),
         touchedAt: state.touchedAt,
         totalCalls: state.totalCalls,
         counters: { ...state.counters },
@@ -205,7 +278,122 @@ export class SessionStateStore {
 
   /** Forget one session (e.g. after it ends). */
   forget(sessionId: string): void {
-    this.sessions.delete(sessionId)
+    if (this.sessions.delete(sessionId)) this.schedulePersist()
+  }
+
+  /**
+   * Flush a pending metadata write and stop the timer.
+   *
+   * Called from the plugin's teardown effect so a just-renamed session does not
+   * lose its title; safe to call more than once.
+   */
+  dispose(): void {
+    this.disposed = true
+    this.clearTimer()
+    this.persistNow()
+  }
+
+  /** Write any pending metadata immediately (tests and teardown). */
+  flush(): void {
+    this.clearTimer()
+    this.persistNow()
+  }
+
+  /** Cancel a scheduled write. */
+  private clearTimer(): void {
+    if (this.persistTimer !== undefined) {
+      clearTimeout(this.persistTimer)
+      this.persistTimer = undefined
+    }
+  }
+
+  /** Coalesce metadata writes: titles are re-reported on every step. */
+  private schedulePersist(): void {
+    if (this.path === undefined || this.disposed || this.persistTimer !== undefined) return
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined
+      this.persistNow()
+    }, this.persistDelayMs)
+    // Do not keep a headless host alive just for a metadata write.
+    this.persistTimer.unref?.()
+  }
+
+  /** Restore metadata rows from disk; a broken file is ignored (memory-only). */
+  private restore(): void {
+    const file = this.path
+    if (file === undefined || !existsSync(file)) return
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+      if (parsed === null || typeof parsed !== 'object') return
+      const document = parsed as { version?: unknown; sessions?: unknown }
+      if (document.version !== SESSION_INDEX_VERSION || !Array.isArray(document.sessions)) return
+      const restored: Array<{ id: string; touchedAt: number; workspace?: string; createdAt?: number; title?: string }> = []
+      for (const row of document.sessions) {
+        if (row === null || typeof row !== 'object') continue
+        const value = row as Record<string, unknown>
+        const id = value['id']
+        if (typeof id !== 'string' || id.length === 0 || id.length > 200) continue
+        const item: { id: string; touchedAt: number; workspace?: string; createdAt?: number; title?: string } = {
+          id,
+          touchedAt: typeof value['touchedAt'] === 'number' && Number.isFinite(value['touchedAt']) ? value['touchedAt'] : 0,
+        }
+        if (typeof value['workspace'] === 'string' && value['workspace'].length > 0) item.workspace = value['workspace'].slice(0, MAX_WORKSPACE_CHARS)
+        if (typeof value['createdAt'] === 'number' && Number.isFinite(value['createdAt'])) item.createdAt = value['createdAt']
+        if (typeof value['title'] === 'string' && value['title'].length > 0) item.title = value['title'].slice(0, MAX_TITLE_CHARS)
+        restored.push(item)
+      }
+      // Oldest first: the LRU eviction below drops from the front.
+      restored.sort((left, right) => left.touchedAt - right.touchedAt)
+      for (const item of restored.slice(-MAX_SESSIONS)) {
+        if (this.sessions.has(item.id)) continue
+        this.sessions.set(item.id, {
+          sessionId: item.id,
+          trail: [],
+          totalCalls: 0,
+          counters: { allow: 0, deny: 0, ask: 0, warn: 0 },
+          touchedAt: item.touchedAt,
+          ...(item.workspace === undefined ? {} : { workspace: item.workspace }),
+          ...(item.createdAt === undefined ? {} : { createdAt: item.createdAt }),
+          ...(item.title === undefined ? {} : { title: item.title }),
+          historical: true,
+        })
+      }
+      this.evictIfNeeded()
+    } catch {
+      // A partial/corrupt index must never stop the plugin: fall back to memory.
+    }
+  }
+
+  /** Persist display metadata only (never content, never counters). */
+  private persistNow(): void {
+    const file = this.path
+    if (file === undefined) return
+    try {
+      const rows: Array<{ id: string; touchedAt: number; workspace?: string; createdAt?: number; title?: string }> = []
+      for (const state of this.sessions.values()) {
+        if (state.workspace === undefined && state.createdAt === undefined && state.title === undefined) continue
+        rows.push({
+          id: state.sessionId,
+          touchedAt: state.touchedAt,
+          ...(state.workspace === undefined ? {} : { workspace: state.workspace }),
+          ...(state.createdAt === undefined ? {} : { createdAt: state.createdAt }),
+          ...(state.title === undefined ? {} : { title: state.title }),
+        })
+      }
+      rows.sort((left, right) => left.touchedAt - right.touchedAt)
+      if (rows.length === 0) return
+      const body = `${JSON.stringify({ version: SESSION_INDEX_VERSION, savedAt: Date.now(), sessions: rows.slice(-MAX_SESSIONS) }, null, 0)}\n`
+      mkdirSync(dirname(file), { recursive: true })
+      const temporary = `${file}.tmp`
+      writeFileSync(temporary, body, { encoding: 'utf8', mode: 0o600 })
+      renameSync(temporary, file)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message !== this.lastPersistError) {
+        this.lastPersistError = message
+        this.logger?.error(`safeharness: could not write the session index (${message})`)
+      }
+    }
   }
 
   /** Drop the least-recently-touched sessions beyond {@link MAX_SESSIONS}. */

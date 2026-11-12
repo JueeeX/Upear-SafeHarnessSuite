@@ -25,6 +25,9 @@ export const PANEL_SCHEDULE_ENDPOINT = 'schedule'
 /** Endpoint that re-reads the rule directory. */
 export const PANEL_RELOAD_ENDPOINT = 'reload-rules'
 
+/** Endpoint that reads/saves the judge and drafting routes, and probes the judge. */
+export const PANEL_SETTINGS_ENDPOINT = 'settings'
+
 /**
  * One enforcement/approval event as the panel shows it. Deliberately a
  * projection, not the ledger record: the ledger may grow fields, and the GUI
@@ -81,6 +84,12 @@ export interface PanelSession {
   readonly warn: number
   readonly deny: number
   readonly ask: number
+  /**
+   * True when this row comes from the persisted session index and this process
+   * has not seen a call yet: the counters are 0 because they are per process,
+   * while the workspace/title come from the last session that used the id.
+   */
+  readonly historical?: boolean
 }
 
 /** How much of the ledger the event list was built from. */
@@ -170,6 +179,106 @@ export interface PanelDraft {
   readonly maxChars: number
 }
 
+/** Light judge facts the overview shows without loading the settings tab. */
+export interface PanelJudgeFact {
+  readonly enabled: boolean
+  readonly scope: string
+  readonly provider: string
+  readonly model: string
+  /** False when this profile composes no `llm` service to call. */
+  readonly available: boolean
+}
+
+/** One selectable model on the settings tab. */
+export interface PanelModelOption {
+  readonly id: string
+  readonly name: string
+}
+
+/** One provider route and the models its adapter advertises. */
+export interface PanelProviderOption {
+  readonly id: string
+  readonly name: string
+  readonly models: readonly PanelModelOption[]
+}
+
+/** Editable judge configuration plus why it may be read-only. */
+export interface PanelJudgeSettings {
+  readonly enabled: boolean
+  /** `flagged` judges only structurally flagged output; `always` judges all. */
+  readonly scope: 'flagged' | 'always'
+  readonly provider: string
+  readonly model: string
+  readonly maxChars: number
+  readonly timeoutMs: number
+  /** False when this profile has no `llm` service. */
+  readonly available: boolean
+  /** False when the host exposes no settings service or no editable entry. */
+  readonly configurable: boolean
+}
+
+/** Drafting route (empty provider/model means "reuse the judge route"). */
+export interface PanelDraftSettings {
+  readonly enabled: boolean
+  readonly provider: string
+  readonly model: string
+}
+
+/** Everything the settings tab renders (one `settings` call). */
+export interface PanelSettingsValue {
+  readonly preset: string
+  readonly judge: PanelJudgeSettings
+  readonly draft: PanelDraftSettings
+  /** Provider/model catalog for the two route pickers (bounded). */
+  readonly providers: readonly PanelProviderOption[]
+  /** Absolute profile patch path, or null when the host cannot edit config. */
+  readonly configPath: string | null
+}
+
+/** Fields one save may change; omitted fields keep their current value. */
+export interface PanelSettingsPatch {
+  readonly judge?: {
+    readonly enabled?: boolean
+    readonly scope?: 'flagged' | 'always'
+    readonly provider?: string
+    readonly model?: string
+    readonly maxChars?: number
+    readonly timeoutMs?: number
+  }
+  readonly draft?: {
+    readonly enabled?: boolean
+    readonly provider?: string
+    readonly model?: string
+  }
+}
+
+/** One judge connectivity probe: status and timing only, never the reply text. */
+export interface PanelJudgeProbe {
+  readonly status: string
+  readonly verdict: string
+  readonly blocked: boolean
+  readonly route: string
+  readonly elapsedMs: number
+}
+
+/** Successful settings read/save. */
+export interface PanelSettingsOk {
+  readonly ok: true
+  readonly value: PanelSettingsValue
+}
+
+/** What a settings call resolves to. */
+export type PanelSettingsResult = PanelSettingsOk | PanelError
+
+/** Successful judge probe. */
+export interface PanelProbeOk {
+  readonly ok: true
+  readonly value: PanelJudgeProbe
+}
+
+/** What a judge probe resolves to. */
+export type PanelProbeResult = PanelProbeOk | PanelError
+
 /** One successful rule draft (already validated by the loader's own gate). */
 export interface PanelDraftValue {
   readonly status: 'ok'
@@ -241,6 +350,8 @@ export interface PanelPayload {
   readonly engine: PanelEngine
   /** Rule-drafting availability. */
   readonly draft: PanelDraft
+  /** Semantic-judge configuration facts (route, scope, availability). */
+  readonly judge: PanelJudgeFact
   /** Patrol schedule. */
   readonly schedule: PanelSchedule
   /** Enforcement/approval events, oldest first. */

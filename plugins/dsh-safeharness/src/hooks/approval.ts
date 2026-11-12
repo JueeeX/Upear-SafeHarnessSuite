@@ -128,7 +128,7 @@ export function installApprovalHook(ctx: Context, runtime: Runtime): boolean {
           return 'unavailable'
         }
       }
-    })
+    }, { prepend: true })
     return true
   } catch (error) {
     runtime.internalError('approval:register', error)

@@ -239,7 +239,7 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
       return
     }
     for (const pending of held) yield pending
-  })
+  }, { prepend: true })
 }
 
 /** Options threaded into {@link reviewOutput}. */

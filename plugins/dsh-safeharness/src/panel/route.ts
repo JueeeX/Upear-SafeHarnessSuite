@@ -31,6 +31,7 @@ import {
   PANEL_PATROL_ENDPOINT,
   PANEL_RELOAD_ENDPOINT,
   PANEL_SCHEDULE_ENDPOINT,
+  PANEL_SETTINGS_ENDPOINT,
   PANEL_STATUS_ENDPOINT,
 } from './protocol.js'
 import type {
@@ -38,13 +39,18 @@ import type {
   PanelDraftValue,
   PanelPatrolReport,
   PanelPatrolResult,
+  PanelProbeResult,
   PanelReloadResult,
   PanelResult,
   PanelScheduleResult,
+  PanelSettingsPatch,
+  PanelSettingsResult,
 } from './protocol.js'
 import type { DraftKind, DraftResult } from '../draft/rule.js'
 import type { PatrolRunner } from './patrol-runner.js'
 import { isScheduleInterval, type PatrolScheduler } from './schedule.js'
+import type { PanelSettingsHost } from './settings.js'
+import { PanelSettingsError } from './settings.js'
 import { buildPanelPayload } from './status.js'
 import type { PanelFacts } from './status.js'
 
@@ -58,7 +64,7 @@ export const PANEL_MAX_BODY_BYTES = 16 * 1024
 export const PANEL_DRAFT_MAX_DESCRIPTION = 2_000
 
 /** Endpoint names in one place, for the method gate and tests. */
-const WRITE_ENDPOINTS = new Set<string>([PANEL_PATROL_ENDPOINT, PANEL_DRAFT_ENDPOINT, PANEL_SCHEDULE_ENDPOINT, PANEL_RELOAD_ENDPOINT])
+const WRITE_ENDPOINTS = new Set<string>([PANEL_PATROL_ENDPOINT, PANEL_DRAFT_ENDPOINT, PANEL_SCHEDULE_ENDPOINT, PANEL_RELOAD_ENDPOINT, PANEL_SETTINGS_ENDPOINT])
 
 /**
  * Whether one request may reach the panel.
@@ -112,6 +118,8 @@ export interface PanelRouteOptions {
   readonly schedule?: PatrolScheduler
   /** Re-read the rule directory; absent makes the reload endpoint unavailable. */
   readonly reloadRules?: () => { readonly rules: number; readonly chains: number; readonly hash: string }
+  /** Judge/drafting settings; absent makes the settings endpoint unavailable. */
+  readonly settings?: PanelSettingsHost
   /** Plugin logger. */
   readonly logger: LoggerLike
 }
@@ -285,6 +293,31 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
     }
   }
 
+  /** Read, save or probe the judge/drafting routes. */
+  const settingsEnvelope = async (body: Record<string, unknown>): Promise<PanelSettingsResult | PanelProbeResult> => {
+    const host = options.settings
+    if (host === undefined) {
+      return { ok: false, error: { code: 'settings_unavailable', message: 'the settings surface is not wired in this profile' } }
+    }
+    const op = body.op
+    try {
+      if (op === 'read') return { ok: true, value: await host.read() }
+      if (op === 'probe') return { ok: true, value: await host.probe() }
+      if (op !== 'save') return { ok: false, error: { code: 'settings_invalid', message: 'op must be read, save or probe' } }
+      const patch = body.patch
+      if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+        return { ok: false, error: { code: 'settings_invalid', message: 'patch must be a JSON object' } }
+      }
+      return { ok: true, value: await host.save(patch as PanelSettingsPatch) }
+    } catch (error) {
+      if (error instanceof PanelSettingsError) {
+        return { ok: false, error: { code: error.code, message: error.message.slice(0, 200) } }
+      }
+      runtime.internalError('panel-settings', error)
+      return { ok: false, error: { code: 'settings_write_failed', message: 'the settings action failed' } }
+    }
+  }
+
   return async (req, res) => {
     if (req.method !== 'POST' && req.method !== 'GET') {
       res.writeHead(405, { allow: 'POST' })
@@ -306,7 +339,7 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
       return
     }
 
-    let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult
+    let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult | PanelSettingsResult | PanelProbeResult
     if (endpoint === PANEL_PATROL_ENDPOINT) {
       const runner = options.patrolRunner
       if (runner === undefined) {
@@ -329,6 +362,11 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
         : await scheduleEnvelope(body)
     } else if (endpoint === PANEL_RELOAD_ENDPOINT) {
       result = reloadEnvelope()
+    } else if (endpoint === PANEL_SETTINGS_ENDPOINT) {
+      const body = await readJsonBody(req)
+      result = body === undefined
+        ? { ok: false, error: { code: 'invalid_body', message: 'body must be a JSON object' } }
+        : await settingsEnvelope(body)
     } else if (endpoint !== PANEL_STATUS_ENDPOINT) {
       result = { ok: false, error: { code: 'unknown_endpoint', message: 'unknown panel endpoint' } }
     } else {

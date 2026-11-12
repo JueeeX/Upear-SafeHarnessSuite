@@ -17,6 +17,7 @@ import type {
   PanelDraft,
   PanelEngine,
   PanelEvent,
+  PanelJudgeFact,
   PanelPayload,
   PanelRule,
   PanelSchedule,
@@ -30,7 +31,7 @@ export const PANEL_EVENT_LIMIT = 60
 export const PANEL_SCAN_LIMIT = 200
 
 /** How many sessions the panel lists. */
-export const PANEL_SESSION_LIMIT = 20
+export const PANEL_SESSION_LIMIT = 50
 
 /** Session summaries read to resolve a workspace/title for an event row. */
 const PANEL_STATE_SCAN = 200
@@ -107,6 +108,7 @@ function toPanelSession(summary: SessionSummary): PanelSession {
     ...(summary.workspace === undefined ? {} : { workspace: summary.workspace }),
     ...(summary.createdAt === undefined ? {} : { createdAt: summary.createdAt }),
     ...(summary.title === undefined ? {} : { title: summary.title }),
+    ...(summary.historical === true ? { historical: true } : {}),
     lastSeenAt: summary.touchedAt,
     calls: summary.totalCalls,
     allow: summary.counters.allow,
@@ -173,6 +175,8 @@ export interface PanelFacts {
   readonly draft?: () => PanelDraft
   /** Patrol schedule; defaults to disabled. */
   readonly schedule?: () => PanelSchedule
+  /** Semantic-judge facts; defaults to the config values with no llm. */
+  readonly judge?: () => PanelJudgeFact
 }
 
 /** Default rule/draft/schedule facts for a host that wires none of them. */
@@ -223,13 +227,49 @@ export async function buildPanelPayload(
     recentEvents = []
   }
 
+  // Conversation filter options must outlive this process: the ledger can still
+  // show events from sessions whose metadata row is in the persisted index, and a
+  // session that is neither indexed nor live still deserves an "id only" row.
+  const details = new Map<string, PanelSession>()
+  for (const summary of summaries.slice(0, PANEL_SESSION_LIMIT)) {
+    const row = toPanelSession(summary)
+    details.set(row.id, row)
+  }
+  for (const event of recentEvents) {
+    if (event.session === undefined || details.has(event.session)) continue
+    details.set(event.session, {
+      id: event.session,
+      ...(event.workspace === undefined ? {} : { workspace: event.workspace }),
+      ...(event.title === undefined ? {} : { title: event.title }),
+      lastSeenAt: Date.parse(event.ts),
+      calls: 0,
+      allow: 0,
+      warn: 0,
+      deny: 0,
+      ask: 0,
+      historical: true,
+    })
+  }
+  const sessionDetails = [...details.values()]
+    .sort((left, right) => right.lastSeenAt - left.lastSeenAt)
+    .slice(0, PANEL_SESSION_LIMIT)
+
+  const judgeCfg = runtime.config.output?.judge
+  const judgeFact: PanelJudgeFact = facts.judge?.() ?? {
+    enabled: judgeCfg?.enabled === true,
+    scope: judgeCfg?.scope ?? 'flagged',
+    provider: judgeCfg?.provider ?? '',
+    model: judgeCfg?.model ?? '',
+    available: false,
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     version: VERSION,
     preset: runtime.config.preset,
     uptimeMs: Date.now() - startedAt,
     sessions: runtime.state.size,
-    sessionDetails: summaries.slice(0, PANEL_SESSION_LIMIT).map(toPanelSession),
+    sessionDetails,
     rules: {
       hash: runtime.engine.rulesetHash.slice(0, HASH_PREFIX_CHARS),
       count: runtime.engine.ruleCount,
@@ -262,6 +302,7 @@ export async function buildPanelPayload(
     },
     engine: facts.engine?.() ?? { kind: 'builtin', status: 'ready', rulesStale: false, pending: 0, badLines: 0 },
     draft: facts.draft?.() ?? NO_DRAFT,
+    judge: judgeFact,
     schedule: facts.schedule?.() ?? NO_SCHEDULE,
     recentEvents,
     eventWindow: {
