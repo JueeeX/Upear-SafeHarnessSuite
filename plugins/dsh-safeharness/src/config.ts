@@ -39,6 +39,14 @@ export type OutputMode = 'off' | 'warn' | 'enforce-buffer'
 export type ApprovalMode = 'delegate' | 'policy'
 /** When the semantic judge runs: only on structurally flagged output, or always. */
 export type JudgeScope = 'flagged' | 'always'
+/**
+ * Which tool arguments are inspected for dangerous SQL (R42).
+ *
+ * `execution` (default since 1.2.2) scans only tools that can execute what they
+ * receive, plus tools this plugin cannot positively classify; `all` restores the
+ * pre-1.2.2 "every string argument of every tool" behaviour.
+ */
+export type SqlScanScope = 'execution' | 'all'
 
 /**
  * One operator-written notification destination.
@@ -101,6 +109,11 @@ export interface SafeHarnessConfig {
     askTools?: string[]
     denyTags?: string[]
     maxArgsBytes?: number
+    /**
+     * Which tool arguments get the dangerous-SQL scan (R42). Absent means
+     * `execution`; `all` restores the pre-1.2.2 behaviour.
+     */
+    sqlScan?: SqlScanScope
     trajectory?: boolean
     /** Tool-name pattern → semantic tags, for chain rules (`bash*` → `shell`). */
     tagOverrides?: { pattern: string; tags: string[] }[]
@@ -274,6 +287,8 @@ export const Config = z.object({
     askTools: keepAbsent(z.array(z.string())).description('Tool name patterns that require approval.'),
     denyTags: keepAbsent(z.array(z.string())).description('Semantic tags denied outright.'),
     maxArgsBytes: z.number().min(1).volatile().description('Maximum serialized argument size in bytes.'),
+    sqlScan: z.union(['execution', 'all'] as const)
+      .description('Dangerous-SQL scan scope: only execution-facing tools (default) or every tool argument.'),
     trajectory: z.boolean().volatile().description('Track per-session tool sequence for chain rules.'),
     tagOverrides: keepAbsent(z.array(z.object({
       pattern: z.string().description('Tool name glob.'),
@@ -378,6 +393,8 @@ export interface ResolvedConfig {
     readonly askTools: readonly string[]
     readonly denyTags: readonly string[]
     readonly maxArgsBytes: number
+    /** Dangerous-SQL scan scope (R42); see {@link SqlScanScope}. */
+    readonly sqlScan: SqlScanScope
     readonly trajectory: boolean
     readonly tagOverrides: readonly { readonly pattern: string; readonly tags: readonly string[] }[]
   }
@@ -494,6 +511,9 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
     askTools: [],
     denyTags: [],
     maxArgsBytes: 65536,
+    // R42: an SQL example in a document is data, not intent. Only tools that can
+    // execute what they receive are scanned; `all` restores the old behaviour.
+    sqlScan: 'execution',
     trajectory: true,
     tagOverrides: [],
   },
@@ -696,6 +716,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       askTools: stringList(tools.askTools, 'tools.askTools', problems),
       denyTags: stringList(tools.denyTags, 'tools.denyTags', problems),
       maxArgsBytes: positive(tools.maxArgsBytes, 'tools.maxArgsBytes', problems, 65536),
+      sqlScan: oneOf(tools.sqlScan ?? 'execution', ['execution', 'all'] as const, 'tools.sqlScan', problems),
       trajectory: typeof tools.trajectory === 'boolean' ? tools.trajectory : true,
       tagOverrides,
     },

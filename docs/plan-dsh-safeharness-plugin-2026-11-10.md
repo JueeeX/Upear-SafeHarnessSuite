@@ -1073,7 +1073,7 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 | # | 风险 / 偏差 | 实测事实 | 处理与影响 |
 |---|---|---|---|
-| R42 | **危险 SQL 扫描把"写文档/写命令"当成"执行 SQL"** | 给用户写交接文档时 `write` 被拒 3 次（`tool_denied_by_args`，`args_chars` 33303/33618/105）；1.2.0 实现期间 `pwsh` 命令里带完整删表字面量也再次被拒 | **本版不改检测语义**（改了就动摇与 Python 的黄金一致性）。缓解：文档/命令里避免完整字面量（拼接）；运营方临时 `tools.mode: warn` 或 `results.blockOn: []`。收敛方向见 `evidence/R42-sql-scan-false-positive.md`（按工具分类扫描），列为 1.2.1 |
+| R42 | **危险 SQL 扫描把"写文档/写命令"当成"执行 SQL"** | 给用户写交接文档时 `write` 被拒 3 次（`tool_denied_by_args`，`args_chars` 33303/33618/105）；1.2.0 实现期间 `pwsh` 命令里带完整删表字面量也再次被拒 | **1.2.2 已收敛**（见 §12.12）：新增 `tools.sqlScan`（默认 `execution`），只扫执行面工具；无法识别的工具仍扫（fail-closed）；`all` 可回退。缓解措施（文档里避免完整字面量）不再必要 |
 | R43 | **sidecar 与内置引擎语义漂移**（同一 ruleset_hash 判出不同结论） | Python `InformPolicy` 在匹配前做 NFKC/零宽/HTML 注释清理，内置引擎不做；若 sidecar 跑 `_sanitize_value`，两个引擎会分叉而账本 hash 相同 | ①sidecar 只跑同一批正则（裸文本），**刻意不做**结构清理，写入 README §4.4/§11.18；②规则同源：`set_rules` 下发 `CompiledRule.source`，`accepted != ruleCount` 即拉起失败，未知规则名 `sidecar_unknown_rule`；③规则热更新后到子进程确认前拒绝（`sidecar_rules_stale`）；④`tests/sidecar-parity.test.ts` 30/30 逐条比对 |
 | R44 | **子进程生命周期**（孤儿进程、重启毒化、超大行、在途堆积） | 第 1 步的传输层只有超时与崩溃处理；代码审读发现：旧 child 的 `exit` 可能在新 `start()` 期间把新实例打成 `failed`；stdout 单行可无限缓冲；在途请求无上限 | 1.2.0 加：child 事件**代际守卫**、`maxLineBytes`（超限杀进程）、`maxPending`（`sidecar_overloaded`）、手写 framing 取代 `readline`；`ctx.effect` 关闭顺序 stop→ledger.close；门禁拒绝加载时显式 `stop()`。**未做自动重启**（连续超时会持续降级），记入 README §11.18 |
 
@@ -1104,6 +1104,19 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | # | 决策 | 理由 |
 |---|---|---|
 | D21 | 测试稳定性修复不占版本号（不改 `package.json`/tag），只在两仓各补一个 test-only 提交 | tarball 的 `files` 不含 `tests/`，已发布的 1.2.1 产物与这次修改完全等价；为一个测试文件再发一版会让"版本号 = 交付物"的对应关系变差 |
+
+### 12.12 1.2.2 SQL 扫描范围收敛（R42 关闭，2026-11-12）
+
+| # | 风险 / 偏差 | 实测事实 | 处理与影响 |
+|---|---|---|---|
+| R49 | **按工具分类扫描会削弱检测面**（把"写文档"放行，可能连"真执行"一起放过） | 分类只认三类：执行面（标签 `db`/`shell`/`exec`，或名字词元 `sql`/`query`/`exec`/`run`/`shell`/`bash`/`pwsh`/`cmd`/`psql`/`postgres`…）、落文本面（标签 `fs`，或词元 `write`/`edit`/`patch`/`create`/`save`/`read`/`list`…）、其余 | 其余类别**照旧扫描**（fail-closed）；一个工具同时命中两类时**执行面优先**（`write_and_exec` 仍拒）；输入面不受影响；`tools.sqlScan: all` 一键回退。真实宿主差分两态已验（默认放行 / `all` 拒绝） |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D22 | `tools.sqlScan` 默认 `execution`，且作为 **patch-only** 字段（不进设置页） | 它是"检测范围"而不是阈值，在线改它等于在线缩小防护面，风险高于收益；要改就改 patch 并重启（有回滚路径） |
+| D23 | 名字匹配用**词元**而非子串 | 子串会把 `debug_dump` 当 `db`、把 `rewrite_doc` 当 `write`；词元化让 `mcp__postgres_query` 仍被覆盖，同时不产生新的误分类。认不出的词元一律保持扫描 |
+
+**验收证据**：`evidence/R42-sql-scan-convergence.md`（含 1.2.1 的三次拒绝记录、实现、单测 12 例、真实宿主两态账本）。计划 §11.4 的 R42 条目至此**关闭**。
 
 ---
 

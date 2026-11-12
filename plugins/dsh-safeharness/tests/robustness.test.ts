@@ -19,9 +19,15 @@ function session(): SessionView {
   return { sessionId: 'robust', trail: [], totalCalls: 0 }
 }
 
-/** A tool view with the given raw arguments (bytes are declared, not measured). */
+/**
+ * A tool view with the given raw arguments (bytes are declared, not measured).
+ *
+ * The name is execution-facing on purpose: since 1.2.2 the argument walk only runs
+ * for tools whose arguments can reach an SQL engine (R42), and these cases are
+ * about the WALKER, not about who is scanned.
+ */
 function view(argumentsValue: unknown, bytes = 1024): ToolView {
-  return { name: 'read', arguments: argumentsValue, argsBytes: bytes, tags: ['fs'] }
+  return { name: 'db_query', arguments: argumentsValue, argsBytes: bytes, tags: ['db'] }
 }
 
 describe('argument-shape robustness', () => {
