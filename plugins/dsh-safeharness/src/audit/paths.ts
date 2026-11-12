@@ -26,6 +26,9 @@ export const PANEL_STATE_FILENAME = 'panel-state.json'
 /** Plugin-owned session metadata index (workspace/title per session id). */
 export const SESSION_INDEX_FILENAME = 'sessions.json'
 
+/** Plugin-owned list of custom provider routes added through the panel (no keys). */
+export const PROVIDER_INDEX_FILENAME = 'providers.json'
+
 /** Environment slice {@link resolveLedgerDir} consults (injectable for tests). */
 export interface LedgerPathEnv {
   readonly DSH_HOME?: string
@@ -105,4 +108,19 @@ export function resolvePanelStatePath(env?: LedgerPathEnv): string {
 export function resolveSessionIndexPath(env?: LedgerPathEnv): string {
   const home = firstNonEmpty(env?.DSH_HOME, process.env.DSH_HOME) ?? join(homedir(), '.dsh')
   return join(expandHome(home), 'safeharness', SESSION_INDEX_FILENAME)
+}
+
+/**
+ * Absolute path of the plugin-owned custom-provider index.
+ *
+ * It records which routes this panel added (id, display name, protocol, base
+ * URL, model ids, credential reference name) so the settings tab can list and
+ * remove only its own entries. It never holds an API key; keys live in the
+ * host's credential store.
+ *
+ * @param env - optional environment override; defaults to `process.env`.
+ */
+export function resolveProviderIndexPath(env?: LedgerPathEnv): string {
+  const home = firstNonEmpty(env?.DSH_HOME, process.env.DSH_HOME) ?? join(homedir(), '.dsh')
+  return join(expandHome(home), 'safeharness', PROVIDER_INDEX_FILENAME)
 }

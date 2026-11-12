@@ -146,7 +146,7 @@ Upear SafeHarness Suite 的核心判断（源自 SafeHarness 论文并在此实�
 
 ## DSH 插件（DeepSeek Harness）
 
-> `@upear/dsh-safeharness` **1.7.0** · 宿主 DSH `0.2.2-rc.1` · Apache-2.0 · 源码 [`plugins/dsh-safeharness`](plugins/dsh-safeharness) · 独立发布仓库 [JueeeX/Upear-SafeHarnessSuite-dsh](https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh)
+> `@upear/dsh-safeharness` **1.8.0** · 宿主 DSH `0.2.2-rc.1` · Apache-2.0 · 源码 [`plugins/dsh-safeharness`](plugins/dsh-safeharness) · 独立发布仓库 [JueeeX/Upear-SafeHarnessSuite-dsh](https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh)
 
 同一套安全语义在 **DeepSeek Harness** 这一端的落地形态。它不是外挂进程，而是一个 **profile 级 Cordis 插件包**：装进 DSH profile 后直接接管执行生命周期接缝，运行时零第三方依赖、不启动子进程（语义 judge 走宿主自己的 `ctx.llm`，Python 输入引擎为可选 sidecar）。
 
@@ -159,7 +159,7 @@ Upear SafeHarness Suite 的核心判断（源自 SafeHarness 论文并在此实�
 | `approval/request` | 审批桥：一次性授予 → 复用 deny 列表 → 其余委托 |
 | 账本 / 姿态 / 巡检 | NDJSON 哈希链账本（只存哈希与长度）、10 项姿态自检、5 项外部巡检、多通道通知、预算护栏 |
 | 设置页 | 宿主 `settings` 表单服务从插件 `Config` 的 `.volatile()` 字段自动生成，改完即时生效（1.2.1 起） |
-| Web 面板 | 设置 → 内置插件 → `SafeHarness`：五个标签工作台（概览 / 事件 / 规则 / 巡检 / 设置）；工作区与对话筛选跨重启保留；可在面板内保存语义评审与起草路由并测试连接（1.7.0） |
+| Web 面板 | 设置 → 内置插件 → `SafeHarness`：五个标签工作台（概览 / 事件 / 规则 / 巡检 / 设置）；工作区与对话筛选跨重启保留；可在面板内保存语义评审与起草路由、添加自定义模型（URL/Key/协议）并测试连接、导出账本片段（1.8.0） |
 
 安装（详见[插件 README](plugins/dsh-safeharness/README.md)）：
 
@@ -168,7 +168,7 @@ cd plugins/dsh-safeharness
 node scripts/link-dsh.mjs; pnpm install; pnpm build; pnpm pack --pack-destination ./dist
 
 # 装进 profile（$dsh 为 DSH 自带 CLI），再把 entry 以 insert: 追加到 cordis.patch.yml
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.7.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.8.0.tgz"
 ```
 
 自检：`safeharness_status` / `safeharness_posture` / `safeharness_patrol` 三个只读工具，或 `/safeharness status`。1.2.2 已在桌面端实测：`seams` 八面全真、`engine.kind: builtin`、姿态无 FAIL。
@@ -193,7 +193,7 @@ Upear/
 ├── examples/
 │   ├── langgraph_noc/          #   LangGraph NOC 安全运维 Demo（守卫节点 + 签名能力）
 │   └── product_demo/           #   一键五进程产品 Demo（见下）
-├── plugins/dsh-safeharness/    # DSH 插件（TypeScript + Cordis，独立发版 v1.7.0）
+├── plugins/dsh-safeharness/    # DSH 插件（TypeScript + Cordis，独立发版 v1.8.0）
 ├── tools/agentprobe/           # 注入攻击扫描套件、结果汇总与 triage 工具
 ├── deploy/                     # 生产化部署拓扑（PostgreSQL/Redis/Grafana/备份）
 ├── tests/                      # 框架测试（核心 / 回执 / SQL 守卫 / 受保护桥接）

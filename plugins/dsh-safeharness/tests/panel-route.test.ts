@@ -529,6 +529,39 @@ describe('settings endpoint', () => {
   })
 })
 
+describe('export endpoint', () => {
+  const logger = { info: () => {}, warn: () => {}, error: () => {} }
+
+  it('returns a bounded NDJSON slice of the redacted ledger', async () => {
+    const records = [
+      { ts: '2026-11-12T01:00:00.000Z', seq: 1, kind: 'tool_denied', decision: 'deny', session: 'session-1' },
+      { ts: '2026-11-12T01:00:01.000Z', seq: 2, kind: 'tool_executed', decision: 'ok', session: 'session-1' },
+    ]
+    const base = stubRuntime()
+    const runtime = { ...base, ledger: { ...base.ledger, query: async () => records } } as unknown as Runtime
+    const handler = createPanelHandler({ runtime, startedAt: 0, logger })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/export', body: { limit: 2 } }), out.res)
+    const envelope = JSON.parse(out.body) as { ok: boolean; value: { filename: string; count: number; content: string } }
+    expect(envelope.ok).toBe(true)
+    expect(envelope.value.count).toBe(2)
+    expect(envelope.value.filename).toMatch(/^safeharness-ledger-.*\.ndjson$/u)
+    expect(envelope.value.content.trim().split('\n')).toHaveLength(2)
+    expect(envelope.value.content).not.toContain('password')
+  })
+
+  it('rejects an out-of-range limit, a bad body and a GET', async () => {
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger })
+    const tooLarge = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/export', body: { limit: 5_000 } }), tooLarge.res)
+    expect(JSON.parse(tooLarge.body)).toMatchObject({ ok: false, error: { code: 'invalid_body' } })
+
+    const get = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/export', method: 'GET' }), get.res)
+    expect(JSON.parse(get.body)).toMatchObject({ ok: false, error: { code: 'method_not_allowed' } })
+  })
+})
+
 describe('registerPanelRoute', () => {
   /** One route registration captured from the fake web server. */
   interface CapturedRoute {

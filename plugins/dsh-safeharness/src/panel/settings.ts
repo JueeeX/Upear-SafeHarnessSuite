@@ -17,13 +17,20 @@ import type { Runtime } from '../runtime.js'
 import type { Judge } from '../judge/client.js'
 import { createJudgeFor } from '../hooks/llm.js'
 import { JUDGE_PROBE_TEXT } from '../surface/commands.js'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { resolveProviderIndexPath } from '../audit/paths.js'
 import type {
+  PanelCustomProvider,
   PanelDraftSettings,
   PanelJudgeFact,
   PanelJudgeProbe,
   PanelJudgeSettings,
   PanelModelOption,
+  PanelProviderAdded,
+  PanelProviderInput,
   PanelProviderOption,
+  PanelProviderProtocol,
   PanelSettingsPatch,
   PanelSettingsValue,
 } from './protocol.js'
@@ -41,6 +48,27 @@ const MAX_MAX_CHARS = 200_000
 const MIN_TIMEOUT_MS = 500
 const MAX_TIMEOUT_MS = 60_000
 
+/** Custom-provider bounds and grammar. */
+const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]{1,39}$/u
+const MAX_DISPLAY_NAME = 80
+const MAX_BASE_URL = 2_048
+const MAX_MODEL_ID = 200
+const MAX_API_KEY = 4_096
+const PROVIDER_INDEX_VERSION = 1
+const PROVIDER_PROTOCOLS: ReadonlySet<string> = new Set(['openai-completions', 'openai-responses', 'anthropic-messages'])
+
+/** One persisted custom-provider record (the key itself is never stored here). */
+interface CustomProviderRecord extends PanelCustomProvider {
+  /** Credential reference name the route reads (`apiKeyEnv`). */
+  readonly credentialRef: string
+}
+
+/** Structural slice of the host credential service (only the write paths used). */
+interface CredentialsLike {
+  set?: (ref: string, value: string) => Promise<void>
+  unset?: (ref: string) => Promise<void>
+}
+
 /** Error codes the route maps to envelopes. */
 export type PanelSettingsErrorCode =
   | 'settings_unavailable'
@@ -48,6 +76,10 @@ export type PanelSettingsErrorCode =
   | 'settings_invalid'
   | 'settings_write_failed'
   | 'probe_unavailable'
+  | 'provider_unavailable'
+  | 'provider_exists'
+  | 'provider_in_use'
+  | 'provider_not_found'
 
 /** A typed failure the route turns into `{ ok: false, error }`. */
 export class PanelSettingsError extends Error {
@@ -64,6 +96,7 @@ interface SettingsServiceLike {
   readonly documentPath?: string
   describe?: (options?: { redactSecrets?: boolean }) => unknown
   update?: (ns: string, patch: Record<string, unknown>, expectedRevision?: number) => Promise<unknown>
+  mutate?: (ns: string, ops: ReadonlyArray<{ readonly op: 'set' | 'unset'; readonly path: readonly string[]; readonly value?: unknown }>, expectedRevision?: number) => Promise<unknown>
 }
 
 /** Structural slice of the host `configEditor` service. */
@@ -143,6 +176,10 @@ export interface PanelSettingsHost {
   read(): Promise<PanelSettingsValue>
   /** Validate and persist a patch through the host settings service. */
   save(patch: PanelSettingsPatch): Promise<PanelSettingsValue>
+  /** Add one hand-declared provider route (key goes to the credential store). */
+  addProvider(input: PanelProviderInput): Promise<PanelProviderAdded>
+  /** Remove one route this panel added. */
+  deleteProvider(id: string): Promise<PanelProviderAdded>
   /** One real judge call over the configured route; status only. */
   probe(): Promise<PanelJudgeProbe>
 }
@@ -158,8 +195,106 @@ export interface PanelSettingsHost {
  */
 export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: { warn(message: string): void }): PanelSettingsHost {
   let catalog: Catalog | undefined
+  let customProviders: CustomProviderRecord[] | undefined
 
-  const services = (): { settings?: SettingsServiceLike; editor?: ConfigEditorLike; llm?: LlmServiceLike } => {
+  /** Read the plugin-owned provider index once (no key material in it). */
+  const loadCustomProviders = (): CustomProviderRecord[] => {
+    if (customProviders !== undefined) return customProviders
+    const file = resolveProviderIndexPath()
+    customProviders = []
+    if (!existsSync(file)) return customProviders
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+      if (parsed === null || typeof parsed !== 'object') return customProviders
+      const document = parsed as { version?: unknown; providers?: unknown }
+      if (document.version !== PROVIDER_INDEX_VERSION || !Array.isArray(document.providers)) return customProviders
+      for (const row of document.providers) {
+        if (row === null || typeof row !== 'object') continue
+        const value = row as Record<string, unknown>
+        const id = value['id']
+        const credentialRef = value['credentialRef']
+        const api = value['api']
+        const baseURL = value['baseURL']
+        if (typeof id !== 'string' || !PROVIDER_ID_PATTERN.test(id)) continue
+        if (typeof credentialRef !== 'string' || credentialRef.length === 0 || credentialRef.length > 200) continue
+        if (typeof api !== 'string' || !PROVIDER_PROTOCOLS.has(api)) continue
+        if (typeof baseURL !== 'string' || baseURL.length === 0) continue
+        const models = Array.isArray(value['models'])
+          ? value['models'].filter((model): model is string => typeof model === 'string' && model.length > 0)
+          : []
+        customProviders.push({
+          id,
+          displayName: typeof value['displayName'] === 'string' && value['displayName'].length > 0 ? value['displayName'] : id,
+          api: api as PanelProviderProtocol,
+          baseURL,
+          models,
+          addedAt: typeof value['addedAt'] === 'number' && Number.isFinite(value['addedAt']) ? value['addedAt'] : 0,
+          credentialRef,
+        })
+      }
+    } catch {
+      // A broken index means "no routes known"; the host config remains the truth.
+      customProviders = []
+    }
+    return customProviders
+  }
+
+  /** Persist the provider index atomically. */
+  const writeCustomProviders = (rows: readonly CustomProviderRecord[]): void => {
+    customProviders = [...rows]
+    const file = resolveProviderIndexPath()
+    try {
+      mkdirSync(dirname(file), { recursive: true })
+      const body = `${JSON.stringify({ version: PROVIDER_INDEX_VERSION, savedAt: Date.now(), providers: rows }, null, 0)}\n`
+      const temporary = `${file}.tmp`
+      writeFileSync(temporary, body, { encoding: 'utf8', mode: 0o600 })
+      renameSync(temporary, file)
+    } catch (error) {
+      logger.warn(`safeharness: could not write the provider index (${error instanceof Error ? error.message : String(error)})`)
+    }
+  }
+
+  /** Resolve the profile entry id of the pi-ai provider plugin. */
+  const resolveProviderNamespace = (editor: ConfigEditorLike | undefined): string | undefined => {
+    try {
+      const entries = editor?.entries?.() ?? []
+      for (const entry of entries) {
+        const name = typeof entry.options?.name === 'string' ? entry.options.name : ''
+        if (name === '@deepseek-ai/dsh-llm-pi-ai') {
+          const id = entry.options?.id
+          if (typeof id === 'string' && id.length > 0) return id
+        }
+      }
+      if (entries.some(entry => entry.options?.id === 'llm-pi-ai')) return 'llm-pi-ai'
+    } catch {
+      // Fall through: the caller reports read-only.
+    }
+    return undefined
+  }
+
+  /** Provider ids currently present in the live pi-ai config. */
+  const liveProviderIds = (settings: SettingsServiceLike, piNs: string): Set<string> => {
+    const ids = new Set<string>()
+    try {
+      const described = settings.describe?.() as Array<{ ns?: unknown; value?: unknown }> | undefined
+      for (const descriptor of described ?? []) {
+        if (descriptor.ns !== piNs) continue
+        const value = descriptor.value as { providers?: unknown } | undefined
+        const providers = value?.providers
+        if (providers !== null && typeof providers === 'object' && !Array.isArray(providers)) {
+          for (const id of Object.keys(providers)) ids.add(id)
+        }
+      }
+    } catch {
+      // The duplicate check also consults the plugin's own index below.
+    }
+    return ids
+  }
+
+  /** Credential reference name for a route id (POSIX-identifier shaped). */
+  const credentialRefOf = (id: string): string => `SAFEHARNESS_${id.toUpperCase().replace(/-/gu, '_')}_API_KEY`
+
+  const services = (): { settings?: SettingsServiceLike; editor?: ConfigEditorLike; llm?: LlmServiceLike; credentials?: CredentialsLike } => {
     const get = (name: string): unknown => {
       try {
         return ctx.get(name)
@@ -171,6 +306,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       settings: get('settings') as SettingsServiceLike | undefined,
       editor: get('configEditor') as ConfigEditorLike | undefined,
       llm: get('llm') as LlmServiceLike | undefined,
+      credentials: get('credentials') as CredentialsLike | undefined,
     }
   }
 
@@ -227,6 +363,8 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     const cfg = runtime.config
     const ns = settings === undefined ? undefined : resolveNamespace(ctx, settings, editor)
     const configurable = settings !== undefined && typeof settings.update === 'function' && ns !== undefined
+    const piNs = resolveProviderNamespace(editor)
+    const providerConfigurable = settings !== undefined && typeof settings.update === 'function' && piNs !== undefined
     const judge: PanelJudgeSettings = {
       enabled: cfg.output.judge.enabled,
       scope: cfg.output.judge.scope,
@@ -242,11 +380,14 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       provider: cfg.draft.provider,
       model: cfg.draft.model,
     }
+    const custom = loadCustomProviders().map(({ credentialRef: _credentialRef, ...row }) => row)
     return {
       preset: cfg.preset,
       judge,
       draft,
       providers: await loadCatalog(llm),
+      customProviders: custom,
+      providerConfigurable,
       configPath: configurable
         ? (settings?.documentPath ?? editor?.documentPath ?? null)
         : null,
@@ -325,6 +466,146 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     return read()
   }
 
+  /** Validate one hand-declared provider input; throws a typed error. */
+  const validateProvider = (input: PanelProviderInput): { id: string; displayName: string; api: PanelProviderProtocol; baseURL: string; apiKey: string; model: string; modelName: string } => {
+    const id = typeof input.id === 'string' ? input.id.trim() : ''
+    if (!PROVIDER_ID_PATTERN.test(id)) throw new PanelSettingsError('settings_invalid', 'provider id must match [a-z][a-z0-9-]{1,39}')
+    const api = input.api
+    if (typeof api !== 'string' || !PROVIDER_PROTOCOLS.has(api)) {
+      throw new PanelSettingsError('settings_invalid', 'api must be openai-completions, openai-responses or anthropic-messages')
+    }
+    const baseURL = typeof input.baseURL === 'string' ? input.baseURL.trim() : ''
+    if (baseURL.length === 0 || baseURL.length > MAX_BASE_URL) throw new PanelSettingsError('settings_invalid', 'baseURL is empty or too long')
+    let parsed: URL
+    try {
+      parsed = new URL(baseURL)
+    } catch {
+      throw new PanelSettingsError('settings_invalid', 'baseURL must be an absolute http(s) URL')
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new PanelSettingsError('settings_invalid', 'baseURL must use http or https')
+    if (parsed.username.length > 0 || parsed.password.length > 0) throw new PanelSettingsError('settings_invalid', 'baseURL must not embed credentials')
+    const model = typeof input.model === 'string' ? input.model.trim() : ''
+    if (model.length === 0 || model.length > MAX_MODEL_ID) throw new PanelSettingsError('settings_invalid', 'model id is required and bounded')
+    const apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
+    if (apiKey.length === 0 || apiKey.length > MAX_API_KEY || /[\r\n]/u.test(apiKey)) {
+      throw new PanelSettingsError('settings_invalid', 'API key is required, bounded and must be a single line')
+    }
+    const displayName = (typeof input.displayName === 'string' ? input.displayName.trim() : '').slice(0, MAX_DISPLAY_NAME) || id
+    const modelName = (typeof input.modelName === 'string' ? input.modelName.trim() : '').slice(0, MAX_MODEL_ID) || model
+    return { id, displayName, api: api as PanelProviderProtocol, baseURL, apiKey, model, modelName }
+  }
+
+  /** Strip the credential reference before a record crosses the wire. */
+  const publicProvider = (record: CustomProviderRecord): PanelCustomProvider => {
+    const { credentialRef: _credentialRef, ...row } = record
+    return row
+  }
+
+  /** Add one route to pi-ai and store its key in the host credential store. */
+  const addProvider = async (input: PanelProviderInput): Promise<PanelProviderAdded> => {
+    const value = validateProvider(input)
+    const { settings, editor, credentials } = services()
+    if (settings === undefined || typeof settings.update !== 'function' || typeof settings.describe !== 'function') {
+      throw new PanelSettingsError('settings_unavailable', 'this profile composes no settings service')
+    }
+    const piNs = resolveProviderNamespace(editor)
+    if (piNs === undefined) throw new PanelSettingsError('provider_unavailable', 'no editable pi-ai provider entry was found')
+    if (liveProviderIds(settings, piNs).has(value.id) || loadCustomProviders().some(row => row.id === value.id)) {
+      throw new PanelSettingsError('provider_exists', 'a provider route with that id already exists')
+    }
+    if (credentials === undefined || typeof credentials.set !== 'function') {
+      throw new PanelSettingsError('provider_unavailable', 'this profile composes no writable credential store')
+    }
+    const credentialRef = credentialRefOf(value.id)
+    try {
+      await credentials.set(credentialRef, value.apiKey)
+    } catch (error) {
+      logger.warn(`safeharness: could not store the provider credential (${error instanceof Error ? error.message : String(error)})`)
+      throw new PanelSettingsError('provider_unavailable', 'the host credential store rejected the key')
+    }
+    const profile = {
+      api: value.api,
+      baseURL: value.baseURL,
+      apiKeyEnv: credentialRef,
+      displayName: value.displayName,
+      models: [{ id: value.model, name: value.modelName }],
+      defaultInput: ['text'],
+    }
+    try {
+      await settings.update(piNs, { providers: { [value.id]: profile } })
+    } catch (error) {
+      logger.warn(`safeharness: could not add the provider route (${error instanceof Error ? error.message : String(error)})`)
+      try {
+        await credentials.unset?.(credentialRef)
+      } catch {
+        // The orphan credential is harmless; the route was never written.
+      }
+      throw new PanelSettingsError('settings_write_failed', 'the host rejected the provider configuration')
+    }
+    const record: CustomProviderRecord = {
+      id: value.id,
+      displayName: value.displayName,
+      api: value.api,
+      baseURL: value.baseURL,
+      models: [value.model],
+      addedAt: Date.now(),
+      credentialRef,
+    }
+    writeCustomProviders([...loadCustomProviders(), record])
+    catalog = undefined
+    runtime.audit('invariant_probe', {
+      decision: 'info',
+      reason_code: 'panel_provider',
+      labels: { state: 'provider_added', provider: value.id, api: value.api },
+    })
+    let judgeRouteApplied = false
+    if (input.useForJudge !== false) {
+      try {
+        await save({ judge: { enabled: true, provider: value.id, model: value.model } })
+        judgeRouteApplied = true
+      } catch (error) {
+        logger.warn(`safeharness: provider added but the judge route was not applied (${error instanceof Error ? error.message : String(error)})`)
+      }
+    }
+    return { provider: publicProvider(record), settings: await read(), judgeRouteApplied }
+  }
+
+  /** Remove one route this panel added, and its credential. */
+  const deleteProvider = async (id: string): Promise<PanelProviderAdded> => {
+    const routeId = typeof id === 'string' ? id.trim() : ''
+    const record = loadCustomProviders().find(row => row.id === routeId)
+    if (record === undefined) throw new PanelSettingsError('provider_not_found', 'that route was not added by this panel')
+    if (runtime.config.output.judge.provider === routeId || runtime.config.draft.provider === routeId) {
+      throw new PanelSettingsError('provider_in_use', 'the route is still selected by the judge or the drafting route')
+    }
+    const { settings, editor, credentials } = services()
+    if (settings === undefined || typeof settings.mutate !== 'function') {
+      throw new PanelSettingsError('settings_unavailable', 'this profile composes no settings service')
+    }
+    const piNs = resolveProviderNamespace(editor)
+    if (piNs === undefined) throw new PanelSettingsError('provider_unavailable', 'no editable pi-ai provider entry was found')
+    try {
+      await settings.mutate(piNs, [{ op: 'unset', path: ['providers', routeId] }])
+    } catch (error) {
+      logger.warn(`safeharness: could not remove the provider route (${error instanceof Error ? error.message : String(error)})`)
+      throw new PanelSettingsError('settings_write_failed', 'the host rejected the provider removal')
+    }
+    try {
+      await credentials?.unset?.(record.credentialRef)
+    } catch {
+      // Removing the route is the security-relevant half; an orphan key is inert.
+    }
+    writeCustomProviders(loadCustomProviders().filter(row => row.id !== routeId))
+    catalog = undefined
+    runtime.audit('invariant_probe', {
+      decision: 'info',
+      reason_code: 'panel_provider',
+      labels: { state: 'provider_removed', provider: routeId },
+    })
+    return { provider: publicProvider(record), settings: await read(), judgeRouteApplied: false }
+  }
+
+
   const probe = async (): Promise<PanelJudgeProbe> => {
     const started = Date.now()
     const cfg = runtime.config.output.judge
@@ -351,5 +632,5 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     }
   }
 
-  return { judgeFact, read, save, probe }
+  return { judgeFact, read, save, addProvider, deleteProvider, probe }
 }

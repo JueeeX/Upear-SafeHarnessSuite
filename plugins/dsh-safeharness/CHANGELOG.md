@@ -1,6 +1,20 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.8.0 — 2026-11-12
+
+自定义模型 + 账本导出：**面板里可以直接添加任意 OpenAI / Anthropic 兼容端点（URL + Key + 协议 + 模型）并一键设为评审路由**，同时补齐 T5.3 最后一项可选项"账本片段导出"。
+
+- **自定义模型**：设置页新增卡片，支持 pi-ai 可手写声明的三种协议——`openai-completions`、`openai-responses`、`anthropic-messages`；字段为路由名、显示名、Base URL、API Key、模型 ID/显示名，以及"添加后设为评审模型"（默认开）。路由写进宿主 `llm-pi-ai` 的 `providers.<id>`（`providers` 整段是 volatile，经宿主 `settings` 服务落 profile 并热更新），随后出现在供应方/模型下拉里；评审路由用同一套 `settings.update` 指过去。
+- **Key 的处理**：只经 loopback POST 一次，写宿主凭据服务（`ref = SAFEHARNESS_<ID>_API_KEY`，落在 `.credentials.yaml`），**不写 profile YAML、不回显、不进账本/日志/错误消息**。删除路由时一并 `unset`；添加失败会回滚刚写的凭据。
+- **路由管理**：插件自有 `$DSH_HOME/safeharness/providers.json` 只记录本面板添加的路由（id/显示名/协议/URL/模型/凭据引用名/时间），不存 Key；删除时若路由仍被评审或起草使用，返回 `provider_in_use`，先改路由再删。
+- **校验**：路由名 `[a-z][a-z0-9-]{1,39}`；URL 必须是 http/https 绝对地址、不得内嵌用户名/密码；Key 单行、≤4096；模型 ID 必填；重复路由返回 `provider_exists`；没有 settings/credentials 服务时返回 `provider_unavailable` 并保持只读说明。
+- **协议边界**：pi-ai 的手写路由只支持上述三种协议；Bedrock（SigV4）、Vertex（project/location/ADC）、Azure（部署环境 + api-version）、Codex（OAuth）需要各自的环境与签名，无法用一个 URL + Key 表达，面板不提供，仍走宿主自己的 provider 配置。
+- **账本片段导出**：新端点 `POST /safeharness/export`（POST-only、body ≤ 16 KiB、`limit` 1–500，默认 200）返回 `{filename,count,content}`，`content` 是账本已有脱敏记录的 NDJSON（哈希/长度/代码，不新增字段、不读模型内容）；概览的账本卡片提供"导出账本片段"按钮，浏览器用 Blob 保存，宿主不落盘。
+- **测试**：新增面板设置路由 4 例（添加不泄漏 Key / 重复与非法输入 / 在用删除拒绝 / 无凭据服务）、导出端点 2 例。全套 **41 文件 / 694 用例**（公开树 38 / 676；CI 37 / 668）。
+- **真实宿主验证**（0.2.2 Web 壳 + 本机 fake OpenAI 兼容服务器 `127.0.0.1:18080`）：添加 `fake-local`（openai-completions、`http://127.0.0.1:18080/v1`、`sk-fake-sentinel`、`fake-model`）→ 评审路由自动切到 `fake-local/fake-model` → probe 返回 `status: ok / verdict: allow / 149ms`；删除时先返回 `provider_in_use`，改回空路由后删除成功，profile 中 `providers.fake-local` 与凭据引用均消失。
+- 未能验证：真实飞书/钉钉/企业微信 webhook 投递（用户无法提供），仍以本地 mock 与单测覆盖 payload/发送路径；真实人工审批同理。
+- 仍不做：面板写规则文件；通用调度器（定时只跑巡检）。
 ## 1.7.0 — 2026-11-12
 
 修复 + 面板重做 + 评审设置：**工作区/对话筛选真正可选**，面板改为跟随宿主主题的五标签工作台，新增"设置"页直接在面板里改语义评审与起草路由，并给拒绝措辞加上来源标记。回应四条反馈：筛选选不了、拒绝看不出是谁拦的、面板仍丑、judge 用的什么模型/怎么在面板里设置。

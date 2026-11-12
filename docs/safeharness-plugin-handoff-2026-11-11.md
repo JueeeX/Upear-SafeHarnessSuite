@@ -8,7 +8,7 @@
 
 ## 0. 一句话现状
 
-我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.7.0**（2026-11-12）；计划内 M0–M5 已全部完成，包括 **T5.3 客户端面板**（1.3.0 只读 → 1.4.0 巡检 → 1.5.0 事件卡片 → 1.6.0 四标签工作台 → 1.7.0 五标签 + 跨重启筛选 + 评审设置）。桌面端已升级到 **1.6.0** 并实测；**1.7.0 待用户退出 DSH → 跑安装脚本 → 重启**（五标签、筛选与设置页要重启后生效）。T5.3 剩余可选项：账本片段导出；两个部署验证（真实 IM、真实人工审批）仍未做。
+我们在 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里做了一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，它把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核、审计账本、姿态自检、巡检、通知、规则起草）装进 DSH 的执行生命周期。当前版本 **1.8.0**（2026-11-12）；计划内 M0–M5 已全部完成，包括 **T5.3 客户端面板**（1.3.0 只读 → 1.4.0 巡检 → 1.5.0 事件卡片 → 1.6.0 四标签工作台 → 1.7.0 五标签/筛选/评审设置 → 1.8.0 自定义模型 + 账本导出）。桌面端已升级到 **1.6.0** 并实测；**1.8.0 待用户退出 DSH → 跑安装脚本 → 重启**（自定义模型、导出与设置页要重启后生效）。T5.3 已无可选项；两个部署验证中"真实 IM 投递"因用户无法提供 webhook 仍待条件，"真实人工审批"同样待条件。
 
 ---
 
@@ -17,14 +17,14 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | `1.7.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
+| 当前版本 | `1.8.0`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`，CLI = `D:\dsh\resources\runtime\cli\bin\dsh.cmd` |
-| 桌面端插件 | 运行 **1.6.0**（用户 2026-11-12 截图确认）。**1.7.0 已发布待装**：退出 DSH（含托盘）→ `plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.7.0）→ 重启；升级后看设置 → 内置插件 → SafeHarness 的五标签、跨重启工作区/对话筛选与设置页 |
+| 桌面端插件 | 运行 **1.6.0**（用户 2026-11-12 截图确认）。**1.8.0 已发布待装**：退出 DSH（含托盘）→ `plugin-tarballs\install-safeharness-desktop.cmd`（TGZ 已指向 1.8.0）→ 重启；升级后看五标签、自定义模型（URL/Key/协议）、评审设置与账本导出 |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（git remote 名 **`dsh`**），`main` = **`f9acbd5`**，tag **`v1.7.0`** 指向同一提交（`024b02e` 是 1.6.0）。CI：推送成功；本机 `api.github.com` 超时，runs 状态未读，需要时在网页确认 |
 | 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.7.0 功能提交 `414ca60`、1.6.0 功能 `3cd6727` 与文档修正 `7f854f2`、1.5.0 `971898f`、1.4.0 `cb3c1f8`、1.3.0 `96a4913`；`github` 备份远端同步 main 与 v1.2.0–v1.7.0 标签 |
-| 测试 | 本机 `pnpm test` = **41 文件 / 688 用例**全绿（新增面板设置 9、状态持久化 3、面板历史 1、路由设置 5）；公开树 38 文件 / 670（667 pass + 3 skip），CI 剔除 perf 后 37 文件 / 662（659 pass + 3 skip） |
+| 测试 | 本机 `pnpm test` = **41 文件 / 694 用例**全绿（新增面板设置路由 4、导出端点 2）；公开树 38 文件 / 676（673 pass + 3 skip），CI 剔除 perf 后 37 文件 / 668（665 pass + 3 skip） |
 | 内部计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9 + 风险/决策 §12，**必须随进展更新**；1.2.0 §12.10、1.2.1 §12.11、1.2.2 §12.12） |
-| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 见 `evidence/R42-sql-scan-convergence.md`，1.3.0 见 `evidence/1.3.0-panel.md`，1.4.0 见 `evidence/1.4.0-panel-patrol.md`，1.5.0 见 `evidence/1.5.0-panel-detail.md`，1.6.0 见 `evidence/1.6.0-panel-workbench.md`，1.7.0 见 `evidence/1.7.0-panel-workbench.md` 与五张截图） |
+| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，绝不入库；1.2.2 见 `evidence/R42-sql-scan-convergence.md`，1.3.0 见 `evidence/1.3.0-panel.md`，1.4.0 见 `evidence/1.4.0-panel-patrol.md`，1.5.0 见 `evidence/1.5.0-panel-detail.md`，1.6.0 见 `evidence/1.6.0-panel-workbench.md`，1.7.0 见 `evidence/1.7.0-panel-workbench.md`，1.8.0 见 `evidence/1.8.0-provider-export.md`） |
 | 下一步 | 收口：§11.5 的两个部署验证（真实 IM 投递、真实人工审批）；T5.3 只剩可选项（账本片段导出） |
 
 ---
@@ -464,6 +464,7 @@ node plugins/dsh-safeharness/scripts/fake-openai.mjs --port 18080 --scenario too
 36. **跟随宿主主题，不要只信 `prefers-color-scheme`**：设置弹窗是白色而 OS/headless 可能是 dark，只看媒体查询会把面板画成黑卡片嵌在白弹窗里（1.7.0 第一版实测）。检测顺序：`documentElement.dataset.dsThemeSource`/`data-theme` → inline `color-scheme` → computed `color-scheme` → body 背景亮度，最后才回落到媒体查询。
 37. **DSH 没有插件优先级**：顺序只有监听器注册序（`prepend` = `unshift`，后 prepend 者更靠前）与按 scope 分层的 `tools.guard`；`tools/pre-execute` 是 waterfall，更早的监听器不调 `next()` 就不会执行我们，调了也能丢弃我们的 deny。1.7.0 的策略是四处 `{prepend:true}` 最佳努力（tools/pre-execute、agent/pre-step、llm/stream、approval/request）+ `ctx.tools.guard` 单调兜底；文档只能承诺"尽力靠前"，不能承诺绝对第一。详见 `docs/1.7.0-notes-q4-q5.md`。
 38. **评审设置必须走宿主 `settings` 服务**：不要自己写 profile YAML。`settings.update(entryId, patch)` 只接受 **volatile** 字段，写 `cordis.patch.yml` 后经 loader 热更新 → `applyHotConfig`；entryId 用 `configEditor.entries()` 按包名匹配，找不到就报只读。验证时改 `judge.timeoutMs` 4000→4100→4000，**改完要还原**，否则会把测试值留在 dev profile。设置保存成功后面板必须留在“设置”标签（1.7.0 第一版保存后跳回概览，已修）。
+39. **自定义模型的 Key 只能进宿主凭据服务**：pi-ai 的手写路由 `providers.<id>` 里 `apiKeyEnv` 是 **credential-ref 名称**，不是 Key 本身。面板把 Key 写 `ctx.credentials.set('SAFEHARNESS_<ID>_API_KEY', key)`，profile 只留引用名；删除路由时 `unset`。不要在配置/账本/日志/错误消息里出现 Key，也不要把 Key 塞进 `providers`。pi-ai 只支持 `openai-completions` / `openai-responses` / `anthropic-messages` 三种手写协议，其他厂商（Bedrock/Vertex/Azure/Codex）不要硬塞进这个表单。验证时用本机 `scripts/fake-openai.mjs` + `127.0.0.1:18080` 即可走完 add→probe→delete，不需要真实外部 Key。
 
 ---
 

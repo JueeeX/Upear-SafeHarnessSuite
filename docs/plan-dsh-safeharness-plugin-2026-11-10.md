@@ -1230,6 +1230,26 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 **验收证据**：`evidence/1.7.0-panel-workbench.md`（含五张真机截图）。
 
+### 12.19 1.8.0 自定义模型与账本导出（T5.3 收口，2026-11-12）
+
+用户反馈：面板供应方下拉只有宿主已注册的路由，"不支持自定义模型吗？自定义 URL 和 Key，应支持多种协议的自定义"；同时继续推进剩余工作（真实 IM 验证无法提供 webhook）。
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V12 | 0.2.2 的 `llm-pi-ai` 配置 `providers` 整段是 `.volatile()`，支持手写路由；手写路由只接受 `openai-completions` / `openai-responses` / `anthropic-messages` 三种协议（`lib/index.js` `PROTOCOLS`） | 面板新增"自定义模型"卡：URL + Key + 协议 + 模型；写 `llm-pi-ai.providers.<id>`，Key 写宿主凭据服务 |
+| V13 | 凭据服务 `credentials.set(ref, value)` 写 `.credentials.yaml`；`apiKeyEnv` 是 credential-ref，不是明文 Key | 路由配置只存 `SAFEHARNESS_<ID>_API_KEY` 引用；Key 不回显、不入库、不进账本；删除路由时 `unset` |
+| V14 | T5.3 唯一剩余可选项是账本片段导出 | 新 `POST /safeharness/export`：返回账本已有脱敏记录的 NDJSON（1–500 条），浏览器 Blob 保存；宿主不落盘、不新增字段 |
+| V15 | 用户无法提供飞书/钉钉 webhook | 真实 IM 投递继续标为未验证；本地 mock/单测覆盖 payload 与发送路径，部署时用现有 `patrol.notify` 配置即可 |
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D46 | 只开放 pi-ai 可手写的三种协议；Bedrock/Vertex/Azure/Codex 不提供 | 它们需要 SigV4、project/location/ADC、部署环境、OAuth 等配置，一个 URL+Key 无法表达；硬塞会产出不可用路由 |
+| D47 | Key 只走凭据服务，profile 只存引用名；添加失败回滚凭据 | 避免 Key 进 YAML/账本/日志；失败不留下孤儿凭据 |
+| D48 | 自定义路由单独记在 `providers.json`（只有 id/协议/URL/模型/引用名），只允许删除自己加的路由；在用路由拒绝删除 | 不误删宿主/他人的 provider；删除前必须先改评审/起草路由 |
+| D49 | 导出返回账本原样脱敏记录，不重新投影 | 导出目的是证据片段；重新投影会制造"第二套账本字段"，且原记录已经只含哈希/长度/代码 |
+
+**验收证据**：`evidence/1.8.0-provider-export.md`（含真机截图与 fake OpenAI 兼容端到端记录）。
+
 ---
 
 

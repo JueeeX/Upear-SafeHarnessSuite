@@ -23,16 +23,20 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import type {
+  PanelCustomProvider,
   PanelDraft,
   PanelDraftSettings,
   PanelDraftValue,
   PanelEvent,
+  PanelExportValue,
   PanelJudgeFact,
   PanelJudgeProbe,
   PanelJudgeSettings,
   PanelPatrolReport,
   PanelPayload,
+  PanelProviderInput,
   PanelProviderOption,
+  PanelProviderProtocol,
   PanelRule,
   PanelSchedule,
   PanelSession,
@@ -178,6 +182,58 @@ interface MutableJudgePatch {
 interface MutableDraftPatch {
   provider?: string
   model?: string
+}
+
+/**
+ * The hand-declared provider form. The API key is write-only: it is never
+ * seeded from anything the Host sends back and is cleared after a successful
+ * add, so it can only ever travel one way.
+ */
+interface ProviderForm {
+  readonly id: string
+  readonly displayName: string
+  readonly api: PanelProviderProtocol
+  readonly baseURL: string
+  readonly apiKey: string
+  readonly model: string
+  readonly modelName: string
+  /** Also point the judge at the new route (default on). */
+  readonly useForJudge: boolean
+}
+
+/** Add/delete state of the 自定义模型 card. */
+type ProviderOp =
+  | { readonly status: 'idle' }
+  | { readonly status: 'adding' }
+  | { readonly status: 'deleting'; readonly id: string }
+  | { readonly status: 'added'; readonly provider: PanelCustomProvider; readonly judgeRouteApplied: boolean }
+  | { readonly status: 'deleted'; readonly provider: PanelCustomProvider }
+  | { readonly status: 'error'; readonly code: string; readonly detail?: string }
+
+/** The overview's ledger-export state. */
+type ExportState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'running' }
+  | { readonly status: 'done'; readonly count: number; readonly filename: string }
+  | { readonly status: 'error'; readonly code: string }
+
+/** Protocols pi-ai can speak, with the operator-facing label. */
+const PROVIDER_PROTOCOL_OPTIONS: readonly { readonly value: PanelProviderProtocol; readonly label: string }[] = [
+  { value: 'openai-completions', label: 'openai-completions（OpenAI 兼容 Chat）' },
+  { value: 'openai-responses', label: 'openai-responses（OpenAI Responses）' },
+  { value: 'anthropic-messages', label: 'anthropic-messages（Anthropic 兼容）' },
+]
+
+/** The empty provider form (also what a successful add resets to). */
+const EMPTY_PROVIDER_FORM: ProviderForm = {
+  id: '',
+  displayName: '',
+  api: 'openai-completions',
+  baseURL: '',
+  apiKey: '',
+  model: '',
+  modelName: '',
+  useForJudge: true,
 }
 
 /** Events per page in the timeline. */
@@ -490,6 +546,9 @@ background:var(--shp-page);color:var(--shp-text);border-radius:14px;padding:16px
 .shp-attention-title{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
 .shp-attention-reason{font-size:11.5px;color:var(--shp-muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 120px}
 .shp-list{list-style:none;display:flex;flex-direction:column;gap:5px}
+.shp-provider-row{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;padding:8px 9px;border:1px solid var(--shp-border);border-radius:9px;background:var(--shp-card)}
+.shp-provider-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 240px}
+.shp-provider-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--shp-muted);min-width:0;overflow-wrap:anywhere}
 .shp-session{display:flex;flex-direction:column;gap:3px;width:100%;text-align:left;padding:7px 9px;border:1px solid var(--shp-border);border-radius:9px;background:var(--shp-card);color:inherit;cursor:pointer;font:inherit;min-width:0}
 .shp-session:hover{background:var(--shp-card-alt);border-color:var(--shp-border-strong)}
 .shp-session-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
@@ -897,6 +956,56 @@ function positiveInt(raw: string): number | undefined {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
+/** Error copy for one provider add/delete failure code. */
+function providerErrorMessage(code: string): string {
+  switch (code) {
+    case 'provider_exists': return '同名路由已存在：换一个路由 id。'
+    case 'provider_in_use': return '该路由正被评审或起草使用：先在评审卡片里换掉，再删除。'
+    case 'provider_not_found': return '找不到这个路由（可能已被删除）。'
+    case 'provider_unavailable': return '本 profile 没有可写的 pi-ai 供应商条目或凭据服务。'
+    case 'settings_invalid': return '输入不合法：检查路由 id、base URL、API key 与模型 id。'
+    case 'settings_write_failed': return '宿主拒绝写入配置（settings_write_failed），看宿主日志。'
+    case 'unknown_endpoint': return '当前服务端还没有这个接口（unknown_endpoint）。'
+    case 'panel_http_404': return '当前服务端没有这个接口（HTTP 404）。'
+    default: return `操作失败（${code}）。`
+  }
+}
+
+/** Error copy for one ledger-export failure code. */
+function exportErrorMessage(code: string): string {
+  switch (code) {
+    case 'export_failed': return '账本读取失败（export_failed），看宿主日志。'
+    case 'invalid_body': return '导出参数不合法（invalid_body）。'
+    case 'unknown_endpoint': return '当前服务端还没有导出接口（unknown_endpoint）。'
+    case 'panel_http_404': return '当前服务端没有导出接口（HTTP 404）。'
+    default: return `导出失败（${code}）。`
+  }
+}
+
+/** Local pre-check of the provider form; null when the Host should decide. */
+function providerFormInvalid(form: ProviderForm): string | null {
+  if (!/^[a-z][a-z0-9-]{1,39}$/u.test(form.id.trim())) return '路由 id 需匹配 [a-z][a-z0-9-]{1,39}（2–40 字符，小写字母开头）。'
+  if (form.baseURL.trim().length === 0) return 'Base URL 必填。'
+  if (form.apiKey.trim().length === 0) return 'API key 必填（只写不读）。'
+  if (form.model.trim().length === 0) return '模型 id 必填。'
+  return null
+}
+
+/** Hand one generated text file to the browser's normal download flow. */
+function downloadText(filename: string, content: string, mime: string): void {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.rel = 'noopener'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  // Revoking immediately can cancel the download in some shells; give it a beat.
+  window.setTimeout(() => { URL.revokeObjectURL(url) }, 4_000)
+}
+
 /** Turn a loaded value into the editable form state. */
 function toSettingsData(value: PanelSettingsValue): SettingsData {
   return {
@@ -1048,14 +1157,18 @@ function EmptyState({ title, body }: { readonly title: string; readonly body: st
   )
 }
 
-/** A labelled text/number input. */
-function Field({ label, hint, value, onChange, inputMode, disabled }: {
+/** A labelled text/number input (password mode for write-only secrets). */
+function Field({ label, hint, value, onChange, inputMode, disabled, type, autoComplete, placeholder, spellCheck }: {
   readonly label: string
   readonly hint?: string
   readonly value: string
   readonly onChange: (value: string) => void
   readonly inputMode?: 'numeric' | 'text'
   readonly disabled?: boolean
+  readonly type?: 'text' | 'password'
+  readonly autoComplete?: string
+  readonly placeholder?: string
+  readonly spellCheck?: boolean
 }): ReactNode {
   return (
     <div className="shp-field">
@@ -1063,7 +1176,11 @@ function Field({ label, hint, value, onChange, inputMode, disabled }: {
       <input
         className="shp-input"
         value={value}
+        type={type ?? 'text'}
         inputMode={inputMode ?? 'text'}
+        autoComplete={autoComplete ?? 'off'}
+        placeholder={placeholder}
+        spellCheck={spellCheck === true}
         disabled={disabled === true}
         onChange={(event: ChangeEvent<HTMLInputElement>) => { onChange(event.target.value) }}
       />
@@ -1220,13 +1337,15 @@ function ModeRow({ name, mode, meaning }: {
 }
 
 /** The overview tab: health at a glance, sessions, rules/ledger, attention. */
-function OverviewTab({ payload, onJump }: {
+function OverviewTab({ payload, onJump, exportLedger }: {
   readonly payload: PanelPayload
   readonly onJump: (session: string | undefined) => void
+  readonly exportLedger: (limit?: number) => Promise<PanelExportValue>
 }): ReactNode {
   const judge = judgeFactOf(payload)
   const sessions = payload.sessionDetails.slice(0, 6)
   const moreSessions = payload.sessionDetails.length - sessions.length
+  const [exportState, setExportState] = useState<ExportState>({ status: 'idle' })
 
   const eventCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -1242,6 +1361,19 @@ function OverviewTab({ payload, onJump }: {
       matchesDecision(row.decision, 'deny') || matchesDecision(row.decision, 'warn') || matchesDecision(row.decision, 'fail'))
     return rows.slice(-3).reverse()
   }, [payload.recentEvents])
+
+  // The export is a plain download: the Host returns an already-redacted NDJSON
+  // slice and never writes a file itself.
+  const runExport = useCallback((): void => {
+    setExportState({ status: 'running' })
+    void exportLedger(200).then(
+      (value) => {
+        downloadText(value.filename, value.content, 'application/x-ndjson')
+        setExportState({ status: 'done', count: value.count, filename: value.filename })
+      },
+      (error: unknown) => { setExportState({ status: 'error', code: codeOf(error) }) },
+    )
+  }, [exportLedger])
 
   return (
     <div className="shp-stack">
@@ -1324,7 +1456,21 @@ function OverviewTab({ payload, onJump }: {
           {moreSessions > 0 ? <p className="shp-card-hint">还有 {moreSessions} 个会话未显示；事件页可按对话筛选全部。</p> : null}
         </Card>
 
-        <Card title="规则与账本" hint="只存代码、哈希与计数">
+        <Card
+          title="规则与账本"
+          hint="只存代码、哈希与计数"
+          actions={(
+            <button
+              type="button"
+              className="shp-btn shp-btn-sm"
+              onClick={runExport}
+              disabled={!payload.ledger.enabled || exportState.status === 'running'}
+              title={payload.ledger.enabled ? '下载最近 200 条已脱敏记录（NDJSON）' : '账本未启用'}
+            >
+              {exportState.status === 'running' ? '导出中…' : '导出账本片段'}
+            </button>
+          )}
+        >
           <dl className="shp-defs">
             <DefRow term="规则集" desc={`${payload.rules.count} 条规则 · ${payload.rules.chains} 条链`} />
             <DefRow term="规则哈希" desc={
@@ -1355,8 +1501,17 @@ function OverviewTab({ payload, onJump }: {
             } />
             <DefRow term="规则目录" desc={payload.rulesDir.length > 0 ? <code className="shp-mono">{payload.rulesDir}</code> : '仅内置 rules/'} />
           </dl>
+          {exportState.status === 'done' ? (
+            <p className="shp-line-ok" role="status">
+              已导出 {exportState.count} 条记录（<code className="shp-mono">{exportState.filename}</code>）。
+            </p>
+          ) : null}
+          {exportState.status === 'error' ? (
+            <p className="shp-line-error" role="alert">{exportErrorMessage(exportState.code)}</p>
+          ) : null}
           <p className="shp-card-hint">
             完整日志：用 <code className="shp-mono">safeharness_audit_query</code>，或在任意会话输入 <code className="shp-mono">/safeharness audit 50</code>。
+            「导出账本片段」下载最近 200 条已脱敏记录（NDJSON，只含哈希与长度）。
           </p>
         </Card>
 
@@ -1948,6 +2103,10 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const [request, setRequest] = useState(0)
   const [save, setSave] = useState<SaveState>({ status: 'idle' })
   const [probe, setProbe] = useState<ProbeState>({ status: 'idle' })
+  // The provider form is deliberately not persisted: it can hold a key.
+  const [providerForm, setProviderForm] = useState<ProviderForm>(EMPTY_PROVIDER_FORM)
+  const [providerOp, setProviderOp] = useState<ProviderOp>({ status: 'idle' })
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const loaded = useRef(false)
 
   useEffect(() => {
@@ -2059,6 +2218,66 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
     setSave({ status: 'idle' })
   }, [])
 
+  const updateProvider = useCallback((patch: Partial<ProviderForm>): void => {
+    setProviderForm(current => ({ ...current, ...patch }))
+    setProviderOp(current => current.status === 'error' ? { status: 'idle' } : current)
+  }, [])
+
+  const resetProviderForm = useCallback((): void => {
+    setProviderForm(EMPTY_PROVIDER_FORM)
+    setProviderOp({ status: 'idle' })
+    setConfirmDelete(null)
+  }, [])
+
+  /**
+   * Add one hand-declared route. The key travels one way only: on success the
+   * whole form is reset (so the browser keeps no copy), and the settings view is
+   * rebuilt from `value.settings` so a judge route pointed at the new provider
+   * shows up immediately.
+   */
+  const addProviderNow = useCallback((): void => {
+    const invalid = providerFormInvalid(providerForm)
+    if (invalid !== null) {
+      setProviderOp({ status: 'error', code: 'settings_invalid', detail: invalid })
+      return
+    }
+    const input: PanelProviderInput = {
+      id: providerForm.id.trim(),
+      ...(providerForm.displayName.trim().length === 0 ? {} : { displayName: providerForm.displayName.trim() }),
+      api: providerForm.api,
+      baseURL: providerForm.baseURL.trim(),
+      apiKey: providerForm.apiKey,
+      model: providerForm.model.trim(),
+      ...(providerForm.modelName.trim().length === 0 ? {} : { modelName: providerForm.modelName.trim() }),
+      useForJudge: providerForm.useForJudge,
+    }
+    setProviderOp({ status: 'adding' })
+    void face.addProvider(input).then(
+      (added) => {
+        setView({ status: 'ready', data: toSettingsData(added.settings) })
+        setProviderForm(EMPTY_PROVIDER_FORM)
+        setProviderOp({ status: 'added', provider: added.provider, judgeRouteApplied: added.judgeRouteApplied })
+        setSave({ status: 'idle' })
+        onRefresh()
+      },
+      (error: unknown) => { setProviderOp({ status: 'error', code: codeOf(error) }) },
+    )
+  }, [face, onRefresh, providerForm])
+
+  const deleteProviderNow = useCallback((id: string): void => {
+    setConfirmDelete(null)
+    setProviderOp({ status: 'deleting', id })
+    void face.deleteProvider(id).then(
+      (removed) => {
+        setView({ status: 'ready', data: toSettingsData(removed.settings) })
+        setProviderOp({ status: 'deleted', provider: removed.provider })
+        setSave({ status: 'idle' })
+        onRefresh()
+      },
+      (error: unknown) => { setProviderOp({ status: 'error', code: codeOf(error) }) },
+    )
+  }, [face, onRefresh])
+
   if (view.status === 'idle' || view.status === 'loading') {
     return <div className="shp-stack"><Card title="设置"><Loading text="正在读取评审与起草路由…" /></Card></div>
   }
@@ -2100,6 +2319,12 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const draftCatalogProvider = draft.provider.length > 0 ? draft.provider : judge.provider
   const draftModelOptions = modelOptionsFor(value.providers, draftCatalogProvider, draft.model, '（跟随评审路由）', '留空即复用评审路由')
   const judgeRoute = `${judge.provider.length > 0 ? judge.provider : '宿主默认'} / ${judge.model.length > 0 ? judge.model : '宿主默认'}`
+  const providerConfigurable = value.providerConfigurable
+  const customProviders = value.customProviders
+  const providerAdding = providerOp.status === 'adding'
+  const providerDeleting = providerOp.status === 'deleting'
+  const providerBusy = providerAdding || providerDeleting
+  const providerLocked = !providerConfigurable || providerBusy
 
   return (
     <div className="shp-stack">
@@ -2242,6 +2467,178 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
         </p>
       </Card>
 
+      <Card
+        title="自定义模型"
+        hint="把手写的 OpenAI 兼容 / Anthropic 路由加进 pi-ai；key 只写不读"
+        actions={<Badge tone={providerConfigurable ? 'accent' : 'muted'}>{providerConfigurable ? '可增删' : '只读'}</Badge>}
+      >
+        {providerConfigurable ? null : (
+          <div className="shp-notice shp-notice-warn">
+            <p className="shp-notice-title">不能在这里增删路由</p>
+            <p className="shp-notice-body">
+              providerConfigurable = false：宿主没有暴露可写的 <code className="shp-mono">@deepseek-ai/dsh-llm-pi-ai</code> 条目，
+              或本 profile 没有可写的凭据服务。下面只读展示已添加的路由。
+            </p>
+          </div>
+        )}
+
+        <div className="shp-form-grid">
+          <Field
+            label="路由 id"
+            value={providerForm.id}
+            placeholder="my-gateway"
+            disabled={providerLocked}
+            hint="[a-z][a-z0-9-]{1,39}"
+            onChange={(next) => { updateProvider({ id: next }) }}
+          />
+          <Field
+            label="显示名称"
+            value={providerForm.displayName}
+            placeholder="留空 = 路由 id"
+            disabled={providerLocked}
+            onChange={(next) => { updateProvider({ displayName: next }) }}
+          />
+          <SelectField
+            label="协议"
+            value={providerForm.api}
+            options={PROVIDER_PROTOCOL_OPTIONS}
+            disabled={providerLocked}
+            onChange={(next) => { updateProvider({ api: next as PanelProviderProtocol }) }}
+          />
+          <Field
+            label="Base URL"
+            value={providerForm.baseURL}
+            placeholder="https://api.example.com/v1"
+            disabled={providerLocked}
+            hint="http(s) 绝对地址，不能带用户名 / 密码"
+            onChange={(next) => { updateProvider({ baseURL: next }) }}
+          />
+          <Field
+            label="API key"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={providerForm.apiKey}
+            placeholder="只写：保存后不再显示"
+            disabled={providerLocked}
+            hint="写入宿主凭据服务；面板不回读、不回显"
+            onChange={(next) => { updateProvider({ apiKey: next }) }}
+          />
+          <Field
+            label="模型 id"
+            value={providerForm.model}
+            placeholder="fake-model"
+            disabled={providerLocked}
+            onChange={(next) => { updateProvider({ model: next }) }}
+          />
+          <Field
+            label="模型名称"
+            value={providerForm.modelName}
+            placeholder="留空 = 模型 id"
+            disabled={providerLocked}
+            onChange={(next) => { updateProvider({ modelName: next }) }}
+          />
+        </div>
+
+        <div className="shp-switch-row">
+          <label className="shp-switch-label">
+            <input
+              type="checkbox"
+              checked={providerForm.useForJudge}
+              disabled={providerLocked}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => { updateProvider({ useForJudge: event.target.checked }) }}
+            />
+            添加后设为评审模型
+          </label>
+          <span className="shp-card-hint">勾选会同时启用语义评审并指向新路由；之后可以在上面的评审卡片里改回。</span>
+        </div>
+
+        <div className="shp-card-actions">
+          <button type="button" className="shp-btn shp-btn-primary" onClick={addProviderNow} disabled={providerLocked}>
+            {providerAdding ? '添加中…' : '添加路由'}
+          </button>
+          <button type="button" className="shp-btn" onClick={resetProviderForm} disabled={providerBusy}>清空</button>
+          {providerOp.status === 'added' ? (
+            <span className="shp-line-ok" role="status">
+              已添加 <code className="shp-mono">{providerOp.provider.id}</code>
+              {providerOp.judgeRouteApplied ? '，评审已指向它。' : '；评审未指向它（可在评审卡片里手动选）。'}
+            </span>
+          ) : null}
+          {providerOp.status === 'deleted' ? (
+            <span className="shp-line-ok" role="status">
+              已删除 <code className="shp-mono">{providerOp.provider.id}</code> 及其凭据。
+            </span>
+          ) : null}
+          {providerOp.status === 'error' ? (
+            <span className="shp-line-error" role="alert">{providerOp.detail ?? providerErrorMessage(providerOp.code)}</span>
+          ) : null}
+        </div>
+
+        <div>
+          <div className="shp-card-head">
+            <h4 className="shp-card-title">已添加的路由</h4>
+            <span className="shp-card-hint">
+              {customProviders.length === 0 ? '还没有通过面板添加的路由' : `${customProviders.length} 个`}
+            </span>
+          </div>
+          {customProviders.length === 0 ? (
+            <EmptyState
+              title="自定义路由列表是空的"
+              body="用上面的表单加一个 OpenAI 兼容或 Anthropic 兼容路由：它写进 pi-ai 配置，key 写进宿主凭据服务，删除时一并移除。"
+            />
+          ) : (
+            <ul className="shp-list">
+              {customProviders.map(provider => (
+                <li key={provider.id} className="shp-provider-row">
+                  <div className="shp-provider-main">
+                    <span className="shp-inline">
+                      <strong>{provider.displayName}</strong>
+                      <code className="shp-mono">{provider.id}</code>
+                    </span>
+                    <span className="shp-provider-meta">
+                      <Badge tone="muted">{provider.api}</Badge>
+                      <code className="shp-mono">{provider.baseURL}</code>
+                    </span>
+                    <span className="shp-provider-meta">
+                      模型 {provider.models.length > 0 ? provider.models.join(' · ') : '—'} · 添加于 {formatEpoch(provider.addedAt)}
+                    </span>
+                  </div>
+                  <div className="shp-card-actions">
+                    {confirmDelete === provider.id ? (
+                      <>
+                        <span className="shp-hint">确认删除该路由及其凭据？</span>
+                        <button
+                          type="button"
+                          className="shp-btn shp-btn-sm"
+                          onClick={() => { deleteProviderNow(provider.id) }}
+                          disabled={providerBusy}
+                        >
+                          {providerDeleting ? '删除中…' : '确认删除'}
+                        </button>
+                        <button type="button" className="shp-btn shp-btn-sm" onClick={() => { setConfirmDelete(null) }}>取消</button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="shp-btn shp-btn-sm"
+                        onClick={() => { setConfirmDelete(provider.id) }}
+                        disabled={providerLocked}
+                      >
+                        删除
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <p className="shp-card-hint">
+          删除正在被评审或起草使用的路由会被拒绝（provider_in_use）；先在评审卡片里换掉再删。
+          添加 / 删除会立即写 profile 配置，不需要重启。
+        </p>
+      </Card>
+
       <div className="shp-savebar">
         <span className={dirty ? 'shp-dirty' : 'shp-hint'}>{dirty ? '有未保存的修改' : '没有修改'}</span>
         <span className="shp-spacer" />
@@ -2270,10 +2667,17 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
 
 /** The tab body. */
 export function SafeHarnessPanel(props: SafeHarnessPanelProps): ReactNode {
-  const { load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings, probeJudge } = props
+  const {
+    load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings,
+    addProvider, deleteProvider, probeJudge, exportLedger,
+  } = props
   const face = useMemo<PanelFace>(() => ({
-    load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings, probeJudge,
-  }), [load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings, probeJudge])
+    load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings,
+    addProvider, deleteProvider, probeJudge, exportLedger,
+  }), [
+    load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings,
+    addProvider, deleteProvider, probeJudge, exportLedger,
+  ])
 
   const [view, setView] = useState<View>({ status: 'loading' })
   const [request, setRequest] = useState(0)
@@ -2396,7 +2800,7 @@ export function SafeHarnessPanel(props: SafeHarnessPanelProps): ReactNode {
       {/* All five panes stay mounted: drafts, filters, patrol results and the
           settings form must survive a tab switch (inactive = display:none). */}
       <div className="shp-pane" role="tabpanel" style={{ display: tab === 'overview' ? 'flex' : 'none' }}>
-        <OverviewTab payload={payload} onJump={jumpToSession} />
+        <OverviewTab payload={payload} onJump={jumpToSession} exportLedger={exportLedger} />
       </div>
       <div className="shp-pane" role="tabpanel" style={{ display: tab === 'events' ? 'flex' : 'none' }}>
         <EventsTab payload={payload} filter={filter} onFilter={setFilter} />

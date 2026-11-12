@@ -28,6 +28,9 @@ export const PANEL_RELOAD_ENDPOINT = 'reload-rules'
 /** Endpoint that reads/saves the judge and drafting routes, and probes the judge. */
 export const PANEL_SETTINGS_ENDPOINT = 'settings'
 
+/** Endpoint that returns a bounded NDJSON slice of the redacted ledger. */
+export const PANEL_EXPORT_ENDPOINT = 'export'
+
 /**
  * One enforcement/approval event as the panel shows it. Deliberately a
  * projection, not the ledger record: the ledger may grow fields, and the GUI
@@ -231,6 +234,10 @@ export interface PanelSettingsValue {
   readonly draft: PanelDraftSettings
   /** Provider/model catalog for the two route pickers (bounded). */
   readonly providers: readonly PanelProviderOption[]
+  /** Routes added by this panel (no key material). */
+  readonly customProviders: readonly PanelCustomProvider[]
+  /** True when the pi-ai provider entry is editable here (add/delete routes). */
+  readonly providerConfigurable: boolean
   /** Absolute profile patch path, or null when the host cannot edit config. */
   readonly configPath: string | null
 }
@@ -279,8 +286,72 @@ export interface PanelProbeOk {
 /** What a judge probe resolves to. */
 export type PanelProbeResult = PanelProbeOk | PanelError
 
-/** One successful rule draft (already validated by the loader's own gate). */
-export interface PanelDraftValue {
+/** Wire protocols a hand-declared provider route may name (0.2.2 pi-ai). */
+export type PanelProviderProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
+
+/** One custom provider route this plugin added (no key material). */
+export interface PanelCustomProvider {
+  /** Route id; also the config key under `providers`. */
+  readonly id: string
+  readonly displayName: string
+  readonly api: PanelProviderProtocol
+  readonly baseURL: string
+  /** Model ids declared on the route. */
+  readonly models: readonly string[]
+  /** Epoch ms the route was added. */
+  readonly addedAt: number
+}
+
+/** Input for adding one custom provider route. */
+export interface PanelProviderInput {
+  /** `[a-z][a-z0-9-]*`, 2–40 characters; must not collide with an existing route. */
+  readonly id: string
+  readonly displayName?: string
+  readonly api: PanelProviderProtocol
+  readonly baseURL: string
+  /** Write-only secret; stored through the host credentials service, never echoed. */
+  readonly apiKey: string
+  readonly model: string
+  readonly modelName?: string
+  /** Also point the semantic judge at the new route (default true). */
+  readonly useForJudge?: boolean
+}
+
+/** Result of adding one route: the route plus the refreshed settings. */
+export interface PanelProviderAdded {
+  readonly provider: PanelCustomProvider
+  readonly settings: PanelSettingsValue
+  /** False when the route was added but pointing the judge at it failed. */
+  readonly judgeRouteApplied: boolean
+}
+
+/** Successful provider add/delete. */
+export interface PanelProviderOk {
+  readonly ok: true
+  readonly value: PanelProviderAdded
+}
+
+/** What a provider add/delete resolves to. */
+export type PanelProviderResult = PanelProviderOk | PanelError
+
+/** A bounded, already-redacted ledger slice ready to save as `.ndjson`. */
+export interface PanelExportValue {
+  readonly filename: string
+  readonly count: number
+  /** NDJSON records exactly as the ledger stores them (hashes/lengths/codes). */
+  readonly content: string
+}
+
+/** Successful ledger export. */
+export interface PanelExportOk {
+  readonly ok: true
+  readonly value: PanelExportValue
+}
+
+/** What a ledger export resolves to. */
+export type PanelExportResult = PanelExportOk | PanelError
+
+/** One successful rule draft (already validated by the loader's own gate). */export interface PanelDraftValue {
   readonly status: 'ok'
   readonly name: string
   readonly severity: string
