@@ -147,6 +147,15 @@ describe.skipIf(!built)('lib/client.js', () => {
     }))
   })
 
+  it('posts the patrol endpoint and unwraps its report', async () => {
+    const report = { ranAt: '2026-11-12T03:00:00.000Z', exitCode: 0, summary: { clean: true }, findings: [], notified: false }
+    const fetchStub = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true, value: report }) }))
+    vi.stubGlobal('fetch', fetchStub)
+    const { registrations } = register(materialize())
+    const entry = registrations[0] as SlotRegistration
+    await expect(entry.options.inject().patrol()).resolves.toEqual(report)
+    expect(fetchStub).toHaveBeenCalledWith('/safeharness/patrol', expect.objectContaining({ method: 'POST' }))
+  })
   it('surfaces a refused or failed read instead of rendering stale data', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ ok: false, error: { code: 'panel_failed' } }) })))
     const failed = register(materialize())

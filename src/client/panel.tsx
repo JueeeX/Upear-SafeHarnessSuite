@@ -1,28 +1,40 @@
 /**
- * The SafeHarness panel: one read-only tab in the host's Plugins settings
- * section (T5.3).
+ * The SafeHarness panel: one tab in the host's Plugins settings section (T5.3).
  *
- * Presentation only. It receives `load` from the registration face and renders
- * whatever the Host reports; it subscribes to nothing and holds no state beyond
- * the last successful read. Styling stays inline on purpose: this package is
- * built outside the DSH monorepo, where CSS Modules are compiled by a bundler
- * preset it does not ship.
+ * Presentation only. It receives `load` and `patrol` from the registration face
+ * and renders whatever the Host reports; it subscribes to nothing and holds no
+ * state beyond the last successful reads. Patrol is the one action: a two-step
+ * confirm (the Host also enforces single-flight and a cooldown), because it
+ * appends a ledger record and may notify the configured channels.
+ *
+ * Styling stays inline on purpose: this package is built outside the DSH
+ * monorepo, where CSS Modules are compiled by a bundler preset it does not ship.
  * @module
  */
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
-import type { PanelDenial, PanelPayload } from '../panel/protocol.js'
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import type { PanelDenial, PanelPatrolReport, PanelPayload } from '../panel/protocol.js'
 
 /** The props this component reads (the renderer supplies more; they are ignored). */
 export interface SafeHarnessPanelProps {
   /** Read one fresh payload from the Host. */
   readonly load: () => Promise<PanelPayload>
+  /** Run one patrol on the Host. */
+  readonly patrol: () => Promise<PanelPatrolReport>
 }
 
-/** What the tab currently shows. */
+/** What the status half currently shows. */
 type View =
   | { readonly status: 'loading' }
   | { readonly status: 'error' }
   | { readonly status: 'ready'; readonly payload: PanelPayload }
+
+/** Patrol control state. */
+type PatrolState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'confirming' }
+  | { readonly status: 'running' }
+  | { readonly status: 'done'; readonly report: PanelPatrolReport }
+  | { readonly status: 'error'; readonly code: string }
 
 const S = {
   root: { display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '13px' },
@@ -49,6 +61,10 @@ const S = {
   button: {
     padding: '3px 12px', borderRadius: '6px', border: '1px solid currentColor',
     background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: '12px',
+  },
+  dangerButton: {
+    padding: '3px 12px', borderRadius: '6px', border: '1px solid currentColor',
+    background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: '12px', fontWeight: 600,
   },
 } satisfies Record<string, CSSProperties>
 
@@ -118,8 +134,101 @@ function Denials({ rows }: { readonly rows: readonly PanelDenial[] }): ReactNode
   )
 }
 
+/** What a failed patrol call means, in user terms (the Host's codes are stable). */
+function patrolErrorMessage(code: string): string {
+  switch (code) {
+    case 'patrol_cooldown': return '刚运行过巡检，请几秒后再试。'
+    case 'patrol_in_progress': return '已经有一次巡检在运行。'
+    case 'patrol_unavailable': return '本 profile 没有接巡检。'
+    default: return '巡检失败。'
+  }
+}
+
+/** Patrol controls plus the last report. */
+function PatrolSection({ patrol, onRefresh }: {
+  readonly patrol: () => Promise<PanelPatrolReport>
+  readonly onRefresh: () => void
+}): ReactNode {
+  const [state, setState] = useState<PatrolState>({ status: 'idle' })
+
+  const run = useCallback((): void => {
+    setState({ status: 'running' })
+    void patrol().then(
+      (report) => {
+        setState({ status: 'done', report })
+        // A patrol appends a record and may move counters; refresh the status
+        // half so the two halves never disagree on screen.
+        onRefresh()
+      },
+      (error: unknown) => {
+        setState({ status: 'error', code: error instanceof Error ? error.message : 'patrol_failed' })
+      },
+    )
+  }, [patrol, onRefresh])
+
+  return (
+    <section style={S.section}>
+      <h4 style={S.sectionTitle}>巡检</h4>
+      <p style={S.muted}>
+        运行一次外部巡检（拒绝速率、健康探针、姿态漂移、账本对账、通知通道）。它会写一条 <code>patrol_report</code> 记录，
+        并在配置了通知通道时发送一条摘要。
+      </p>
+      <div style={S.footer}>
+        {state.status === 'idle' || state.status === 'error' || state.status === 'done' ? (
+          <button type="button" style={S.button} onClick={() => { setState({ status: 'confirming' }) }}>
+            运行巡检
+          </button>
+        ) : null}
+        {state.status === 'confirming' ? (
+          <>
+            <span>确认运行一次巡检？</span>
+            <button type="button" style={S.dangerButton} onClick={run}>确认运行</button>
+            <button type="button" style={S.button} onClick={() => { setState({ status: 'idle' }) }}>取消</button>
+          </>
+        ) : null}
+        {state.status === 'running' ? <span style={S.muted}>巡检运行中…</span> : null}
+        {state.status === 'error' ? <span role="alert">{patrolErrorMessage(state.code)}</span> : null}
+      </div>
+
+      {state.status === 'done' ? (
+        <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={S.grid}>
+            <Tile label="FAIL" value={state.report.summary.fail} />
+            <Tile label="WARN / OK / SKIP" value={`${state.report.summary.warn} / ${state.report.summary.ok} / ${state.report.summary.skip}`} />
+            <Tile label="退出码" value={state.report.exitCode} />
+            <Tile label="通知" value={state.report.notified ? '已送达' : '未发送'} />
+          </div>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>检查</th>
+                <th style={S.th}>结论</th>
+                <th style={S.th}>细节</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.report.findings.map(finding => (
+                <tr key={finding.code}>
+                  <td style={S.td}>{finding.code}</td>
+                  <td style={S.td}>{finding.severity}</td>
+                  <td style={S.td}>{finding.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={S.muted}>
+            运行于 {formatTime(state.report.ranAt)}
+            {state.report.internalError === undefined ? '' : ` · 内部错误：${state.report.internalError}`}
+            {state.report.summary.clean ? ' · 干净' : ''}
+          </p>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
 /** The tab body. */
-export function SafeHarnessPanel({ load }: SafeHarnessPanelProps): ReactNode {
+export function SafeHarnessPanel({ load, patrol }: SafeHarnessPanelProps): ReactNode {
   const [view, setView] = useState<View>({ status: 'loading' })
   const [request, setRequest] = useState(0)
 
@@ -132,6 +241,8 @@ export function SafeHarnessPanel({ load }: SafeHarnessPanelProps): ReactNode {
     return () => { current = false }
   }, [load, request])
 
+  const refresh = useCallback(() => { setRequest(value => value + 1) }, [])
+
   if (view.status === 'loading') {
     return <div style={S.root}><p style={S.muted}>正在读取 SafeHarness 状态…</p></div>
   }
@@ -143,7 +254,7 @@ export function SafeHarnessPanel({ load }: SafeHarnessPanelProps): ReactNode {
           <button
             type="button"
             style={S.button}
-            onClick={() => { setView({ status: 'loading' }); setRequest(value => value + 1) }}
+            onClick={() => { setView({ status: 'loading' }); refresh() }}
           >
             重试
           </button>
@@ -199,15 +310,17 @@ export function SafeHarnessPanel({ load }: SafeHarnessPanelProps): ReactNode {
         <Denials rows={payload.recentDenials} />
       </section>
 
+      <PatrolSection patrol={patrol} onRefresh={refresh} />
+
       <footer style={S.footer}>
         <button
           type="button"
           style={S.button}
-          onClick={() => { setView({ status: 'loading' }); setRequest(value => value + 1) }}
+          onClick={() => { setView({ status: 'loading' }); refresh() }}
         >
           刷新
         </button>
-        <span style={S.muted}>读取于 {formatTime(payload.generatedAt)} · 只读面板，不做任何修改</span>
+        <span style={S.muted}>读取于 {formatTime(payload.generatedAt)} · 只读，唯一动作是"运行巡检"</span>
       </footer>
     </div>
   )

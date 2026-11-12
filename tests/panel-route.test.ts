@@ -192,3 +192,115 @@ describe('registerPanelRoute', () => {
     expect(probes).toEqual([])
   })
 })
+
+describe('patrol endpoint', () => {
+  /** One patrol report the fake runner returns. */
+  const report = {
+    ranAt: '2026-11-12T03:00:00.000Z',
+    findings: [
+      { code: 'audit_rate', severity: 'OK', detail: 'denial rate within bounds' },
+      { code: 'health_probe', severity: 'SKIP', detail: 'no probe configured' },
+    ],
+    summary: { fail: 0, warn: 0, ok: 1, skip: 1, clean: true },
+    exitCode: 0 as const,
+    notified: false,
+  }
+
+  /** A handler whose patrol runner counts calls. */
+  function handlerWithPatrol(options: { throws?: boolean; cooldownMs?: number } = {}): {
+    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>
+    calls: () => number
+  } {
+    let calls = 0
+    const handler = createPanelHandler({
+      runtime: stubRuntime(),
+      startedAt: Date.now(),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      patrolCooldownMs: options.cooldownMs ?? 0,
+      patrol: async () => {
+        calls += 1
+        if (options.throws === true) throw new Error('boom')
+        return report
+      },
+    })
+    return { handler, calls: () => calls }
+  }
+
+  it('runs one patrol on POST and projects the report', async () => {
+    const { handler, calls } = handlerWithPatrol()
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/patrol' }), out.res)
+    expect(calls()).toBe(1)
+    const envelope = JSON.parse(out.body) as { ok: boolean; value: { exitCode: number; findings: unknown[]; summary: { clean: boolean } } }
+    expect(envelope.ok).toBe(true)
+    expect(envelope.value.exitCode).toBe(0)
+    expect(envelope.value.findings).toHaveLength(2)
+    expect(envelope.value.summary.clean).toBe(true)
+  })
+
+  it('refuses a bare GET so a navigation cannot run it', async () => {
+    const { handler, calls } = handlerWithPatrol()
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { method: 'GET', url: '/safeharness/patrol' }), out.res)
+    expect(calls()).toBe(0)
+    expect(JSON.parse(out.body)).toEqual({ ok: false, error: { code: 'method_not_allowed', message: 'patrol requires POST' } })
+  })
+
+  it('enforces the cooldown window', async () => {
+    const { handler, calls } = handlerWithPatrol({ cooldownMs: 60_000 })
+    const first = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/patrol' }), first.res)
+    expect(JSON.parse(first.body)).toMatchObject({ ok: true })
+    const second = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/patrol' }), second.res)
+    expect(JSON.parse(second.body)).toEqual({ ok: false, error: { code: 'patrol_cooldown', message: 'patrol ran moments ago; try again shortly' } })
+    expect(calls()).toBe(1)
+  })
+
+  it('runs a single patrol at a time', async () => {
+    let release: (() => void) | undefined
+    const handler = createPanelHandler({
+      runtime: stubRuntime(),
+      startedAt: Date.now(),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      patrolCooldownMs: 0,
+      patrol: () => new Promise((resolve) => {
+        release = () => { resolve(report) }
+      }),
+    })
+    const first = response()
+    const pending = handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/patrol' }), first.res)
+    // The second request arrives while the first is still inside the runner.
+    const second = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/patrol' }), second.res)
+    expect(JSON.parse(second.body)).toMatchObject({ ok: false, error: { code: 'patrol_in_progress' } })
+    ;(release as unknown as () => void)()
+    await pending
+    expect(JSON.parse(first.body)).toMatchObject({ ok: true })
+  })
+
+  it('reports a profile without a wired runner', async () => {
+    const out = response()
+    await createPanelHandler({
+      runtime: stubRuntime(),
+      startedAt: Date.now(),
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    })(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/patrol' }), out.res)
+    expect(JSON.parse(out.body)).toMatchObject({ ok: false, error: { code: 'patrol_unavailable' } })
+  })
+
+  it('turns a runner throw into a coded envelope', async () => {
+    const { handler } = handlerWithPatrol({ throws: true })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/patrol' }), out.res)
+    expect(JSON.parse(out.body)).toEqual({ ok: false, error: { code: 'patrol_failed', message: 'patrol failed' } })
+  })
+
+  it('fences patrol with the same browser checks as status', async () => {
+    const { handler, calls } = handlerWithPatrol()
+    const out = response()
+    await handler(request({ host: 'evil.example' }, { url: '/safeharness/patrol' }), out.res)
+    expect(out.status).toBe(403)
+    expect(calls()).toBe(0)
+  })
+})
