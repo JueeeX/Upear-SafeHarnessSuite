@@ -42,6 +42,7 @@ export const PUBLISH_TOP = [
   'CHANGELOG.md',
   'LICENSE',
   'tsconfig.json',
+  'tsconfig.client.json',
   '.npmrc',
   '.gitignore',
   '.gitattributes',
