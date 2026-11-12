@@ -28,6 +28,7 @@ import type { LoggerLike, Runtime } from '../runtime.js'
 import {
   PANEL_CHANNEL,
   PANEL_DRAFT_ENDPOINT,
+  PANEL_EXPORT_ENDPOINT,
   PANEL_PATROL_ENDPOINT,
   PANEL_RELOAD_ENDPOINT,
   PANEL_SCHEDULE_ENDPOINT,
@@ -37,9 +38,13 @@ import {
 import type {
   PanelDraftResult,
   PanelDraftValue,
+  PanelExportResult,
+  PanelExportValue,
   PanelPatrolReport,
   PanelPatrolResult,
   PanelProbeResult,
+  PanelProviderInput,
+  PanelProviderResult,
   PanelReloadResult,
   PanelResult,
   PanelScheduleResult,
@@ -63,8 +68,11 @@ export const PANEL_MAX_BODY_BYTES = 16 * 1024
 /** Longest rule description the draft endpoint accepts. */
 export const PANEL_DRAFT_MAX_DESCRIPTION = 2_000
 
+/** Hard cap on one exported ledger slice. */
+export const PANEL_EXPORT_MAX_RECORDS = 500
+
 /** Endpoint names in one place, for the method gate and tests. */
-const WRITE_ENDPOINTS = new Set<string>([PANEL_PATROL_ENDPOINT, PANEL_DRAFT_ENDPOINT, PANEL_SCHEDULE_ENDPOINT, PANEL_RELOAD_ENDPOINT, PANEL_SETTINGS_ENDPOINT])
+const WRITE_ENDPOINTS = new Set<string>([PANEL_PATROL_ENDPOINT, PANEL_DRAFT_ENDPOINT, PANEL_SCHEDULE_ENDPOINT, PANEL_RELOAD_ENDPOINT, PANEL_SETTINGS_ENDPOINT, PANEL_EXPORT_ENDPOINT])
 
 /**
  * Whether one request may reach the panel.
@@ -293,8 +301,8 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
     }
   }
 
-  /** Read, save or probe the judge/drafting routes. */
-  const settingsEnvelope = async (body: Record<string, unknown>): Promise<PanelSettingsResult | PanelProbeResult> => {
+  /** Read, save or probe the judge/drafting routes; add/remove custom providers. */
+  const settingsEnvelope = async (body: Record<string, unknown>): Promise<PanelSettingsResult | PanelProbeResult | PanelProviderResult> => {
     const host = options.settings
     if (host === undefined) {
       return { ok: false, error: { code: 'settings_unavailable', message: 'the settings surface is not wired in this profile' } }
@@ -303,7 +311,20 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
     try {
       if (op === 'read') return { ok: true, value: await host.read() }
       if (op === 'probe') return { ok: true, value: await host.probe() }
-      if (op !== 'save') return { ok: false, error: { code: 'settings_invalid', message: 'op must be read, save or probe' } }
+      if (op === 'add-provider') {
+        const input = body.provider
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+          return { ok: false, error: { code: 'settings_invalid', message: 'provider must be a JSON object' } }
+        }
+        return { ok: true, value: await host.addProvider(input as PanelProviderInput) }
+      }
+      if (op === 'delete-provider') {
+        if (typeof body.id !== 'string' || body.id.length === 0 || body.id.length > 64) {
+          return { ok: false, error: { code: 'settings_invalid', message: 'id is required' } }
+        }
+        return { ok: true, value: await host.deleteProvider(body.id) }
+      }
+      if (op !== 'save') return { ok: false, error: { code: 'settings_invalid', message: 'op must be read, save, probe, add-provider or delete-provider' } }
       const patch = body.patch
       if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
         return { ok: false, error: { code: 'settings_invalid', message: 'patch must be a JSON object' } }
@@ -315,6 +336,35 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
       }
       runtime.internalError('panel-settings', error)
       return { ok: false, error: { code: 'settings_write_failed', message: 'the settings action failed' } }
+    }
+  }
+
+  /**
+   * Bounded NDJSON slice of the redacted ledger.
+   *
+   * The ledger already stores hashes, lengths and codes only; this endpoint adds
+   * no field and no content. The browser saves it as a file; nothing is written
+   * by the Host.
+   */
+  const exportEnvelope = async (body: Record<string, unknown>): Promise<PanelExportResult> => {
+    const raw = body.limit
+    const limit = raw === undefined ? 200 : typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0 && raw <= PANEL_EXPORT_MAX_RECORDS ? raw : undefined
+    if (limit === undefined) {
+      return { ok: false, error: { code: 'invalid_body', message: `limit must be an integer between 1 and ${PANEL_EXPORT_MAX_RECORDS}` } }
+    }
+    try {
+      const records = await runtime.ledger.query({ limit })
+      const content = records.map(record => JSON.stringify(record)).join('\n')
+      const stamp = new Date().toISOString().replace(/[:.]/gu, '-')
+      const value: PanelExportValue = {
+        filename: `safeharness-ledger-${stamp}.ndjson`,
+        count: records.length,
+        content: content.length === 0 ? '' : `${content}\n`,
+      }
+      return { ok: true, value }
+    } catch (error) {
+      runtime.internalError('panel-export', error)
+      return { ok: false, error: { code: 'export_failed', message: 'the ledger could not be read' } }
     }
   }
 
@@ -339,7 +389,7 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
       return
     }
 
-    let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult | PanelSettingsResult | PanelProbeResult
+    let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult | PanelSettingsResult | PanelProbeResult | PanelProviderResult | PanelExportResult
     if (endpoint === PANEL_PATROL_ENDPOINT) {
       const runner = options.patrolRunner
       if (runner === undefined) {
@@ -367,6 +417,11 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
       result = body === undefined
         ? { ok: false, error: { code: 'invalid_body', message: 'body must be a JSON object' } }
         : await settingsEnvelope(body)
+    } else if (endpoint === PANEL_EXPORT_ENDPOINT) {
+      const body = await readJsonBody(req)
+      result = body === undefined
+        ? { ok: false, error: { code: 'invalid_body', message: 'body must be a JSON object' } }
+        : await exportEnvelope(body)
     } else if (endpoint !== PANEL_STATUS_ENDPOINT) {
       result = { ok: false, error: { code: 'unknown_endpoint', message: 'unknown panel endpoint' } }
     } else {

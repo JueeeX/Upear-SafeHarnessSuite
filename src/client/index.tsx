@@ -18,6 +18,7 @@ import type { ReactNode } from 'react'
 import {
   PANEL_CHANNEL,
   PANEL_DRAFT_ENDPOINT,
+  PANEL_EXPORT_ENDPOINT,
   PANEL_PATROL_ENDPOINT,
   PANEL_RELOAD_ENDPOINT,
   PANEL_SCHEDULE_ENDPOINT,
@@ -27,11 +28,16 @@ import {
 import type {
   PanelDraftResult,
   PanelDraftValue,
+  PanelExportResult,
+  PanelExportValue,
   PanelJudgeProbe,
   PanelPatrolReport,
   PanelPatrolResult,
   PanelPayload,
   PanelProbeResult,
+  PanelProviderAdded,
+  PanelProviderInput,
+  PanelProviderResult,
   PanelReloadResult,
   PanelResult,
   PanelSchedule,
@@ -72,8 +78,14 @@ export interface PanelFace {
   readonly loadSettings: () => Promise<PanelSettingsValue>
   /** Save a partial route change; the Host validates and hot-reloads it. */
   readonly saveSettings: (patch: PanelSettingsPatch) => Promise<PanelSettingsValue>
+  /** Add one hand-declared provider route (URL + protocol + model; key write-only). */
+  readonly addProvider: (input: PanelProviderInput) => Promise<PanelProviderAdded>
+  /** Remove one route this panel added. */
+  readonly deleteProvider: (id: string) => Promise<PanelProviderAdded>
   /** Probe the judge route once; returns status and timing only, never the reply. */
   readonly probeJudge: () => Promise<PanelJudgeProbe>
+  /** Bounded NDJSON slice of the already-redacted ledger. */
+  readonly exportLedger: (limit?: number) => Promise<PanelExportValue>
 }
 
 /** Slot this tab is contributed to (owned by the plugins settings section). */
@@ -91,6 +103,8 @@ type Envelope =
   | PanelReloadResult
   | PanelSettingsResult
   | PanelProbeResult
+  | PanelProviderResult
+  | PanelExportResult
 
 /**
  * POST one panel endpoint and unwrap its envelope.
@@ -131,7 +145,10 @@ export function apply(ctx: ClientContextLike): void {
     // "server not ready" notice instead of breaking the panel.
     loadSettings: async () => (await call(PANEL_SETTINGS_ENDPOINT, { op: 'read' })) as PanelSettingsValue,
     saveSettings: async (patch) => (await call(PANEL_SETTINGS_ENDPOINT, { op: 'save', patch })) as PanelSettingsValue,
+    addProvider: async (input: PanelProviderInput) => (await call(PANEL_SETTINGS_ENDPOINT, { op: 'add-provider', provider: input })) as PanelProviderAdded,
+    deleteProvider: async (id) => (await call(PANEL_SETTINGS_ENDPOINT, { op: 'delete-provider', id })) as PanelProviderAdded,
     probeJudge: async () => (await call(PANEL_SETTINGS_ENDPOINT, { op: 'probe' })) as PanelJudgeProbe,
+    exportLedger: async (limit) => (await call(PANEL_EXPORT_ENDPOINT, limit === undefined ? {} : { limit })) as PanelExportValue,
   }
   ctx.slots.inject(TAB_SLOT, () => ctx.slots.register({
     name: TAB_SLOT,
