@@ -153,6 +153,20 @@ describe('isTrustedPanelRequest', () => {
     expect(isTrustedPanelRequest(request({}))).toBe(false)
   })
 
+  it('refuses a host name that only starts with 127. (DNS rebinding)', () => {
+    // `new URL('http://127.0.0.1.evil.example').hostname` is the whole name, so a
+    // prefix check would accept an attacker domain resolving to 127.0.0.1.
+    for (const host of [
+      '127.0.0.1.attacker.example:61112',
+      '127.0.0.1.nip.io:61112',
+      '127.0.0.1.evil.example',
+    ]) {
+      expect(isTrustedPanelRequest(request({ host }))).toBe(false)
+      const origin = `http://${host}`
+      expect(isTrustedPanelRequest(request({ host, origin }))).toBe(false)
+    }
+  })
+
   it('refuses an unparsable Host or Origin', () => {
     expect(isTrustedPanelRequest(request({ host: 'http://[bad' }))).toBe(false)
     expect(isTrustedPanelRequest(request({ host: '127.0.0.1:61112', origin: 'not a url' }))).toBe(false)

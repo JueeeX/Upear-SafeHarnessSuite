@@ -502,6 +502,23 @@ describe('scanToolResult: credential leaks', () => {
     }
   })
 
+  it('does not treat source-code declarations or references as credential values', () => {
+    // Measured live on the desktop profile (1.8.1): `results.mode: enforce` made
+    // reading the plugin's own `config.ts` impossible because a schema line such as
+    // `apiKey: z.string()` matched `credential_assignment`.
+    const cases: readonly string[] = [
+      'const schema = { apiKey: z.string() }',
+      'password: z.string().min(8)',
+      'token: process.env.ACCESS_TOKEN',
+      'secret: config.secret',
+      'apiKey: value.apiKey,',
+      'clientSecret: options.clientSecret',
+    ]
+    for (const text of cases) {
+      expect(scanToolResult(ruleset(), resultsConfig(), resultView(text)), text).toEqual([])
+    }
+  })
+
   it('flags a >=40-char high-entropy token', () => {
     const findings = scanToolResult(ruleset(), resultsConfig(), resultView(`blob ${ENTROPY_SENTINEL} end`))
     expect(findings.length).toBe(1)

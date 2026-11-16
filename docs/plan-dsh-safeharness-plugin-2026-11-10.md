@@ -1270,6 +1270,25 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 ---
 
+### 12.21 1.8.2 审计修复（2026-11-16）
+
+1.8.1 真机部署后做的独立只读审计（两份并行）发现 4 类 P0 与若干 P1；本轮按“先修证据完整性、再谈功能”的顺序修复：
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V17 | `panel/route.ts` 的 Host 校验用 `hostname.startsWith('127.')`；`127.0.0.1.attacker.example` 会被当 loopback，Origin 也由攻击者域名决定 | DNS rebinding 可绕过全部写端点；改为 `net.isIP() === 4` + 127/8（D52） |
+| V18 | `credential_assignment` 把类型/引用表达式当凭据；`results.mode: enforce` 下读插件源码被整条替换（审计时实测 6 次） | 值必须像字面量：引号串，或非点号引用/非 `z.`/`process.env` 的裸值（D53） |
+| V19 | `config_drift` 先 `probe.posture()`（写新报告）再 `query(limit:1)`，拿到自己刚写的 | 先读历史再跑姿态；加真实写账本的回归（D54） |
+| V20 | hardened `failOn` 含 `hmr_enabled`（判 WARN）与 `approval_never`（永远 SKIP），两个门禁不可达 | `hmr_enabled` 在 hardened 判 FAIL；`approval_never` 移出默认 `failOn` 但仍报告（D55） |
+| V21 | judge 整段 prompt 上限 4096 而默认 `maxChars` 12000 → 只审前 ~3.8K；输出扫描 128K 而 buffer 512K | 上限 16384；扫描与 buffer 统一 512K，超限配置拒绝 |
+| V22 | `enforce-buffer` 降级后仍 `held.push` 到流末 | 降级后逐块透传；补“第二块不必等流末”的回归 |
+
+**验收**：本机 41 文件 / 708 用例全绿；临时公开树 38 / 690（687 + 3 skip）；CI 口径 37 / 682（679 + 3）；tarball 320,816 B，sha256 `4AD2D97B025183E5ADEB6BC1E24FF707E2D80B94CD5E4B2459A9961C51647183`。桌面仍是 1.8.1，升级后需按交接 §9 做“读源码不被拦 / `secret.txt` 仍被拦”的双向复验。
+
+**仍未做（P1/P2）**：provider 双写回滚与删除守卫、settings CAS、`status` 的 GET 收紧、面板日志脱敏、SRI 前缀豁免、输出面凭据规则 + `output: enforce`。
+
+---
+
 ## 13. Day-0 接手清单（逐条执行，不要跳）
 
 1. **读**：本文件 §1 / §3 / §5 / §7 / §9。

@@ -19,6 +19,7 @@
  */
 import z from '@deepseek-ai/schemastery'
 import type { NotifyChannel, NotifyChannelType } from './notify/channels.js'
+import { POSTURE_CODES } from './posture/checks.js'
 
 /** Deployment posture preset. */
 export type PresetId = 'observe' | 'balanced' | 'hardened'
@@ -35,6 +36,16 @@ export type EngineKind = 'builtin' | 'sidecar'
 export type EnforcementMode = 'off' | 'warn' | 'enforce'
 /** Output surface mode; `enforce-buffer` trades streaming for a veto window. */
 export type OutputMode = 'off' | 'warn' | 'enforce-buffer'
+
+/**
+ * Hard ceiling on buffered output characters (and therefore on the text one
+ * answer review can scan). Buffering more than the review sees would let the
+ * unscanned tail through under `enforce-buffer`, so both limits share this value.
+ */
+export const MAX_BUFFERED_OUTPUT_CHARS = 512 * 1024
+
+/** Categories `results.blockOn` may name (mirrors `ResultFinding['category']`). */
+const RESULT_CATEGORIES = ['credential_leak', 'injection_marker'] as const
 /** Approval bridge mode: delegate everything, or apply our coarse policy. */
 export type ApprovalMode = 'delegate' | 'policy'
 /** When the semantic judge runs: only on structurally flagged output, or always. */
@@ -480,10 +491,13 @@ const PRESET_OVERRIDES: Record<PresetId, DeepPartial<SafeHarnessConfig>> = {
     // The failure matrix requires a hardened deployment to REFUSE the load on a host
     // version mismatch; the gate is `posture.failOn`, so the code must be in this list
     // even though the preset table only lists the deployment-posture codes.
+    //
+    // `approval_never` is deliberately NOT gated: the approval policy has no
+    // session-free reader on 0.2.2, so the probe reports SKIP and a gate on it could
+    // never fire. It is still reported (WARN/FAIL) when a probe can resolve it.
     posture: {
       failOn: [
         'sandbox_danger_full_access',
-        'approval_never',
         'hmr_enabled',
         'plugin_version_mismatch',
         // Opt-in sidecar only: when the operator configured the Python engine it
@@ -601,12 +615,37 @@ function positive(value: unknown, path: string, problems: string[], fallback: nu
   return fallback
 }
 
+/**
+ * Buffered-output cap, clamped to {@link MAX_BUFFERED_OUTPUT_CHARS}.
+ *
+ * A larger cap would hold text the answer review cannot scan, so the tail could
+ * reach the user under `enforce-buffer` without ever being inspected.
+ */
+function boundedBufferChars(value: unknown, problems: string[]): number {
+  const parsed = positive(value, 'output.bufferMaxChars', problems, MAX_BUFFERED_OUTPUT_CHARS)
+  if (parsed <= MAX_BUFFERED_OUTPUT_CHARS) return parsed
+  problems.push(`output.bufferMaxChars must be <= ${MAX_BUFFERED_OUTPUT_CHARS}`)
+  return MAX_BUFFERED_OUTPUT_CHARS
+}
+
 /** String list, or a recorded problem. */
 function stringList(value: unknown, path: string, problems: string[]): string[] {
   if (value === undefined) return []
   if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return [...value] as string[]
   problems.push(`${path} must be an array of strings`)
   return []
+}
+
+/**
+ * String list restricted to a closed vocabulary (posture codes, result
+ * categories). A typo must refuse the load rather than silently disabling a gate.
+ */
+function codeList(value: unknown, path: string, allowed: readonly string[], problems: string[]): string[] {
+  const list = stringList(value, path, problems)
+  for (const code of list) {
+    if (!allowed.includes(code)) problems.push(`${path} contains an unknown code: ${code}`)
+  }
+  return list
 }
 
 /** Compact, safe description of a bad value for an error message (never a secret dump). */
@@ -722,12 +761,12 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     },
     results: {
       mode: oneOf(results.mode, ['off', 'warn', 'enforce'] as const, 'results.mode', problems),
-      blockOn: stringList(results.blockOn, 'results.blockOn', problems),
+      blockOn: codeList(results.blockOn, 'results.blockOn', RESULT_CATEGORIES, problems),
     },
     output: {
       mode: oneOf(output.mode, ['off', 'warn', 'enforce-buffer'] as const, 'output.mode', problems),
       bufferTimeoutMs: positive(output.bufferTimeoutMs, 'output.bufferTimeoutMs', problems, 15000),
-      bufferMaxChars: positive(output.bufferMaxChars, 'output.bufferMaxChars', problems, 512000),
+      bufferMaxChars: boundedBufferChars(output.bufferMaxChars, problems),
       judge: {
         enabled: typeof judge.enabled === 'boolean' ? judge.enabled : false,
         scope: oneOf(judge.scope, ['flagged', 'always'] as const, 'output.judge.scope', problems),
@@ -751,7 +790,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     },
     posture: {
       onLoad: typeof posture.onLoad === 'boolean' ? posture.onLoad : true,
-      failOn: stringList(posture.failOn, 'posture.failOn', problems),
+      failOn: codeList(posture.failOn, 'posture.failOn', POSTURE_CODES, problems),
     },
     patrol: {
       windowMinutes: positive(patrol.windowMinutes, 'patrol.windowMinutes', problems, 10),

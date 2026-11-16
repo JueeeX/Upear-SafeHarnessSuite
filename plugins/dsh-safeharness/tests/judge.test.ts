@@ -213,16 +213,24 @@ describe('createJudge prompt construction', () => {
     expect(prompt.includes('A'.repeat(51))).toBe(false)
   })
 
-  it('caps the whole prompt at 4096 chars even when maxChars is huge', async () => {
+  it('caps the whole prompt at 16384 chars even when maxChars is huge', async () => {
     const calls: CallRecord[] = []
     const judge = createJudge(textCall(['{"verdict":"allow"}'], calls))
-    const result = await judge.review('B'.repeat(5000), { maxChars: 1_000_000, timeoutMs: 1000 })
+    const result = await judge.review('B'.repeat(20_000), { maxChars: 1_000_000, timeoutMs: 1000 })
     const prompt = calls[0]?.prompt ?? ''
-    expect(prompt.length).toBeLessThanOrEqual(4096)
-    expect(prompt.length).toBe(4096)
+    expect(prompt.length).toBeLessThanOrEqual(16_384)
+    expect(prompt.length).toBe(16_384)
     expect(result.labels['truncated']).toBe('true')
-    expect(result.metrics['chars']).toBe(4096 - judge.systemPrompt.length - '\n---\n'.length)
-    expect(result.metrics['prompt_chars']).toBe(4096)
+    expect(result.metrics['chars']).toBe(16_384 - judge.systemPrompt.length - '\n---\n'.length)
+    expect(result.metrics['prompt_chars']).toBe(16_384)
+  })
+
+  it('does not clip the default judge.maxChars (12000)', async () => {
+    const calls: CallRecord[] = []
+    const judge = createJudge(textCall(['{"verdict":"allow"}'], calls))
+    const result = await judge.review('B'.repeat(12_000), { maxChars: 12_000, timeoutMs: 1000 })
+    expect(result.labels['truncated']).toBeUndefined()
+    expect(result.metrics['chars']).toBe(12_000)
   })
 
   it('carries the stable recursion marker in the instruction and prompt', async () => {

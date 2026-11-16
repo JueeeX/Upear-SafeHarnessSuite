@@ -73,6 +73,12 @@ describe('approval bridge — delegate mode', () => {
     expect(answerer).toHaveBeenCalledTimes(1)
     expect((await records(runtime)).find((record) => record.kind === 'approval_decided')?.decision).toBe('rejected')
   })
+
+  it('returns unavailable (never a grant) when the delegated answerer throws', async () => {
+    const { host } = setup({ preset: 'balanced' })
+    const answerer = vi.fn(async () => { throw new Error('answerer down') })
+    expect(await ask(host, answerer, { toolName: 'bash' })).toBe('unavailable')
+  })
 })
 
 describe('approval bridge — policy mode', () => {

@@ -81,9 +81,16 @@ export function installApprovalHook(ctx: Context, runtime: Runtime): boolean {
           reason_code: 'approval_delegated',
           labels: { source: 'delegate' },
         })
-        const outcome = await next()
-        recordDecision(runtime, request, outcome, 'delegate')
-        return outcome
+        try {
+          const outcome = await next()
+          recordDecision(runtime, request, outcome, 'delegate')
+          return outcome
+        } catch (error) {
+          // A failing answerer must not escape as an exception or become a grant:
+          // `unavailable` is the honest outcome and the tool layer denies it.
+          runtime.internalError('approval:delegate', error)
+          return 'unavailable'
+        }
       }
 
       try {

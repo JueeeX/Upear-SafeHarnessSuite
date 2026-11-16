@@ -5,7 +5,7 @@
  * stranger needs to clone, build and test the package.
  * @module
  */
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -99,6 +99,16 @@ describe('public tree plan: still contains what a stranger needs', () => {
 })
 
 describe('leak scan', () => {
+  it('ships no private absolute path in published text files', () => {
+    // Built from parts so this guard file does not contain the needle itself.
+    const privateRoot = 'F:' + String.fromCharCode(92) + 'AgentSecurity'
+    const offenders = plan.files.filter((file) => {
+      if (!/\.(?:ts|mjs|js|py|json|md|ya?ml)$/u.test(file)) return false
+      return readFileSync(join(PACKAGE_ROOT as string, file), 'utf8').includes(privateRoot)
+    })
+    expect(offenders).toEqual([])
+  })
+
   it('ignores the working environment (.git / node_modules) but flags internal content', () => {
     const dir = mkdtempSync(join(tmpdir(), 'safeharness-leak-'))
     try {

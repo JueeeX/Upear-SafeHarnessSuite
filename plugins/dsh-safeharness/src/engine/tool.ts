@@ -561,11 +561,17 @@ const CREDENTIAL_PATTERNS: readonly CredentialPattern[] = [
     regex: /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----/,
   },
   // key=value / key: value assignments for credential-ish names.
+  //
+  // The value must look like a literal secret: a quoted string, or an unquoted
+  // token that is not a dotted reference/type expression. Without the negative
+  // lookahead, source code such as `apiKey: z.string()` or
+  // `token: process.env.TOKEN` matched and (under `results.mode: enforce`) whole
+  // source/config files became unreadable — measured on the desktop profile.
   {
     id: 'credential_assignment',
     severity: 'high',
     regex:
-      /\b(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)\s*[=:]\s*["']?[A-Za-z0-9._~+/=-]{8,}/i,
+      /\b(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)\s*[=:]\s*(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}'|(?!z\.|process\.env|os\.environ|import\.meta|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b)[A-Za-z0-9._~+/=-]{8,})/i,
   },
 ]
 

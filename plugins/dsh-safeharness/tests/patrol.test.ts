@@ -374,6 +374,27 @@ describe('patrol config_drift', () => {
     // No configured value, only finding codes.
     expect(report.findings[0]?.detail).not.toMatch(/warn|fail|skip|ok\b/iu)
   })
+
+  it('compares against the previous report even when the probe records a new one', async () => {
+    const h = makeHarness()
+    await h.append('posture_report', { decision: 'warn', rule_ids: ['sandbox_danger_full_access'] }, NOW - 5 * MIN)
+    const report = await runPatrol(
+      h.runtime,
+      probeFor({
+        posture: async () => {
+          const findings = [{ code: 'ledger_writable', severity: 'FAIL' }]
+          // `runPosture` records the report it just produced, carrying the same
+          // non-OK codes this check compares against. Querying after the probe
+          // therefore compared the report with itself and always reported "OK".
+          await h.append('posture_report', { decision: 'fail', rule_ids: findings.map((item) => item.code) }, NOW)
+          return { findings }
+        },
+      }),
+      { include: ['config_drift'] },
+    )
+    expect(report.findings[0]?.severity).toBe('WARN')
+    expect(report.findings[0]?.detail).toContain('ledger_writable')
+  })
 })
 
 // ---------------------------------------------------------------------------
