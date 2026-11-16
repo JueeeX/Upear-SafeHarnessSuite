@@ -26,7 +26,7 @@
 | 当前版本 | `1.8.2`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.1`；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用在 `D:\dsh` |
 | 桌面端插件 | **仍是 1.8.1**：桌面 profile 指向 `upear-dsh-safeharness-1.8.1.tgz`，应用运行 1.8.1（`results.mode: enforce`）。升级前不要假设 1.8.2 的修复已生效 |
-| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（当前 `TGZ=` 仍指 1.8.1；升级时改成 1.8.2，运行前必须完全退出 DSH，包括托盘） |
+| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 已指向 1.8.2 且 tarball 已复制；**尚未运行安装**；运行前必须完全退出 DSH，包括托盘） |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`0062f4f`**，tag **`v1.8.1`**（tag 对象 `350b6c7...`）；**1.8.2 尚未发布** |
 | 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.8.1 修复提交 `1fa45a6` 与 1.8.2 待提交改动；`github` 备份远端已同步 main 与 v1.8.1 标签 |
 | 测试 | 本机 **41 文件 / 708 用例**全绿；公开树 **38 文件 / 690**（687 pass + 3 skip）；CI 口径 **37 / 682**（679 + 3，另剔除 `tests/perf.test.ts`） |
@@ -475,7 +475,7 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 - 桌面 profile 依赖：`file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.8.1.tgz`
 - `desktop/node_modules/@upear/dsh-safeharness/package.json` 版本 **1.8.1**（**尚未升级到 1.8.2**）
 - 桌面应用当前运行 1.8.1；`results.mode: enforce` 已生效
-- 安装脚本：`C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ` 仍指 1.8.1）
+- 安装脚本：`C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ` 已指 1.8.2，tarball 已复制到同目录；尚未运行）
 
 **升级到 1.8.2**：把 `install-safeharness-desktop.cmd` 的 `TGZ=` 改为 `...upear-dsh-safeharness-1.8.2.tgz`，并确认该文件已复制到 `plugin-tarballs\`；完全退出 DSH（含托盘）→ 双击脚本 → 重启。若面板/版本没变，检查 `desktop` 的 `package.json` 依赖与 `node_modules` 版本，或看账本 `plugin_loaded` 里的 `version` label。
 
@@ -602,7 +602,7 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 | 1.8.1 公开提交 | `0062f4f`，tag `v1.8.1`（tag 对象 `350b6c7...`） |
 | 1.8.1 tarball | 318,953 B，sha256 `6071F100735B8262F5BED99EC47BA3C5A5595E8101DE5D09BBDD775B7909C61C` |
 | 1.8.2 证据 | 待写 `plugins/dsh-safeharness/evidence/1.8.2-audit-fixes.md`（本轮四类 P0 的修复与测试；桌面复验待升级后补） |
-| 1.8.2 本地提交 | 待提交（含本文档更新） |
+| 1.8.2 本地提交 | `c875ee7`（代码 + 测试 + 文档；未 push） |
 | 1.8.2 公开提交 | 待发布 |
 | 1.8.2 tarball | 320,816 B，sha256 `4AD2D97B025183E5ADEB6BC1E24FF707E2D80B94CD5E4B2459A9961C51647183` |
 
