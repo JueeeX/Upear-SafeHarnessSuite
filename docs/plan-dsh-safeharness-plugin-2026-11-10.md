@@ -1283,7 +1283,7 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 | V21 | judge 整段 prompt 上限 4096 而默认 `maxChars` 12000 → 只审前 ~3.8K；输出扫描 128K 而 buffer 512K | 上限 16384；扫描与 buffer 统一 512K，超限配置拒绝 |
 | V22 | `enforce-buffer` 降级后仍 `held.push` 到流末 | 降级后逐块透传；补“第二块不必等流末”的回归 |
 
-**验收**：本机 41 文件 / 708 用例全绿；临时公开树 38 / 690（687 + 3 skip）；CI 口径 37 / 682（679 + 3）；tarball 320,816 B，sha256 `4AD2D97B025183E5ADEB6BC1E24FF707E2D80B94CD5E4B2459A9961C51647183`。桌面仍是 1.8.1，升级后需按交接 §9 做“读源码不被拦 / `secret.txt` 仍被拦”的双向复验。
+**验收**：本机 41 文件 / 708 用例全绿；临时公开树 38 / 690（687 + 3 skip）；CI 口径 37 / 682（679 + 3）；tarball 320,850 B，sha256 `6274E5B860669ADE67243FB6B6456C849DC853B02A85BCA43965EFE695886E9C`（rc.3 钉版）。桌面已装 1.8.2（宿主 rc.3）并完成“读源码不被拦 / 假凭据仍被拦”的双向复验（账本 seq 7902）；已安装包是 rc.1 钉版构建，`plugin_version_mismatch` 仍 WARN，用最终 tarball 重装后消失。
 
 **仍未做（P1/P2）**：provider 双写回滚与删除守卫、settings CAS、`status` 的 GET 收紧、面板日志脱敏、SRI 前缀豁免、输出面凭据规则 + `output: enforce`。
 

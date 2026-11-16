@@ -15,6 +15,7 @@
 - **配置校验**：`posture.failOn` / `results.blockOn` 未知 code 拒绝加载（拼写错误不再静默削弱强制）；`output.bufferMaxChars` 超上限拒绝。
 - **零回显**：面板路由失败只记录长度，不再把宿主异常文本写进 `labels`；`routeField` 拒绝换行。
 - **发布卫生**：sidecar 脚本与 README/CHANGELOG 去掉私有绝对路径；`publish-guard` 新增“发布文本不含私有路径”扫描。
+- **宿主钉版**：运行时 `PINNED_VERSIONS` 更新到桌面实测的 `0.2.2-rc.3`（构建期类型仍来自 rc.1 的 profile 副本；`engines.dsh` 仍允许 `>=0.2.2-rc.1 <0.3.0`）。升级后姿态的 `plugin_version_mismatch` 恢复 OK。
 - **测试**：41 文件 / 708 用例（公开 38 / 690；CI 37 / 682）。
 ## 1.8.1 — 2026-11-12
 

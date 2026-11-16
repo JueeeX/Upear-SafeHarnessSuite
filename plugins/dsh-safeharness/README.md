@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.8.2` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.8.2` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -107,7 +107,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 
 | 依赖 | 要求 | 说明 |
 |---|---|---|
-| DSH | `0.2.2-rc.1` | 桌面应用自带 CLI：Windows 在 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`，其它平台同理 |
+| DSH | `0.2.2-rc.3` | 桌面应用自带 CLI：Windows 在 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`，其它平台同理 |
 | Node | ≥ 24 | 构建与测试；宿主机自带 24.21.0 |
 | pnpm | 9+ | 仅构建期使用 |
 | 宿主包 | 由 DSH 安装提供 | `@deepseek-ai/*` **不在公共 npm 上**，构建时用 `scripts/link-dsh.mjs` 链接本地安装 |
@@ -210,7 +210,7 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 
 ## 4. 配置
 
-配置从 profile patch 的 entry `config` 传入。宿主 0.2.2-rc.1 的设置页会**自动**从插件导出的 `Config` 生成表单：标了 `.volatile()` 的字段可在线改、即时生效（不重挂载），其余字段（`preset`、`engine`、`rules`、`audit`、通知地址等）仍只在 patch 里改——写这些字段会重挂载 entry，坏值由宿主配置编辑器回滚。详见 §4.5。
+配置从 profile patch 的 entry `config` 传入。宿主 0.2.2-rc.1 起的设置页会**自动**从插件导出的 `Config` 生成表单：标了 `.volatile()` 的字段可在线改、即时生效（不重挂载），其余字段（`preset`、`engine`、`rules`、`audit`、通知地址等）仍只在 patch 里改——写这些字段会重挂载 entry，坏值由宿主配置编辑器回滚。详见 §4.5。
 
 ```yaml
 config:
@@ -443,7 +443,7 @@ engine:
 
 ### 4.5 桌面端设置页（1.2.1）
 
-DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configure` / `write`），不是早期的"注册命名空间 + watch"。插件不再注册命名空间：
+DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `configure` / `write`），不是早期的"注册命名空间 + watch"。插件不再注册命名空间：
 
 - 入口 `Config` 中标记 `.volatile()` 的字段会出现在桌面端 **设置 → 插件** 的 safeharness 表单里。
 - 写入走宿主的 `configEditor`：只改 profile patch 里该 entry 的 `config`；Loader 把新值提交到运行中的 fiber（`loader/volatile-update`），插件据此重编译规则并替换运行时配置，账本记一条 `rules_reloaded`。
@@ -738,7 +738,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 
 ## 11. 已知限制
 
-1. **运行期宿主包版本以 host 实际解析为准**：本机实测插件的 `@deepseek-ai/*` 裸导入会解析到 DSH bundle 内的副本（`dsh-tools`/`dsh-settings`/`cordis`/`schemastery` 为 `0.2.2-rc.1` / `4.1.0` / `3.19.0`），而不是 profile 里的构建期副本。因此本包不 import 任何可能漂移的具名导出；`safeharness_status.host` 会显示实际解析来源（`app-bundle` / `profile` / `mixed`）。
+1. **运行期宿主包版本以 host 实际解析为准**：本机实测插件的 `@deepseek-ai/*` 裸导入会解析到 DSH bundle 内的副本（1.8.2 实测 `dsh-tools`/`dsh-settings`/`dsh-*` 为 `0.2.2-rc.3`，`cordis`/`schemastery` 为 `4.1.0` / `3.19.0`），而不是 profile 里的构建期副本。因此本包不 import 任何可能漂移的具名导出；`safeharness_status.host` 会显示实际解析来源（`app-bundle` / `profile` / `mixed`）。
 2. **兼容门只有一个**：`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`。存在该字段时 DSH 只按它判断，不再逐条比对 peer 版本。
 3. **安装形态决定改代码后的动作**：pnpm 默认把包复制进 profile（`file:` / tarball），改代码后需 `remove` + `add`；`link:` 安装则直接指向源码。**HMR 重载已在 `link:` 安装 + 非空 `hmr.root` 下实测**：连续两次改 `lib/` 都触发重挂载，`plugin_loaded` → `posture_report ok` → `invariant_probe seams=…,guard,…` 全部重现（内部证据，未随仓库分发）。注意重挂载有约 15–30 ms 的空窗，且生产部署应当关闭 HMR（`hardened` 的 `hmr_enabled` 姿态门禁会直接拒绝加载）。
 4. **`enforce-buffer` 的代价**：牺牲流式；超过 `bufferTimeoutMs`/`bufferMaxChars` 会降级为透传（记账但不拦截）。完全停滞的流由宿主超时负责。
