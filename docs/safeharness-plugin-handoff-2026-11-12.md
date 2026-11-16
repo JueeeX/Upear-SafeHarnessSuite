@@ -29,7 +29,7 @@
 | 宿主 | DSH `0.2.2-rc.3`（桌面已升级；构建期类型仍是 rc.1 的 profile 副本）；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用在 `D:\dsh` |
 | 桌面端插件 | 已安装 **1.8.2**（`results.mode: enforce`，8/8 接缝），但该安装包是 rc.1 钉版；姿态 WARN `plugin_version_mismatch`，需用最终 rc.3 钉版 tarball 重装 |
 | 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 指向 1.8.2；重装前必须完全退出 DSH，包括托盘） |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`0062f4f`**，tag **`v1.8.1`**（tag 对象 `350b6c7...`）；**1.8.2 尚未发布** |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`6684ee4`**，tag **`v1.8.2`**（tag 对象 `50a65f6...`） |
 | 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.8.2 提交 `c875ee7`（代码+测试+文档）、`903b918`（文档），以及后续 rc.3 钉版提交；`github` 备份远端已同步 main 与 v1.8.1 标签 |
 | 测试 | 本机 **41 文件 / 708 用例**全绿；公开树 **38 文件 / 690**（687 pass + 3 skip）；CI 口径 **37 / 682**（679 + 3，另剔除 `tests/perf.test.ts`） |
 | tarball | `dist/upear-dsh-safeharness-1.8.2.tgz`，320,850 B，sha256 `6274E5B860669ADE67243FB6B6456C849DC853B02A85BCA43965EFE695886E9C`（rc.3 钉版） |
@@ -503,14 +503,14 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 11. **侦察命令不单独拦截**：`whoami` / `hostname` / `ipconfig` / `systeminfo` / `net user` 这类身份与环境侦察不在结果扫描的形态里（只认凭据与注入标记），工具面也没有命令级分类；单条属低危，但在不可信内容诱导下是外发前奏，且没有"侦察→外发"的链式规则。**用户 2026-11-12 明确不做**命令级 recon 分类与 egress 收紧，这里只作已知边界记录（详见 §12 D51）。
 12. **面板/provider 仍有 P1 缺口（1.8.2 未做）**：① `addProvider` 先写 `settings.update` 再写 `providers.json`，后者失败时没有回滚，可能留下"配置里有、面板不可删"的路由；② 删除守卫只查 judge/draft.provider，不查 `defaultProvider` 等其他引用；③ `providerConfigurable` 以 `settings.update` 判定，但删除走 `mutate`；④ `status` 仍接受 GET（写端点全部 POST-only），方法违规返回 200 信封而不是 405；⑤ 面板 `logger` 仍会打印宿主错误 message（账本已改为只记长度）。
 13. **宿主已升到 0.2.2-rc.3**：桌面已装 1.8.2（rc.1 钉版构建），姿态 WARN `plugin_version_mismatch`；最终 tarball 已把运行时钉版改为 rc.3（构建期类型仍为 rc.1），重装后 WARN 消失、hardened 可在 rc.3 上加载。`engines.dsh` 仍是 `>=0.2.2-rc.1 <0.3.0`，因此 rc.1/rc.2 主机仍可安装但会看到同样的 WARN。
-14. **发布未做**：公开仓库仍是 `v1.8.1`；1.8.2 只在本机与桌面。
+14. **1.8.2 已发布**：公开 `main` = `6684ee4`、tag `v1.8.2`；`github` 备份已同步。CI runs 仍需网页确认。
 
 ---
 
 ## 11. 下一步建议（1.8.2 收尾）
 
 1. **桌面用最终 tarball 重装（必做）**：见 §9；把 rc.3 钉版 tarball 覆盖到 `plugin-tarballs\` 后重装，确认 `plugin_version_mismatch` 变 OK，并再跑一次“读源码不被拦 / 假凭据仍被拦”。
-2. **发布 1.8.2（必做，按 §7）**：`publish-public` → 临时树构建/测试（38/690，CI 37/682）→ 删 `lib/` → leak 检查 0 → commit/tag `v1.8.2`/push `dsh` → `github` 同步 → 把 commit、tarball 与 hash 写回本文档 §15。
+2. **发布 1.8.2（已完成 2026-11-16）**：公开 `main` = `6684ee4`、tag `v1.8.2`（`50a65f6...`）；`github` 备份 main（`e23066b`）与 tag 已同步。剩余：网页确认 CI runs。
 3. **真实 webhook / 人工审批（环境项）**：用户提供飞书/钉钉/企微 webhook 后配置 `patrol.notify` 跑一次巡检；建 `approval: ask` 的 dev profile 走一遍 delegate/policy。
 4. **面板/provider P1（可选）**：见 §10 第 12 条（回滚、删除守卫、CAS、GET 收紧、日志脱敏）。
 5. **输出面凭据规则 + `output: enforce`（可选，产品决策）**：当前 `results` 只保护“结果→模型”，不保护“模型→用户”；开启前要评估误报与流式代价。
@@ -552,7 +552,7 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 1. **读**：本文 §0–§10；需要历史细节再读旧 handoff 与 README §4.7/§4.8。
 2. **核环境**：`$env:DSH_HOME`、`D:\dsh\resources\runtime\cli\bin\dsh.cmd --version`、Node `v25.8.2`、Python（若 sidecar）。
 3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（应只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`）；`git log --oneline -3` 应看到 `1fa45a6` 与随后的文档提交；`git remote -v` 确认 `dsh`/`github`，不要碰 `origin`。
-4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.1` 应分别指向 `0062f4f...` 与 tag 对象 `350b6c7...`；`v1.8.2` 尚未发布（本地源码/tarball 已就绪，见 §11）。
+4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.2` 应分别指向 `6684ee4...` 与 tag 对象 `50a65f6...`；`v1.8.1`（`0062f4f`）仍保留。
 5. **构建/测试**：按 §6 跑 tsc + vitest，期望 708 passed。
 6. **起 dev host**：§8.1，打开面板，确认五个标签、版本 1.8.2、设置页读到 `providerConfigurable: true`。
 7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `/safeharness audit 20`；确认 `plugin_loaded` 的 `version` 是 1.8.2、`ruleset_hash` 存在。
@@ -606,8 +606,8 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 | 1.8.1 公开提交 | `0062f4f`，tag `v1.8.1`（tag 对象 `350b6c7...`） |
 | 1.8.1 tarball | 318,953 B，sha256 `6071F100735B8262F5BED99EC47BA3C5A5595E8101DE5D09BBDD775B7909C61C` |
 | 1.8.2 证据 | `plugins/dsh-safeharness/evidence/1.8.2-audit-fixes.md`（四类 P0 修复、测试、桌面双向复验） |
-| 1.8.2 本地提交 | `c875ee7`（代码+测试+文档）、`903b918`（文档）、rc.3 钉版提交（见 `git log`） |
-| 1.8.2 公开提交 | 待发布 |
+| 1.8.2 本地提交 | `c875ee7`（代码+测试+文档）、`903b918`（文档）、`e23066b`（rc.3 钉版） |
+| 1.8.2 公开提交 | `6684ee4`，tag `v1.8.2`（tag 对象 `50a65f6...`） |
 | 1.8.2 tarball | 320,850 B，sha256 `6274E5B860669ADE67243FB6B6456C849DC853B02A85BCA43965EFE695886E9C`（rc.3 钉版） |
 
 **安全纪律（每次改代码/证据/文档前重温）**：
