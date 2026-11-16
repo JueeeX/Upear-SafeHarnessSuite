@@ -156,6 +156,7 @@ describe('createPanelSettingsHost', () => {
     await expect(host.save({ judge: { maxChars: 1 } })).rejects.toMatchObject({ code: 'settings_invalid' })
     await expect(host.save({ judge: { timeoutMs: 1 } })).rejects.toMatchObject({ code: 'settings_invalid' })
     await expect(host.save({ judge: { enabled: true, provider: '', model: '' } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ judge: { provider: 'liao\ninjected', model: 'm' } })).rejects.toMatchObject({ code: 'settings_invalid' })
     await expect(host.save({})).rejects.toMatchObject({ code: 'settings_invalid' })
     expect(update).not.toHaveBeenCalled()
   })

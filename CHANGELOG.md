@@ -1,6 +1,22 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.8.2 — 2026-11-16
+
+安全修复与证据完整性：**面板栅栏的 DNS rebinding 绕过、结果层对源码的误拦、巡检漂移自比对、hardened 门禁的两个不可达 code**。
+
+- **面板栅栏（安全）**：Host 校验从 `127.` 字符串前缀改为 `net.isIP() === 4` + 127/8。`127.0.0.1.attacker.example` 这类域名过去会被当成 loopback（Origin 也由攻击者域名决定），可绕过面板写端点；现在被拒。新增三个回归（attacker.example / nip.io / 普通子域）。
+- **结果扫描误报**：`credential_assignment` 不再把 `apiKey: z.string()`、`token: process.env.X`、`secret: config.secret` 当凭据；真实赋值（`password = hunter2…`、`api_key=sk-…`）仍拦。此前 `results.mode: enforce` 下读取插件自己的源码/配置会被整条替换（真机实测）。
+- **巡检 `config_drift`**：先读上一条 `posture_report` 再跑当前姿态，修掉“自己刚写的那条对比自己”导致永远 OK。
+- **hardened 门禁**：`hmr_enabled` 在 hardened 判 FAIL（与 README 一致，加载会拒绝）；`approval_never` 移出默认 `failOn`（无 session 时永远 SKIP，门禁不可达），仍会报告。
+- **评审/扫描窗口**：judge prompt 总上限 4096→16384，默认 `judge.maxChars: 12000` 不再被静默截断；输出扫描上限与 `bufferMaxChars` 统一为 512K，超出配置直接拒绝。
+- **enforce-buffer 降级**：超过字符/时延上限后真正逐块透传，不再继续缓冲到流末（首 token 延迟与内存增长）。
+- **审批桥**：delegate 分支的 `next()` 抛错返回 `unavailable`，不再把异常抛出调用方，也不会变成授予。
+- **配置校验**：`posture.failOn` / `results.blockOn` 未知 code 拒绝加载（拼写错误不再静默削弱强制）；`output.bufferMaxChars` 超上限拒绝。
+- **零回显**：面板路由失败只记录长度，不再把宿主异常文本写进 `labels`；`routeField` 拒绝换行。
+- **发布卫生**：sidecar 脚本与 README/CHANGELOG 去掉私有绝对路径；`publish-guard` 新增“发布文本不含私有路径”扫描。
+- **宿主钉版**：运行时 `PINNED_VERSIONS` 更新到桌面实测的 `0.2.2-rc.3`（构建期类型仍来自 rc.1 的 profile 副本；`engines.dsh` 仍允许 `>=0.2.2-rc.1 <0.3.0`）。升级后姿态的 `plugin_version_mismatch` 恢复 OK。
+- **测试**：41 文件 / 708 用例（公开 38 / 690；CI 37 / 682）。
 ## 1.8.1 — 2026-11-12
 
 高熵误报修复，为 `results.mode: enforce` 上线做准备：**纯十六进制摘要与长路径片段不再被判成凭据**。
@@ -36,7 +52,7 @@
 - **设置页（新端点 `POST /safeharness/settings`）**：`op: read|save|probe`，POST-only、body ≤ 16 KiB。读：当前评审启用/范围/路由/字符上限/超时、起草路由、宿主模型目录（provider → models，缓存 30s，上限 24 provider / 600 model）。写：只提交改动字段，走宿主自己的 `settings` 服务（`settings.update`，仅 volatile 路径）→ `cordis.patch.yml` → loader 热更新 → `applyHotConfig`，**不另建配置存储**；校验范围（maxChars 500–200000、timeout 500–60000、启用时 provider/model 必填），失败只回粗粒度错误码，不转发宿主原文。probe 发一次最小结构化请求，只回 status/verdict/耗时，不回模型文本。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
 - **顺序加固**：`tools/pre-execute`、`agent/pre-step`、`llm/stream`、`approval/request` 四处监听改为 `{ prepend: true }`。DSH 0.2.2 **没有插件数值优先级**；同事件监听器按注册序执行，`prepend` 是 unshift（后 prepend 者更靠前），`tools.guard` 在 pre-execute 与审批之后、按 scope 分层且单调不可撤销。因此口径是"prepend 最佳努力 + guard 单调兜底"，文档不承诺"绝对第一个执行"。
 - **测试**：新增 `tests/panel-settings.test.ts`（9）与 `tests/state.test.ts` 持久化三例、`tests/panel.test.ts` 历史/账本会话一例、`tests/panel-route.test.ts` 设置端点五例。全套 **41 文件 / 688 用例**（公开树 38 / 670；CI 37 / 662）。
-- **真实宿主验证**（0.2.2 Web 壳 + 桌面同源 dev profile）：重启后 `sessions.json` 回读出 `Greeting`、`F:\AgentSecurity\Upear` 等历史行；工作区筛选从 20 条收敛到 2 条，对话下拉列出标题 + 短 id + 历史标记；设置页读到 `configurable: true`、`available: true` 与真实 provider 目录；保存 `judge.timeoutMs 4000→4100→4000` 往返成功；填 `liao/gpt-6-luna` 后 probe 返回 `status: ok / verdict: allow / 3685ms`，随后恢复空路由；新建会话发一条消息后插件状态目录写出 `sessions.json` 且标题被采集。
+- **真实宿主验证**（0.2.2 Web 壳 + 桌面同源 dev profile）：重启后 `sessions.json` 回读出 `Greeting`、本机工作区等历史行；工作区筛选从 20 条收敛到 2 条，对话下拉列出标题 + 短 id + 历史标记；设置页读到 `configurable: true`、`available: true` 与真实 provider 目录；保存 `judge.timeoutMs 4000→4100→4000` 往返成功；填 `liao/gpt-6-luna` 后 probe 返回 `status: ok / verdict: allow / 3685ms`，随后恢复空路由；新建会话发一条消息后插件状态目录写出 `sessions.json` 且标题被采集。
 - **覆盖边界不变**：所有经 `tools/pre-execute` 的工具调用（内置、MCP、技能、子代理、工作流/PTC）都在调用级被判定；shell 内部二次命令与子进程、网络副作用、技能正文、模型推理流、MCP server 自身以及工具体开始执行之后不在"已防护"范围。DSH 的顺序机制也意味着一个更早注册且不调用 `next()` 的第三方监听器可以让我们看不到调用——这属于宿主组合层风险，文档如实标注。
 - 仍不做：面板写规则文件；账本导出；通用调度器（定时只跑巡检）。桌面端需升级到 1.7.0 后确认五标签、筛选与设置页。
 ## 1.6.0 — 2026-11-12

@@ -5,7 +5,7 @@
  * so it is tested first.
  */
 import { describe, expect, it } from 'vitest'
-import { Config, ConfigError, resolveConfig } from '../src/config.js'
+import { Config, ConfigError, MAX_BUFFERED_OUTPUT_CHARS, resolveConfig } from '../src/config.js'
 
 describe('resolveConfig — host-validated config (R37)', () => {
   it('does not let schemastery materialize absent arrays (they used to defeat presets)', () => {
@@ -27,7 +27,6 @@ describe('resolveConfig — host-validated config (R37)', () => {
     const config = resolveConfig(Config({ preset: 'hardened' }) as never)
     expect(config.posture.failOn).toEqual([
       'sandbox_danger_full_access',
-      'approval_never',
       'hmr_enabled',
       'plugin_version_mismatch',
       'engine_sidecar_unavailable',
@@ -72,7 +71,6 @@ describe('resolveConfig — preset expansion', () => {
     expect(config.approval.mode).toBe('policy')
     expect(config.posture.failOn).toEqual([
       'sandbox_danger_full_access',
-      'approval_never',
       'hmr_enabled',
       // §7 row 10: a hardened deployment must refuse the load on a host version mismatch.
       'plugin_version_mismatch',
@@ -168,6 +166,17 @@ describe('resolveConfig — validation', () => {
   it('rejects a non-positive bound', () => {
     expect(() => resolveConfig({ input: { maxChars: 0 } })).toThrow(/input\.maxChars/u)
     expect(() => resolveConfig({ tools: { maxArgsBytes: -1 } })).toThrow(/tools\.maxArgsBytes/u)
+  })
+
+  it('rejects unknown posture.failOn / results.blockOn codes', () => {
+    expect(() => resolveConfig({ posture: { failOn: ['sandbox_danger_full_acces'] } })).toThrow(/posture\.failOn/u)
+    expect(() => resolveConfig({ results: { blockOn: ['credential_leaks'] } })).toThrow(/results\.blockOn/u)
+  })
+
+  it('refuses a bufferMaxChars above the scan ceiling', () => {
+    expect(() => resolveConfig({ output: { bufferMaxChars: MAX_BUFFERED_OUTPUT_CHARS + 1 } })).toThrow(
+      /output\.bufferMaxChars/u,
+    )
   })
 
   it('reports every problem at once', () => {

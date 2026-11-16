@@ -29,13 +29,14 @@ import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Runtime } from '../runtime.js'
 import { foundSomething, OUTPUT_BLOCK_TEXT } from '../runtime.js'
+import { MAX_BUFFERED_OUTPUT_CHARS } from '../config.js'
 import { contentDigest } from '../util/hash.js'
 import { ReasonCode, type Decision } from '../engine/types.js'
 import { createJudge, JUDGE_REQUEST_MARK, type Judge, type JudgeResult, type JudgeStatus } from '../judge/client.js'
 import { createRuleDrafter, DRAFT_REQUEST_MARK, type RuleDrafter } from '../draft/rule.js'
 
 /** Characters of assistant text we keep for post-stream scanning. */
-export const MAX_OUTPUT_SCAN_CHARS = 128 * 1024
+export const MAX_OUTPUT_SCAN_CHARS = MAX_BUFFERED_OUTPUT_CHARS
 
 /**
  * Auxiliary model calls that must never be reviewed: compaction summaries and
@@ -155,16 +156,24 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
           yield chunk
           continue
         }
+        if (degraded !== undefined) {
+          // Past a bound the answer is already being handed over: passing every
+          // later chunk straight through keeps the “degrade to pass-through”
+          // promise and stops `held` from growing without limit.
+          yield chunk
+          continue
+        }
         held.push(chunk)
-        if (degraded === undefined) {
-          if (text.length > runtime.config.output.bufferMaxChars) degraded = 'max_chars'
-          else if (Date.now() - startedAt > runtime.config.output.bufferTimeoutMs) degraded = 'timeout'
-          if (degraded !== undefined) {
-            // Bound exceeded: hand over what we already hold and stop buffering
-            // rather than making the user wait for a review that may never finish.
-            for (const pending of held) yield pending
-            held.length = 0
-          }
+        // Use the total character count, not `text.length`: `text` stops growing
+        // at the scan cap, so a longer answer would never cross a large cap and
+        // `held` would grow without limit.
+        if (chars > runtime.config.output.bufferMaxChars) degraded = 'max_chars'
+        else if (Date.now() - startedAt > runtime.config.output.bufferTimeoutMs) degraded = 'timeout'
+        if (degraded !== undefined) {
+          // Bound exceeded: hand over what we already hold and stop buffering
+          // rather than making the user wait for a review that may never finish.
+          for (const pending of held) yield pending
+          held.length = 0
         }
       }
       completed = true

@@ -164,6 +164,7 @@ function integerField(value: unknown, name: string, min: number, max: number): n
 function routeField(value: unknown, name: string): string {
   if (typeof value !== 'string') throw new PanelSettingsError('settings_invalid', `${name} must be a string`)
   const trimmed = value.trim()
+  if (/[\r\n]/u.test(trimmed)) throw new PanelSettingsError('settings_invalid', `${name} must be a single line`)
   if (trimmed.length > MAX_ROUTE_CHARS) throw new PanelSettingsError('settings_invalid', `${name} is too long`)
   return trimmed
 }

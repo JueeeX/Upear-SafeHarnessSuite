@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.8.1` · 宿主 DSH `0.2.2-rc.1` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.8.2` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -107,7 +107,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 
 | 依赖 | 要求 | 说明 |
 |---|---|---|
-| DSH | `0.2.2-rc.1` | 桌面应用自带 CLI：Windows 在 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`，其它平台同理 |
+| DSH | `0.2.2-rc.3` | 桌面应用自带 CLI：Windows 在 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`，其它平台同理 |
 | Node | ≥ 24 | 构建与测试；宿主机自带 24.21.0 |
 | pnpm | 9+ | 仅构建期使用 |
 | 宿主包 | 由 DSH 安装提供 | `@deepseek-ai/*` **不在公共 npm 上**，构建时用 `scripts/link-dsh.mjs` 链接本地安装 |
@@ -122,11 +122,11 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # 694 个用例（41 个文件）
+pnpm test             # 708 个用例（41 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.8.1.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.8.2.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -140,7 +140,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.8.1.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.8.2.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -210,7 +210,7 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 
 ## 4. 配置
 
-配置从 profile patch 的 entry `config` 传入。宿主 0.2.2-rc.1 的设置页会**自动**从插件导出的 `Config` 生成表单：标了 `.volatile()` 的字段可在线改、即时生效（不重挂载），其余字段（`preset`、`engine`、`rules`、`audit`、通知地址等）仍只在 patch 里改——写这些字段会重挂载 entry，坏值由宿主配置编辑器回滚。详见 §4.5。
+配置从 profile patch 的 entry `config` 传入。宿主 0.2.2-rc.1 起的设置页会**自动**从插件导出的 `Config` 生成表单：标了 `.volatile()` 的字段可在线改、即时生效（不重挂载），其余字段（`preset`、`engine`、`rules`、`audit`、通知地址等）仍只在 patch 里改——写这些字段会重挂载 entry，坏值由宿主配置编辑器回滚。详见 §4.5。
 
 ```yaml
 config:
@@ -443,7 +443,7 @@ engine:
 
 ### 4.5 桌面端设置页（1.2.1）
 
-DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configure` / `write`），不是早期的"注册命名空间 + watch"。插件不再注册命名空间：
+DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `configure` / `write`），不是早期的"注册命名空间 + watch"。插件不再注册命名空间：
 
 - 入口 `Config` 中标记 `.volatile()` 的字段会出现在桌面端 **设置 → 插件** 的 safeharness 表单里。
 - 写入走宿主的 `configEditor`：只改 profile patch 里该 entry 的 `config`；Loader 把新值提交到运行中的 fiber（`loader/volatile-update`），插件据此重编译规则并替换运行时配置，账本记一条 `rules_reloaded`。
@@ -506,7 +506,7 @@ DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configur
 - **自定义模型**：路由名、显示名、协议（`openai-completions` / `openai-responses` / `anthropic-messages`）、Base URL、API Key、模型 ID/显示名；可选“添加后设为评审模型”。Key 只经 loopback 提交一次，写入宿主凭据服务（`.credentials.yaml`），**不写进 profile YAML、不回显、不进账本**；路由写进 `llm-pi-ai` 的 `providers.<id>`（整段 `providers` 是 volatile 字段），宿主热更新后出现在供应方/模型下拉里。列表只显示本面板添加的路由（`$DSH_HOME/safeharness/providers.json`，只含 id/协议/URL/模型/凭据引用名），删除时若仍被评审/起草路由使用会拒绝（`provider_in_use`）。pi-ai 的手写路由只支持上述三种协议；Bedrock / Vertex / Azure / Codex OAuth 需要各自的环境与签名，不能用一个 URL + Key 表达。
 - **导出账本片段**：概览的账本卡片可导出最近 200 条（`POST /safeharness/export`，上限 500）的 NDJSON，内容就是账本已有的脱敏记录（哈希/长度/代码），由浏览器保存为文件，宿主不落盘、不新增字段。
 - **语义评审**：启用开关、评审范围（只评审已标记输出 / 全部输出）、供应方、模型、送入评审的最大字符数、超时。供应方/模型下拉来自宿主 `llm` 服务的真实目录（`listProviders` + `listModels`，缓存 30s，上限 24 个 provider / 600 个 model）；留空表示使用宿主默认路由。
-- **规则起草路由**：起草供应方/模型（留空跟随评审路由）。`draft.enabled` 仍由 profile 配置控制，面板不写这一项。
+- **规则起草路由**：起草供应方/模型（留空跟随评审路由）。`draft.enabled` 由 profile 配置控制，面板可以显式改写这一项（写入后立即生效）。
 - **测试连接**：`op: probe` 发一次最小结构化请求，只回 `status / verdict / 耗时`，**不回模型回复文本**。
 - **写入路径**：`settings.update(entryId, patch)` → 宿主写 `cordis.patch.yml` → loader 热更新 → 本插件 `applyHotConfig`。只改 **volatile** 字段；字段校验（`maxChars` 500–200000、`timeoutMs` 500–60000、启用时 provider/model 必填）在写之前完成；失败只回 `settings_invalid` / `settings_write_failed` 等粗粒度码，不转发宿主原文。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
 - **只读原因**：profile 没有 `settings` 服务、或找不到本插件的可编辑 entry 时，页面照常显示并说明“只读”，不假装能保存。
@@ -526,7 +526,7 @@ DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configur
 
 **与 DSH 自带 UI 的边界（常见混淆）**：会话里的工具卡片（参数 / 结果 / Schema / 计时）是 **DSH 自带** 的渲染；卡片里“该操作不被平台安全策略允许（SafeHarness 安全插件）。请改用其他方式，或联系管理员。”是本插件的**通用拒绝措辞**（§6.4，故意不回显具体规则或参数；1.7.0 起带来源标记）。要确认是谁拦的，看账本里那条 `tool_denied`（`reason_code`、`rule_ids`、`session`）或面板事件卡片，而不是看卡片外观。
 
-构建与验证：`pnpm build:client` 产出 `lib/client.js`（`pnpm build` 会一并执行）。`tests/client-bundle.test.ts` 锁定“闭包工厂形状 + 只 require 平台模块 + 能注册出标签页 + 动作请求”，`tests/panel.test.ts` 锁定载荷投影（事件/会话/历史/标题/规则/评审/定时），`tests/panel-route.test.ts` 锁定栅栏与每个端点的闸门，`tests/panel-settings.test.ts` 锁定校验/写入路径/只读降级，`tests/state.test.ts` 锁定元数据持久化，`tests/patrol-runner.test.ts` + `tests/schedule.test.ts` 锁定单飞/冷却/定时持久化。真实宿主验证（0.2.2 Web 壳，桌面同源 dev profile）：重启后历史会话带 `Greeting` 标题与 `F:\AgentSecurity\Upear` 工作区回到列表；工作区筛选从 20 条收敛到 2 条，对话下拉列出标题 + 短 id；设置页读到 `configurable: true`、`available: true` 与真实 provider 目录；`judge.timeoutMs` 4000→4100→4000 往返成功；填 `liao/gpt-6-luna` 后 probe 返回 `status: ok / verdict: allow / 3685ms`；新建会话发消息后 `sessions.json` 写出且标题被采集。设置弹窗高度固定，面板内容较长时在弹窗内滚动。
+构建与验证：`pnpm build:client` 产出 `lib/client.js`（`pnpm build` 会一并执行）。`tests/client-bundle.test.ts` 锁定“闭包工厂形状 + 只 require 平台模块 + 能注册出标签页 + 动作请求”，`tests/panel.test.ts` 锁定载荷投影（事件/会话/历史/标题/规则/评审/定时），`tests/panel-route.test.ts` 锁定栅栏与每个端点的闸门，`tests/panel-settings.test.ts` 锁定校验/写入路径/只读降级，`tests/state.test.ts` 锁定元数据持久化，`tests/patrol-runner.test.ts` + `tests/schedule.test.ts` 锁定单飞/冷却/定时持久化。真实宿主验证（0.2.2 Web 壳，桌面同源 dev profile）：重启后历史会话带 `Greeting` 标题与本机工作区回到列表；工作区筛选从 20 条收敛到 2 条，对话下拉列出标题 + 短 id；设置页读到 `configurable: true`、`available: true` 与真实 provider 目录；`judge.timeoutMs` 4000→4100→4000 往返成功；填 `liao/gpt-6-luna` 后 probe 返回 `status: ok / verdict: allow / 3685ms`；新建会话发消息后 `sessions.json` 写出且标题被采集。设置弹窗高度固定，面板内容较长时在弹窗内滚动。
 
 ---
 
@@ -562,7 +562,7 @@ DSH 0.2.2-rc.1 的 `settings` 服务是**表单服务**（`describe` / `configur
 | 输出 | warn | warn | warn（可显式开 `enforce-buffer` 整条拦截） |
 | 审批桥 | delegate | delegate | policy |
 | 审计 `required` | false | **true** | true |
-| 姿态门禁 `failOn` | 空 | 空（只报告） | `sandbox_danger_full_access` / `approval_never` / `hmr_enabled` / `plugin_version_mismatch` / `engine_sidecar_unavailable` |
+| 姿态门禁 `failOn` | 空 | 空（只报告） | `sandbox_danger_full_access` / `hmr_enabled` / `plugin_version_mismatch` / `engine_sidecar_unavailable`（`approval_never` 仍需人工判断：无 session 时不可观测，不作为加载门禁） |
 | 规则加载失败 | 记录 + 空规则集继续 | **拒绝加载** | 拒绝加载 |
 
 失败语义（fail-closed）：
@@ -700,7 +700,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               694 个用例（41 个文件）
+├─ tests/               708 个用例（41 个文件）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -719,7 +719,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：41 个文件 / 694 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 38 文件 / 676（673 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 37 文件 / 668（665 pass + 3 skip）
+pnpm test             # vitest：41 个文件 / 708 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 38 文件 / 690（687 pass + 3 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts → 37 文件 / 682（679 pass + 3 skip）
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -738,13 +738,13 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 
 ## 11. 已知限制
 
-1. **运行期宿主包版本以 host 实际解析为准**：本机实测插件的 `@deepseek-ai/*` 裸导入会解析到 DSH bundle 内的副本（`dsh-tools`/`dsh-settings`/`cordis`/`schemastery` 为 `0.2.2-rc.1` / `4.1.0` / `3.19.0`），而不是 profile 里的构建期副本。因此本包不 import 任何可能漂移的具名导出；`safeharness_status.host` 会显示实际解析来源（`app-bundle` / `profile` / `mixed`）。
+1. **运行期宿主包版本以 host 实际解析为准**：本机实测插件的 `@deepseek-ai/*` 裸导入会解析到 DSH bundle 内的副本（1.8.2 实测 `dsh-tools`/`dsh-settings`/`dsh-*` 为 `0.2.2-rc.3`，`cordis`/`schemastery` 为 `4.1.0` / `3.19.0`），而不是 profile 里的构建期副本。因此本包不 import 任何可能漂移的具名导出；`safeharness_status.host` 会显示实际解析来源（`app-bundle` / `profile` / `mixed`）。
 2. **兼容门只有一个**：`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`。存在该字段时 DSH 只按它判断，不再逐条比对 peer 版本。
 3. **安装形态决定改代码后的动作**：pnpm 默认把包复制进 profile（`file:` / tarball），改代码后需 `remove` + `add`；`link:` 安装则直接指向源码。**HMR 重载已在 `link:` 安装 + 非空 `hmr.root` 下实测**：连续两次改 `lib/` 都触发重挂载，`plugin_loaded` → `posture_report ok` → `invariant_probe seams=…,guard,…` 全部重现（内部证据，未随仓库分发）。注意重挂载有约 15–30 ms 的空窗，且生产部署应当关闭 HMR（`hardened` 的 `hmr_enabled` 姿态门禁会直接拒绝加载）。
 4. **`enforce-buffer` 的代价**：牺牲流式；超过 `bufferTimeoutMs`/`bufferMaxChars` 会降级为透传（记账但不拦截）。完全停滞的流由宿主超时负责。
 5. **语义 judge 是"附加信号"不是"误报消除器"**：它能拦住结构化规则漏掉的语义风险，但**不会**把已命中的回答改判为通过；临界误报要靠自定义规则或后续面解决。
 6. **审批桥 `policy` 只能粗粒度**：`approval/request` 不携带工具参数；`allowOnce` 与 `denyTools/denyTags` 同时命中时**授予优先**（不要同时写两边）。真实人工批准路径未做端到端验证。
-7. **姿态 `approval_never`**：没有 session 时无法读取全局默认审批策略，会报 SKIP 而不是 OK。
+7. **姿态 `approval_never`**：没有 session 时无法读取全局默认审批策略，会报 SKIP 而不是 OK；因此它不在 `hardened` 的默认 `failOn` 里（门禁永不触发比漏报更危险）。有 session 级探针时仍会 FAIL。
 8. **巡检对账是近似的**：用自家账本的 `tool_asked` vs `approval_decided`（不解析 DSH session log），偏差 >10% 才 WARN。
 9. **Code Mode（PTC 执行器）**：0.2.2-rc.1 已移除 `tools.mode`；Code Mode = 启用 `tool-executor-ptc` 并停用 `tool-executor-native`（每个 scope 只能有一个执行器）。子调用会经过 `tools/pre-execute` 并被拒绝；注意 Windows 上 `bash` 工具不存在，场景用 `pwsh`。
 10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。

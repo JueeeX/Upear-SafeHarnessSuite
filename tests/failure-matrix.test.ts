@@ -640,12 +640,12 @@ describe('§7 failure-semantics matrix', () => {
     await expect(runtime.ledger.append('invariant_probe', {})).rejects.toThrow(/closed/u)
 
     // The table's hardened cell is a deployment requirement, not a runtime trick:
-    // HMR is reported (WARN) but does not refuse the load by itself.
+    // HMR is FAIL under hardened and is in `posture.failOn`, so the load gate refuses.
     const hardened = resolveConfig({ preset: 'hardened' })
     expect(hardened.posture.failOn).toContain('hmr_enabled')
     const findings = runPostureChecks(hardened, healthyEnv({ hmrEnabled: true }))
-    expect(findings.find((item) => item.code === 'hmr_enabled')?.severity).toBe('WARN')
-    expect(failOnHits(hardened, findings)).toEqual([])
+    expect(findings.find((item) => item.code === 'hmr_enabled')?.severity).toBe('FAIL')
+    expect(failOnHits(hardened, findings)).toEqual(['hmr_enabled'])
   })
 
   it('§7 row 10 DSH version mismatch: WARN in balanced, FAIL + load refusal in hardened', async () => {

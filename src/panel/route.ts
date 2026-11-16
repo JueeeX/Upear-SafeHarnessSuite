@@ -23,6 +23,7 @@
  * @module
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { isIP } from 'node:net'
 import type { Context } from '@deepseek-ai/cordis'
 import type { LoggerLike, Runtime } from '../runtime.js'
 import {
@@ -62,6 +63,19 @@ import type { PanelFacts } from './status.js'
 /** Host names the fence accepts as "this machine". */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 
+/**
+ * Whether a hostname is an IPv4 literal inside 127.0.0.0/8.
+ *
+ * A string prefix test is not enough: `new URL('http://127.0.0.1.evil.example')`
+ * keeps the whole name as `hostname`, so `startsWith('127.')` would accept an
+ * attacker-controlled domain that resolves to 127.0.0.1 (DNS rebinding) and its
+ * matching Origin. `isIP` rejects host names and only then may the octets be read.
+ */
+function isLoopbackIpv4(hostname: string): boolean {
+  if (isIP(hostname) !== 4) return false
+  return hostname.startsWith('127.')
+}
+
 /** Hard cap on any request body the panel parses (never a content channel). */
 export const PANEL_MAX_BODY_BYTES = 16 * 1024
 
@@ -96,7 +110,7 @@ export function isTrustedPanelRequest(req: IncomingMessage): boolean {
     return false
   }
   const name = hostUrl.hostname.toLowerCase()
-  if (!LOOPBACK_HOSTS.has(name) && !name.startsWith('127.')) return false
+  if (!LOOPBACK_HOSTS.has(name) && !isLoopbackIpv4(name)) return false
   if (req.headers['sec-fetch-site'] === 'cross-site') return false
   const origin = req.headers.origin
   if (origin === undefined) return true
@@ -471,7 +485,9 @@ export function registerPanelRoute(ctx: Context, options: PanelRouteOptions): vo
       runtime.audit('invariant_probe', {
         decision: 'info',
         reason_code: 'panel_route',
-        labels: { state, ...(detail === undefined ? {} : { detail: detail.slice(0, 80) }) },
+        // Zero-echo: a host error message can quote a path or a config value, so
+        // only its length is recorded. The logger gets the error name instead.
+        labels: { state, ...(detail === undefined ? {} : { detail_chars: String(detail.length) }) },
       })
     } catch {
       // Evidence must never be the reason the load fails.
@@ -501,9 +517,9 @@ export function registerPanelRoute(ctx: Context, options: PanelRouteOptions): vo
       )
       probe('route_registered')
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      logger.warn(`safeharness: panel route registration failed: ${message}`)
-      probe('route_failed', message)
+      const name = error instanceof Error ? error.name : 'error'
+      logger.warn(`safeharness: panel route registration failed (${name})`)
+      probe('route_failed', error instanceof Error ? error.message : String(error))
     }
   })
 }

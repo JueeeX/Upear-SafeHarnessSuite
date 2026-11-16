@@ -75,7 +75,7 @@ export function runPostureChecks(config: ResolvedConfig, env: PostureEnv): Postu
   } else if (env.hmrEnabled) {
     findings.push(finding(
       'hmr_enabled',
-      hardened ? 'WARN' : 'OK',
+      hardened ? 'FAIL' : 'OK',
       'hot-module reload is enabled: a reload briefly drops every guard listener (close it for hardened deployments)',
     ))
   } else {

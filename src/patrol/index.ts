@@ -282,9 +282,12 @@ async function configDrift(ctx: PatrolContext): Promise<PatrolFinding> {
   if (ctx.probe.posture === undefined) {
     return finding('config_drift', 'SKIP', 'posture probe not available')
   }
-  const current = await ctx.probe.posture()
+  // Read the previous report BEFORE running the probe. `runPosture` records a new
+  // `posture_report`, so querying after it returned the report this check had just
+  // produced and compared it with itself — drift was always empty.
   const history = await ctx.runtime.ledger.query({ kind: 'posture_report', limit: 1 })
   const previousRecord = history[0]
+  const current = await ctx.probe.posture()
   if (previousRecord === undefined) {
     return finding('config_drift', 'SKIP', 'no previous posture report in the ledger')
   }

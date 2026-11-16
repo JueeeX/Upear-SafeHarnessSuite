@@ -104,7 +104,6 @@ describe('§5.3 preset table — one dimension per test', () => {
     expect(resolveConfig({ preset: 'balanced' }).posture.failOn).toEqual([])
     expect(resolveConfig({ preset: 'hardened' }).posture.failOn).toEqual([
       'sandbox_danger_full_access',
-      'approval_never',
       'hmr_enabled',
       // §7 row 10: hardened must refuse the load on a host version mismatch, and
       // the gate is `posture.failOn` — so the code belongs in this list even

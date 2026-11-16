@@ -81,10 +81,10 @@ describe('runPostureChecks', () => {
     expect(find(env, 'balanced', 'approval_never')?.severity).toBe('SKIP')
   })
 
-  it('HMR is only a WARN under hardened', () => {
+  it('HMR is fatal under hardened (the preset gates it) and informational elsewhere', () => {
     const env = { ...healthyEnv(), hmrEnabled: true }
     expect(find(env, 'balanced', 'hmr_enabled')?.severity).toBe('OK')
-    expect(find(env, 'hardened', 'hmr_enabled')?.severity).toBe('WARN')
+    expect(find(env, 'hardened', 'hmr_enabled')?.severity).toBe('FAIL')
   })
 
   it('missing or unloaded rules are a FAIL on every preset', () => {
@@ -169,10 +169,16 @@ describe('runPostureChecks', () => {
 describe('failOnHits', () => {
   it('returns only codes that actually FAILed', () => {
     const config = resolveConfig({ preset: 'hardened' })
-    const env: PostureEnv = { ...healthyEnv(), sandboxMode: 'danger-full-access', hmrEnabled: true }
+    const env: PostureEnv = { ...healthyEnv(), sandboxMode: 'danger-full-access' }
     const findings = runPostureChecks(config, env)
-    // hmr is WARN under hardened (not FAIL), so only the sandbox gate fires.
+    // HMR is off in a healthy env, so only the sandbox gate fires.
     expect(failOnHits(config, findings)).toEqual(['sandbox_danger_full_access'])
+  })
+
+  it('gates HMR under hardened only', () => {
+    const config = resolveConfig({ preset: 'hardened' })
+    const findings = runPostureChecks(config, { ...healthyEnv(), hmrEnabled: true })
+    expect(failOnHits(config, findings)).toEqual(['hmr_enabled'])
   })
 
   it('balanced has no gates by default', () => {

@@ -37,7 +37,7 @@ Design rules this file must keep:
 
 Usage (the plugin spawns this; run it by hand only to smoke-test):
 
-    set PYTHONPATH=F:\\AgentSecurity\\Upear\\src
+    set PYTHONPATH=<repo>\\src
     python -u scripts/safeharness_sidecar.py
     {"v":1,"id":1,"method":"health"}
 """

@@ -130,8 +130,12 @@ const PROMPT_SEPARATOR = '\n---\n'
  * Hard cap on the whole prompt (instruction + separator + content). `maxChars`
  * is operator-controlled and could be set to a value that would push a huge
  * request at the provider; this ceiling keeps the call bounded regardless.
+ *
+ * 16384 leaves room for the default `output.judge.maxChars` (12000) instead of
+ * silently clipping it to the old 4096 ceiling, which reviewed only the first
+ * ~3.8K characters of an answer.
  */
-const MAX_PROMPT_TOTAL = 4096
+const MAX_PROMPT_TOTAL = 16_384
 
 /**
  * The instruction actually sent. Clamped at {@link MAX_PROMPT_CHARS} so a future
