@@ -38,6 +38,7 @@ import { registerPromptSection } from './surface/prompt.js'
 import { safeharnessCommand, JUDGE_PROBE_TEXT, type JudgeCommandTarget, type DraftCommandTarget } from './surface/commands.js'
 import { registerPanelRoute } from './panel/route.js'
 import { createPanelSettingsHost } from './panel/settings.js'
+import { createRuleWriter } from './panel/rules-write.js'
 import { createPatrolRunner } from './panel/patrol-runner.js'
 import { createPatrolScheduler } from './panel/schedule.js'
 import { SAFEHARNESS_SERVICE, type HookFlags, type PluginHandle, type SafeHarnessService } from './service.js'
@@ -601,6 +602,10 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
 
   // 10) Live configuration.
   //
+  // Set once the rule watcher is installed at the end of `apply()`; a hot
+  // `rules.dir` change has to move the watcher or it keeps missing every edit.
+  let ruleWatchMove: ((configuredDir: string) => void) | undefined
+
   // 10a) Host 0.2.2-rc.3 settings shape: the host derives settings pages from the
   // plugin's own `Config` and commits `.volatile()` fields into the running fiber
   // without a remount. The Loader then emits `loader/volatile-update` to listeners
@@ -617,6 +622,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
       const next = resolveConfig(config)
       if (sameConfig(runtime.config, next)) return
       applyHotConfig(runtime, next, rulesOptions, logger)
+      ruleWatchMove?.(next.rules.dir)
     } catch (error) {
       // Same contract as the legacy path: keep the last good config, say so loudly.
       logger.warn(`safeharness: rejected live config update, keeping previous config: ${describe(error)}`)
@@ -644,6 +650,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
           try {
             const nextCfg = resolveConfig(next)
             applyHotConfig(runtime, nextCfg, rulesOptions, logger)
+            ruleWatchMove?.(nextCfg.rules.dir)
           } catch (error) {
             // A rejected settings write is the settings service's problem; we keep
             // the last good config and say so loudly (§7, hot-update failure).
@@ -679,8 +686,17 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     logger,
   })
   ctx.effect(() => () => { schedule.dispose() }, 'safeharness: panel schedule')
+  // The loader must always read the *live* config: a settings write can change
+  // `rules.dir` / `rules.inline` without a restart, and both the panel's reload and
+  // the file watcher have to follow the directory that is actually in force — the
+  // options captured by `apply()` would silently point at the old one.
+  const liveRulesOptions = (): { packagedRulesDir: string; dir: string; inline: readonly unknown[] } => ({
+    packagedRulesDir: rulesOptions.packagedRulesDir,
+    dir: runtime.config.rules.dir,
+    inline: runtime.config.rules.inline,
+  })
   const reloadRulesForPanel = (): { rules: number; chains: number; hash: string } => {
-    const reloaded = tryLoadRuleSet(rulesOptions)
+    const reloaded = tryLoadRuleSet(liveRulesOptions())
     if (!reloaded.ok) throw new Error(reloaded.error.problems.join('; ').slice(0, 200))
     runtime.engine.reloadRules(reloaded.ruleset)
     runtime.audit('rules_reloaded', {
@@ -698,6 +714,13 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   // The judge/drafting settings tab writes through the host's own settings
   // service; every read is lazy because `settings` starts after this plugin.
   const panelSettings = createPanelSettingsHost(ctx, runtime, logger)
+  // The panel's only disk write (D62): one operator rule file in `rules.dir`.
+  const ruleWriter = createRuleWriter({
+    runtime,
+    packagedRulesDir: rulesOptions.packagedRulesDir,
+    reload: reloadRulesForPanel,
+    logger,
+  })
   registerPanelRoute(ctx, {
     runtime,
     startedAt,
@@ -717,12 +740,15 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     }),
     schedule,
     reloadRules: reloadRulesForPanel,
+    ruleWriter,
     settings: panelSettings,
   })
   // 11) Rule-file watch (failures keep the previous rule set, never half-apply).
+  // `liveRulesOptions` lets the watcher reload what is *currently* configured, and
+  // `ruleWatchMove` re-targets it when `loader/volatile-update` changes the dir.
   if (cfg.rules.watch) {
-    const dir = cfg.rules.dir.length > 0 ? resolve(cfg.rules.dir) : packagedRulesDir()
-    installRuleWatch(ctx, runtime, dir, rulesOptions, logger)
+    const controller = installRuleWatch(ctx, runtime, liveRulesOptions, logger)
+    ruleWatchMove = dir => { controller.move(dir) }
   }
 }
 
@@ -760,44 +786,82 @@ export function applyHotConfig(
   })
 }
 
-/** Watch the rule directory and reload on mtime-ish changes (debounced). */
+/**
+ * Watch the effective rule directory and reload on changes (debounced).
+ *
+ * The directory can change at runtime (`rules.dir` is a profile setting), so
+ * `move()` re-arms the watcher: an edit in the new directory is still noticed
+ * without a restart. The reload itself always re-reads the *live* options, never
+ * the ones captured when `apply()` ran.
+ *
+ * @param ctx - plugin context (owns the watcher's lifetime).
+ * @param runtime - engine and audit sink the reload swaps.
+ * @param readOptions - live loader options; `dir`/`inline` may have changed.
+ * @param logger - plugin logger.
+ * @returns a controller whose `move()` re-targets the watcher.
+ */
 function installRuleWatch(
   ctx: Context,
   runtime: Runtime,
-  dir: string,
-  rulesOptions: { packagedRulesDir: string; dir: string; inline: readonly unknown[] },
+  readOptions: () => { packagedRulesDir: string; dir: string; inline: readonly unknown[] },
   logger: LoggerLike,
-): void {
+): { move(configuredDir: string): void } {
   let timer: NodeJS.Timeout | undefined
-  ctx.effect(() => {
-    let watcher: ReturnType<typeof watch> | undefined
+  let watcher: ReturnType<typeof watch> | undefined
+  let watchedDir = ''
+
+  /** Watch the configured directory, or the packaged one when it is empty. */
+  const resolveWatchDir = (configuredDir: string): string => {
+    const trimmed = configuredDir.trim()
+    return trimmed.length > 0 ? resolve(trimmed) : readOptions().packagedRulesDir
+  }
+
+  /** Reload from the live options; any failure keeps the previous rule set. */
+  const reload = (): void => {
+    const loaded = tryLoadRuleSet(readOptions())
+    if (!loaded.ok) {
+      for (const problem of loaded.error.problems) logger.warn(`safeharness: rule reload failed, keeping previous: ${problem}`)
+      return
+    }
+    runtime.engine.reloadRules(loaded.ruleset)
+    runtime.audit('rules_reloaded', {
+      decision: 'ok',
+      reason_code: 'rules_reloaded',
+      ruleset_hash: loaded.ruleset.hash,
+      labels: { trigger: 'watch' },
+      metrics: { rule_count: loaded.ruleset.ruleCount },
+    })
+  }
+
+  /** (Re-)arm the watcher on one directory; a failed arm leaves it disarmed. */
+  const arm = (dir: string): void => {
+    if (dir === watchedDir && watcher !== undefined) return
+    watcher?.close()
+    watcher = undefined
+    watchedDir = dir
     try {
       watcher = watch(dir, { persistent: false }, () => {
         if (timer !== undefined) clearTimeout(timer)
-        timer = setTimeout(() => {
-          const loaded = tryLoadRuleSet(rulesOptions)
-          if (!loaded.ok) {
-            for (const problem of loaded.error.problems) logger.warn(`safeharness: rule reload failed, keeping previous: ${problem}`)
-            return
-          }
-          runtime.engine.reloadRules(loaded.ruleset)
-          runtime.audit('rules_reloaded', {
-            decision: 'ok',
-            reason_code: 'rules_reloaded',
-            ruleset_hash: loaded.ruleset.hash,
-            labels: { trigger: 'watch' },
-            metrics: { rule_count: loaded.ruleset.ruleCount },
-          })
-        }, 250)
+        timer = setTimeout(reload, 250)
       })
     } catch (error) {
       logger.warn(`safeharness: cannot watch rules directory ${dir}: ${describe(error)}`)
     }
+  }
+
+  ctx.effect(() => {
+    arm(resolveWatchDir(readOptions().dir))
     return () => {
       if (timer !== undefined) clearTimeout(timer)
       watcher?.close()
     }
   }, 'safeharness:rules-watch')
+
+  return {
+    move(configuredDir: string): void {
+      arm(resolveWatchDir(configuredDir))
+    },
+  }
 }
 
 /** One-line error description for logs. */

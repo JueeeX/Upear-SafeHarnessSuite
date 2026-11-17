@@ -25,6 +25,9 @@ export const PANEL_SCHEDULE_ENDPOINT = 'schedule'
 /** Endpoint that re-reads the rule directory. */
 export const PANEL_RELOAD_ENDPOINT = 'reload-rules'
 
+/** Endpoint that lands one operator rule file in `rules.dir` and hot-reloads it. */
+export const PANEL_RULE_WRITE_ENDPOINT = 'write-rule'
+
 /** Endpoint that reads/saves the judge and drafting routes, and probes the judge. */
 export const PANEL_SETTINGS_ENDPOINT = 'settings'
 
@@ -402,6 +405,33 @@ export interface PanelReloadOk {
 /** What a rule reload resolves to. */
 export type PanelReloadResult = PanelReloadOk | PanelError
 
+/** One landed operator rule file (metadata only: no content, no absolute path). */
+export interface PanelRuleWriteValue {
+  /** File name inside `rules.dir` (whitelisted token). */
+  readonly filename: string
+  /** Bytes written (UTF-8). */
+  readonly bytes: number
+  /** Rules in force after the write. */
+  readonly rules: number
+  /** Chain rules in force after the write. */
+  readonly chains: number
+  /** Rule-set hash prefix in force after the write. */
+  readonly hash: string
+  /** False when an existing file was replaced. */
+  readonly created: boolean
+  /** False when the file landed but the hot reload kept the previous set. */
+  readonly reloaded: boolean
+}
+
+/** Successful rule write. */
+export interface PanelRuleWriteOk {
+  readonly ok: true
+  readonly value: PanelRuleWriteValue
+}
+
+/** What a rule write resolves to. */
+export type PanelRuleWriteResult = PanelRuleWriteOk | PanelError
+
 /** Everything the SafeHarness settings tab renders. */
 export interface PanelPayload {
   /** When the Host produced the payload. */
@@ -451,7 +481,15 @@ export interface PanelOk {
 /** Failed RPC envelope (the Host's own result shape, structurally). */
 export interface PanelError {
   readonly ok: false
-  readonly error: { readonly code: string; readonly message: string }
+  readonly error: {
+    readonly code: string
+    readonly message: string
+    /**
+     * Loader problems for a rejected rule file (the operator's own rule text, the
+     * same vocabulary the rules tab already shows). Absent for every other endpoint.
+     */
+    readonly problems?: readonly string[]
+  }
 }
 
 /** One patrol finding (codes and counts only — patrol's own contract). */

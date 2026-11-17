@@ -34,6 +34,7 @@ import {
   PANEL_EXPORT_ENDPOINT,
   PANEL_PATROL_ENDPOINT,
   PANEL_RELOAD_ENDPOINT,
+  PANEL_RULE_WRITE_ENDPOINT,
   PANEL_SCHEDULE_ENDPOINT,
   PANEL_SETTINGS_ENDPOINT,
   PANEL_STATUS_ENDPOINT,
@@ -50,6 +51,7 @@ import type {
   PanelProviderResult,
   PanelReloadResult,
   PanelResult,
+  PanelRuleWriteResult,
   PanelScheduleResult,
   PanelSettingsPatch,
   PanelSettingsResult,
@@ -59,6 +61,8 @@ import type { PatrolRunner } from './patrol-runner.js'
 import { isScheduleInterval, type PatrolScheduler } from './schedule.js'
 import type { PanelSettingsHost } from './settings.js'
 import { PanelSettingsError } from './settings.js'
+import type { RuleWriterHost } from './rules-write.js'
+import { RuleWriteError } from './rules-write.js'
 import { buildPanelPayload } from './status.js'
 import type { PanelFacts } from './status.js'
 
@@ -139,6 +143,8 @@ export interface PanelRouteOptions {
   readonly schedule?: PatrolScheduler
   /** Re-read the rule directory; absent makes the reload endpoint unavailable. */
   readonly reloadRules?: () => { readonly rules: number; readonly chains: number; readonly hash: string }
+  /** Land one rule file in `rules.dir`; absent makes the write endpoint unavailable. */
+  readonly ruleWriter?: RuleWriterHost
   /** Judge/drafting settings; absent makes the settings endpoint unavailable. */
   readonly settings?: PanelSettingsHost
   /** Plugin logger. */
@@ -344,6 +350,47 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
     }
   }
 
+  /**
+   * Land one operator rule file and hot-reload it.
+   *
+   * The writer owns every policy decision (target directory, file name, overwrite,
+   * loader gate, atomic write); this envelope only shapes the body and maps the
+   * typed failure, carrying the loader problems so the operator can fix the draft.
+   */
+  const ruleWriteEnvelope = async (body: Record<string, unknown>): Promise<PanelRuleWriteResult> => {
+    const writer = options.ruleWriter
+    if (writer === undefined) {
+      return { ok: false, error: { code: 'write_unavailable', message: 'rule writing is not wired in this profile' } }
+    }
+    if (typeof body.filename !== 'string' || typeof body.yaml !== 'string') {
+      return { ok: false, error: { code: 'invalid_body', message: 'filename and yaml must be strings' } }
+    }
+    try {
+      return {
+        ok: true,
+        value: await writer.write({
+          filename: body.filename,
+          yaml: body.yaml,
+          // Overwriting is only ever the result of a second, explicit confirmation.
+          overwrite: body.overwrite === true,
+        }),
+      }
+    } catch (error) {
+      if (error instanceof RuleWriteError) {
+        return {
+          ok: false,
+          error: {
+            code: error.code,
+            message: error.message.slice(0, 200),
+            ...(error.problems.length === 0 ? {} : { problems: error.problems.slice(0, 8) }),
+          },
+        }
+      }
+      runtime.internalError('panel-rule-write', error)
+      return { ok: false, error: { code: 'rule_write_failed', message: 'the rule file could not be written' } }
+    }
+  }
+
   /** Read, save or probe the judge/drafting routes; add/remove custom providers. */
   const settingsEnvelope = async (body: Record<string, unknown>): Promise<PanelSettingsResult | PanelProbeResult | PanelProviderResult> => {
     const host = options.settings
@@ -432,7 +479,7 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
     const pathname = new URL(req.url ?? '/', 'http://x').pathname
     const endpoint = pathname.slice(PANEL_CHANNEL.length).replace(/^\//u, '')
 
-    let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult | PanelSettingsResult | PanelProbeResult | PanelProviderResult | PanelExportResult
+    let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult | PanelRuleWriteResult | PanelSettingsResult | PanelProbeResult | PanelProviderResult | PanelExportResult
     if (endpoint === PANEL_PATROL_ENDPOINT) {
       const runner = options.patrolRunner
       if (runner === undefined) {
@@ -455,6 +502,11 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
         : await scheduleEnvelope(body)
     } else if (endpoint === PANEL_RELOAD_ENDPOINT) {
       result = reloadEnvelope()
+    } else if (endpoint === PANEL_RULE_WRITE_ENDPOINT) {
+      const body = await readJsonBody(req)
+      result = body === undefined
+        ? { ok: false, error: { code: 'invalid_body', message: 'body must be a JSON object' } }
+        : await ruleWriteEnvelope(body)
     } else if (endpoint === PANEL_SETTINGS_ENDPOINT) {
       const body = await readJsonBody(req)
       result = body === undefined

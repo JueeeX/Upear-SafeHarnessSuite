@@ -21,6 +21,7 @@ export type AuditKind =
   | 'approval_asked'
   | 'approval_decided'
   | 'rules_reloaded'
+  | 'rules_written'
   | 'patrol_report'
   | 'invariant_probe'
   | 'budget_exceeded'

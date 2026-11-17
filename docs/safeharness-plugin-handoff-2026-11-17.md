@@ -1,4 +1,4 @@
-# DSH SafeHarness 插件交接文档（2026-11-17，1.8.3 已上线桌面）
+# DSH SafeHarness 插件交接文档（2026-11-17；桌面 1.8.3，本地 1.9.0 未发布）
 
 > 读者：**没有任何上下文的后续对话 / 新模型 / 新智能体 / 新同事**。
 > 目标：只读这一份，就能接手开发、验证、发布、答疑；不需要再问原作者。
@@ -7,7 +7,12 @@
 > 上一版入口是 [`safeharness-plugin-handoff-2026-11-12.md`](safeharness-plugin-handoff-2026-11-12.md)（1.8.2 基线，本文已取代它）。
 > 内部文档，**不要提交到公开仓库**（公开仓库只发布 `plugins/dsh-safeharness` 的可发布子树）。
 
-> **1.8.4 增量（2026-11-17，本地代码，未发布 / 未装桌面）**：面板**全端点 POST-only**（其他方法 405 + `Allow: POST`，栅栏先于方法判断）、自定义路由**两存储一次提交**（索引写失败回滚路由与凭据）+ 引用守卫覆盖 `defaultProvider` 等 + `providerConfigurable` 与实际写路径统一、设置写入 **revision CAS**（`settings_conflict`）、面板 settings 日志零回显、**SRI 摘要豁免**（读 `pnpm-lock.yaml` 不再被结果面整条替换）。改动位置与验收见 plan §12.23；新增决策 D58–D61。桌面仍是 1.8.3。
+> **本地增量（2026-11-17，1.8.4 + 1.9.0，未发布 / 未装桌面）**
+>
+> - **1.8.4 加固**：面板**全端点 POST-only**（其他方法 405 + `Allow: POST`，栅栏先于方法判断）、自定义路由**两存储一次提交**（索引写失败回滚路由与凭据）+ 引用守卫覆盖 `defaultProvider` 等 + `providerConfigurable` 与实际写路径统一、设置写入 **revision CAS**（`settings_conflict`）、面板 settings 日志零回显、**SRI 摘要豁免**（读 `pnpm-lock.yaml` 不再被结果面整条替换）。决策 D58–D61，证据 `evidence/1.8.4-hardening.md`。
+> - **1.9.0 规则落地**：面板「写入并重载」——只写 `rules.dir`、文件名白名单、默认不覆盖、写前用真实 loader 试编译、原子写、账本只记元数据；`rules.dir` 热改后 watcher/重载跟随实时配置。决策 D62（取代 D37 后半段），见 §5.6。
+>
+> 桌面仍是 1.8.3。
 
 ---
 
@@ -17,9 +22,9 @@
 
 当前**已发布版本 1.8.3**，**本地、公开仓库、桌面三处都已对齐**：桌面实测 `safeharness_status` 返回 1.8.3、宿主 `0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`、姿态 **0 FAIL / 0 WARN / 9 OK / 1 SKIP**（`plugin_version_mismatch` 已随 rc.3 钉版一起清掉）。
 
-**本地 main 已推进到 1.8.4**（批 0 加固：面板方法面、路由一致性、CAS、SRI；见文首增量块与 plan §12.23），但**未发布、未装桌面**——桌面上的 1.8.3 仍是当前对外状态。
+**本地 main 已推进到 1.9.0**（1.8.4 加固 + 1.9.0 规则写入；见文首增量块、plan §12.23/§12.24），但**未发布、未装桌面**——桌面上的 1.8.3 仍是当前对外状态。
 
-没有已知的“加载即失效”缺口。剩余的是**产品体验**（规则落地仍要手工拷文件，见 §5.6）和**环境项**（真实 webhook、真实人工审批）以及若干 P1/P2 加固项（§12）。
+没有已知的“加载即失效”缺口。剩余的是**环境项**（真实 webhook、真实人工审批）、**桌面配置**（`rules.dir` 还没配，写入按钮不可用，见 §5.4/§12.1-7）和一个产品决策项（输出面 `enforce`，§12.1-6）。
 
 ---
 
@@ -28,18 +33,18 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | **本地 `1.8.4`（未发布）**；已发布/桌面 = `1.8.3`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 断言） |
+| 当前版本 | **本地 `1.9.0`（未发布）**；已发布/桌面 = `1.8.3`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 断言） |
 | 宿主 | DSH `0.2.2-rc.3`（桌面已升级）；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用 `D:\dsh`；Node `v25.8.2` |
 | 桌面端插件 | **已装 1.8.3**（`C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness`，来自 1.8.3 tarball） |
 | 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.8.3.tgz` |
 | 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 指向 1.8.3；重装前必须完全退出 DSH，含托盘） |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`57efcc9`**，tag **`v1.8.3`**（tag 对象 `3d567a7…`） |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **`b60c7e1`**（1.8.3 文档）/ `8e60d74`（1.8.3 代码），另有**未提交的 1.8.4 改动**；`github` 备份远端 main = `99a9956`，`v1.8.3` 标签已同步 |
-| 测试 | 1.8.4 本机 **41 文件 / 717 用例**（+8）；公开树与 CI 口径在发布时重算（1.8.3 为 38 / 691 与 37 / 683） |
-| tarball | 已发布 `dist/upear-dsh-safeharness-1.8.3.tgz`；本地新增 `dist/upear-dsh-safeharness-1.8.4.tgz`，327,369 B，sha256 `FF483A911A98733A599F87B05B540C6D81E730BC29B760B7EC05D04E438EB0DC`（未发布） |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **`d5c3487`**（1.8.4）/ `b60c7e1`（1.8.3 文档），另有**未提交的 1.9.0 改动**；`github` 备份远端 main = `99a9956`，`v1.8.3` 标签已同步 |
+| 测试 | 1.9.0 本机 **43 文件 / 745 用例**；公开树与 CI 口径在发布时重算（1.8.3 为 38 / 691 与 37 / 683） |
+| tarball | 已发布 `dist/upear-dsh-safeharness-1.8.3.tgz`；本地 **`dist/upear-dsh-safeharness-1.9.0.tgz`，337,247 B，sha256 `3C6BFDC1AC3C6D89B1E4A79B42FB9CE1048C0487242C83ACB654B9420DB10687`**（未发布；1.8.4 的 327,369 B tarball 已被 1.9.0 取代） |
 | 账本 | `C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson`（NDJSON、sha256 链、零回显；当前约 6.3 MB、seq 8300+） |
-| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore；1.8.2 见 `1.8.2-audit-fixes.md`，1.8.3 见 `1.8.3-draft-diagnostics.md`） |
-| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（1.8.0 §12.19、1.8.1 §12.20、1.8.2 §12.21、1.8.3 §12.22） |
+| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore；1.8.3 见 `1.8.3-draft-diagnostics.md`，1.8.4 见 `1.8.4-hardening.md`，1.9.0 见 `1.9.0-rule-write.md`） |
+| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（1.8.0 §12.19、1.8.1 §12.20、1.8.2 §12.21、1.8.3 §12.22、1.8.4 §12.23、1.9.0 §12.24） |
 | 公开 README | 插件 README 的 §4.7（面板）、§4.8（顺序/覆盖/评审模型）是给用户的正式说明 |
 
 **2026-11-17 当天实测状态**（`safeharness_status` + `safeharness_posture`）：
@@ -321,7 +326,7 @@ chain_rules:
 
 | 路径 | 做法 | 是否自动生效 |
 |---|---|---|
-| **AI 起草** | 面板「规则」页填描述 → 返回候选 YAML；或工具 `safeharness_draft_rule` | 否，必须人工落地 |
+| **AI 起草** | 面板「规则」页填描述 → 返回候选 YAML；或工具 `safeharness_draft_rule` | 否；**1.9.0 起**可在面板点「写入并重载」落到 `rules.dir`（人确认，见 §5.6） |
 | **手写 YAML 文件** | 放进 `rules.dir`；未配置时放进**安装包 `rules/`** | 是，`rules.watch` 默认开 |
 | **`rules.inline`** | 写进 profile 配置 | 重启后生效 |
 
@@ -347,6 +352,8 @@ rules:
 
 然后重启一次；之后往该目录放文件即热更新，升级不丢。
 
+**1.9.0 起**：配好 `rules.dir` 后，面板「规则 → AI 起草」多出「写入并重载」按钮（见 §5.6）；没配时按钮会直接说明原因，不会假装能写。`rules.dir` 在运行中改变时，面板重载与文件 watcher 现在都跟随实时配置（watcher 会迁移到新目录；此前只认加载期目录，热改后静默失效）。
+
 ### 5.5 怎么验证规则生效（三层证据，缺一层就可能自欺）
 
 1. **加载层**：`safeharness_status` 的 `ruleCount` / `chainCount` / `rulesetHash`；面板「规则」页条数与来源（`packaged/…yaml`、`dir/…yaml`、`inline`）；账本 `rules_reloaded`（`trigger: watch` 或 `reason_code: panel_reload`）。
@@ -358,24 +365,22 @@ rules:
 
 **反向对照**：再发一句近似但不匹配的话，账本应出现 `input_checked` + `decision: allow`。一条规则只能证明“拦得住”，对照才能证明“没误伤”。
 
-### 5.6 为什么面板没有“写入并生效”按钮（重要设计决策）
+### 5.6 面板“写入并重载”（1.9.0，D62）
 
-这是 2026-11-17 用户明确提出的体验问题。现状的答案是 **D37**：
+2026-11-17 用户明确提出的体验问题是：起草出来的 YAML 要人肉去 `node_modules` 粘贴。最初（D37）的答案是“干脆不提供写路径”；**1.9.0 改成“提供一条只有人能触发的受限写路径”**：
 
-> AI 起草只返回草稿，不写规则文件。面板写规则 = 在安全产品里新增一条“同源脚本/浏览器页面可以调用”的写路径；草稿 + 人审 + loader 门是折中。
+> 规则集是插件的信任根。让“任何能发 HTTP 的一方”写规则，等于让攻击者一步关掉自己的护栏；但让“坐在浏览器前、能点按钮的操作者”写 `rules.dir` 并没有扩大攻击面——那人本来就有磁盘权限。
 
-即：**规则集是插件的信任根**。如果模型（或诱导模型的注入内容）能通过工具/面板把规则写进磁盘并生效，攻击者就能一步关掉自己的护栏。所以起草只产文本，落地是人的动作。
+实现（`src/panel/rules-write.ts` + `engine/rules.ts` 的 `validateRuleCandidate`）：
 
-代价也很真实：用户必须去 `node_modules` 里粘贴文件，体验差。**1.9.0 的首选改进**（尚未实现，见 §12.1）：面板加“写入并重载”按钮，但保持“人发起”这个不变量：
+1. **只写 `rules.dir`**：未配置 / 非绝对路径 / 解析后落在安装包 `rules/` 内 → 拒绝（`rules_dir_unconfigured` / `rules_dir_not_absolute` / `rules_dir_packaged`）；
+2. **文件名白名单** `^[a-z0-9][a-z0-9._-]{0,63}\.ya?ml$`，拒绝分隔符、`..`、盘符、前导点、Windows 设备名（`filename_invalid`）；正文 ≤ 12 000 字符；
+3. **同名默认拒绝**（`rule_exists`），前端必须再点一次「覆盖并重载」；
+4. **写前真实 loader 试编译**：`validateRuleCandidate` 与加载共用 `assembleRuleSet`，候选按“替换自身”参与合并（覆盖不会与自己的旧规则重名）→ 失败返回 problems、**一个字节都不落盘**（`rule_content_invalid`）；
+5. **原子写**：同目录 `tmp`（不带 `.yaml` 后缀，watcher 读不到半截文件）+ rename；成功写账本 `rules_written`（文件名/字节数/规则数/链数，**不记内容**），然后热重载；重载失败保留旧集合、返回 `reloaded: false` 并写 `invariant_probe`；
+6. **端点** `POST /safeharness/write-rule`，只有 loopback + 同源栅栏；**模型侧没有任何写规则的工具**（`safeharness_draft_rule` 只产文本）。
 
-- 只写 `rules.dir`（必须先配置且为绝对路径），**绝不写 packaged `rules/`**；
-- 文件名白名单 `[a-z0-9._-]{1,64}\.ya?ml`，拒绝路径分隔符与 `..`；
-- 已存在同名文件默认拒绝，需二次确认才覆盖；
-- 写入前先用 loader 试编译候选，失败不落盘；
-- 原子写（tmp+rename），成功写 `rules_written`（只记文件名/字节数/规则数，不记内容），然后触发热重载；
-- 前端二次确认 + 展示将要写入的完整 YAML。
-
-这样“模型不能自己改规则”仍然成立（插件没有对应工具，模型调不到该端点；面板端点还有 loopback + Origin 栅栏），但人从“找目录→粘贴→点重载”变成“点两下”。
+代价与限制：仍要先配 `rules.dir`（当前桌面还没配，见 §5.4）；起草的语义质量仍要靠人看（§5.7 第 6 条）。
 
 ### 5.7 规则系统的已知限制
 
@@ -384,6 +389,7 @@ rules:
 3. **输入面 deny 会中断整轮**，pattern 写太宽会打断正常对话。
 4. **结果面只看 `blockOn`**：balanced 默认只拦 `credential_leak`。
 5. **升级覆盖 packaged `rules/`**：临时规则可以放那里，长期规则要配 `rules.dir`。
+6. **写入按钮依赖 `rules.dir`**：没配置就只能复制粘贴；写入本身只保证“能加载、不破坏规则集”，不保证规则语义对（模型写的正则仍可能过宽/过窄）。
 
 ---
 
@@ -629,7 +635,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 5. **自定义模型只支持三种协议**；Bedrock/Vertex/Azure/Codex 不支持手写路由。
 6. **设置写入有 revision CAS（1.8.4）**：面板把读到的 `revision` 作为 `expectedRevision` 回传，宿主拒绝过期写入并映射为 `settings_conflict`；宿主 `describe()` 不暴露 revision 的旧构建退化为 last-writer-wins。
 7. **`llm-pi-ai` 被 home patch / `--patch` overlay 覆盖时**，`settings.update('llm-pi-ai')` 可能被宿主拒绝（teammate 在 overlay profile 实测到）；正常 profile 可用。添加自定义模型失败时不会破坏现有配置。
-8. **面板动作有限**：**不写规则文件**（见 §5.6）、不做通用调度、不提供 provider 编辑（只能添加/删除同名重建）；导出只在浏览器端保存。
+8. **面板动作有限**：**1.9.0 起可写 `rules.dir` 下的一个规则文件**（人确认，见 §5.6；绝不写 packaged `rules/`）、不做通用调度、不提供 provider 编辑（只能添加/删除同名重建）；导出只在浏览器端保存。
 9. **CI 状态未在本地读取**（`api.github.com` 超时）；push 成功，runs 需要在网页确认。
 10. **结果层强制拦截的代价（1.8.2 收窄，1.8.4 再放行 SRI）**：`credential_assignment` 不再把 `apiKey: z.string()`、`token: process.env.X` 这类声明当凭据；含真实凭据形态的结果仍会被整条替换。输出层仍是 `warn`，若把结果层关掉，模型仍可能把密钥写进回答。1.8.4 起 `sha1-` / `sha256-` / `sha384-` / `sha512-` 前缀的 SRI 摘要豁免熵检测，读 `pnpm-lock.yaml` 不再被整条拦截；无前缀的同类令牌仍会命中。
 11. **侦察命令不单独拦截**：`whoami` / `hostname` / `ipconfig` / `systeminfo` / `net user` 这类身份与环境侦察不在结果扫描的形态里（只认凭据与注入标记），工具面也没有命令级分类；单条属低危，但在不可信内容诱导下是外发前奏，且没有“侦察→外发”的链式规则。**用户 2026-11-12 明确不做**命令级 recon 分类与 egress 收紧（D51）。
@@ -645,14 +651,14 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 
 ### 12.1 1.9.0 候选（按优先级）
 
-1. **面板「写入并重载」规则按钮（用户明确要求）**：方案见 §5.6。这是当前最大的体验缺口——起草出来的 YAML 要人肉去 `node_modules` 粘贴。实现要点：只写 `rules.dir`、文件名校验、默认不覆盖、写前用 loader 试编译、原子写、`rules_written` 只记元数据、写完热重载。**需要用户确认后再动工**（涉及新增写路径，必须保持“模型不能自己改规则”）。
+1. ~~**面板「写入并重载」规则按钮（用户明确要求）**~~ **已完成（1.9.0，D62）**：只写 `rules.dir`、文件名白名单、默认不覆盖、写前真实 loader 试编译、原子写、`rules_written` 只记元数据、写完热重载。实现见 §5.6。
 2. ~~**provider 双写回滚 + 删除守卫**~~ **已完成（1.8.4，D59）**：`addProvider` 索引写失败回滚路由与凭据；删除检查全部引用（含 `defaultProvider`）；`providerConfigurable` 与实际写路径统一。
 3. ~~**settings CAS**~~ **已完成（1.8.4，D60）**：`save` 带 `expectedRevision`，冲突映射 `settings_conflict`。
 4. ~~**`status` 收紧**~~ **已完成（1.8.4，D58）**：全端点 POST-only、错误方法 405、栅栏先于方法判断；面板 logger 已脱敏。
 5. ~~**SRI 前缀豁免**~~ **已完成（1.8.4，D61）**：`^sha(?:1|256|384|512)-` 跳过熵检测，读 lockfile 不再被拦。
 6. **输出面凭据规则 + `output: enforce`**（产品决策）：当前 `results` 只保护“结果→模型”，不保护“模型→用户”；开启前评估误报与流式代价。
-7. **`rules.dir` 默认化**：在桌面 profile 里把 `rules.dir` 配好（`C:\Users\xiaojue\.dsh\safeharness\rules`），避免用户改 `node_modules`。**这也是第 1 项的前置**（没有 `rules.dir` 就没有合法写入目标）。
-8. **`rules.dir` 热改后 watcher/面板重载跟随运行时目录**（1.8.4 读代码发现）：`installRuleWatch` 只在 `apply()` 安装，`reloadRulesForPanel` 与 watcher 回调都用加载期 `rulesOptions`，而 `applyHotConfig` 用 `next.rules.dir` → 热改目录后“文件落地触发”和“面板重载”仍指向旧目录，面板却显示新目录。与第 1 项一起修。
+7. **`rules.dir` 默认化**：在桌面 profile 里把 `rules.dir` 配好（`C:\Users\xiaojue\.dsh\safeharness\rules`）。**这是 1.9.0 写入按钮的前置**（没有 `rules.dir` 就没有合法写入目标）；配好后重启一次。
+8. ~~**`rules.dir` 热改后 watcher/面板重载跟随运行时目录**~~ **已完成（1.9.0）**：面板重载与 watcher 都读实时配置，watcher 随目录迁移。
 
 ### 12.2 环境项（需要用户配合）
 
@@ -672,7 +678,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 | # | 决策 | 原因 |
 |---|---|---|
 | D36 | 面板标签全部挂载（非当前 `display:none`） | 条件渲染会丢草稿/筛选/巡检结果 |
-| D37 | AI 起草只返回草稿，不写规则文件 | 面板写规则 = 新增可被同源脚本利用的写路径；草稿 + 人审 + loader 门是折中 |
+| D37 | AI 起草只返回草稿，不写规则文件 | 面板写规则 = 新增可被同源脚本利用的写路径；草稿 + 人审 + loader 门是折中。**1.9.0 由 D62 取代**：写路径存在，但只由人触发 |
 | D38 | 定时状态写插件自有 `panel-state.json`，不写 profile | 定时是 UI 状态，不是安全策略 |
 | D39 | 定时器递归 setTimeout + unref + dispose，最小 5 分钟 | 不堆 tick、不拖住宿主、卸载即停 |
 | D40 | 冷却只作用手动巡检 | 定时不应被“刚点过按钮”阻止 |
@@ -692,11 +698,12 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 | D54 | `config_drift` 先读历史 `posture_report` 再跑当前姿态 | `runPosture` 会立刻写一条新报告，后读会拿到“自己刚写的”而永远 OK |
 | D55 | hardened 只 gate 可达的 code；`approval_never` 移出默认 `failOn`，`hmr_enabled` 改判 FAIL | 无 session 时 approval 永远 SKIP，不可达门禁比漏报更危险；HMR 在 hardened 必须真的拒绝加载 |
 | D56 | 起草失败按状态返回独立 code，并写 `invariant_probe`；默认超时 60s、输出 2048 | 原先所有失败都显示“路由不可用”，掩盖了 timeout/empty/bad_json；实测起草耗时 6–19s |
-| D57 | **规则落地保持人审**；面板“写入并重载”按钮列入 1.9.0 候选，但只写 `rules.dir`、不写 packaged | 规则集是信任根，模型不能自改护栏；同时承认当前手工粘贴体验差（§5.6） |
+| D57 | **规则落地保持人审**；面板“写入并重载”按钮 1.9.0 已实现（D62），只写 `rules.dir`、不写 packaged | 规则集是信任根，模型不能自改护栏；同时承认当前手工粘贴体验差（§5.6） |
 | D58 | **面板全端点 POST-only**（含只读 `status`），方法违规返回 405 + `Allow: POST`，且栅栏先于方法判断 | GET 是导航/预取/`<img>`/CSRF 能触发的请求；200 信封会让代理或测试把拒绝当载荷；未受信 Host 不应问出方法规则 |
 | D59 | **自定义路由两存储一次提交**：索引写失败回滚路由与凭据；删除扫描 pi-ai 全段引用；`providerConfigurable` 要求 `update`+`mutate` 都在 | 配置与面板索引必须一致，否则出现“配置里有、面板删不掉”的孤儿路由或必然失败的按钮 |
 | D60 | **设置写入带 revision CAS**；冲突映射 `settings_conflict`；宿主不暴露 revision 时不传第三参 | 宿主 `describe().revision` + `update/mutate(…, expectedRevision)` 本来就支持；last-writer-wins 会静默覆盖并发编辑 |
 | D61 | **SRI 摘要豁免熵检测**（`^sha(?:1\|256\|384\|512)-`），阈值不变 | SRI 是对公开字节的完整性校验，不是凭据；读 lockfile 属日常操作，不该被 `results: enforce` 整条替换 |
+| D62 | **面板可写一个规则文件，但只写 `rules.dir`、只由人触发**：文件名白名单、默认不覆盖、写前用真实 loader 试编译、原子写、账本只记元数据 | 取代 D37 的后半段：规则集是信任根，写路径必须窄且由人发起；模型侧仍不提供任何写规则工具 |
 
 ---
 
@@ -706,7 +713,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 2. **核环境**：`$env:DSH_HOME`（默认 `C:\Users\xiaojue\.dsh`）、`D:\dsh\resources\runtime\cli\bin\dsh.cmd --version`、Node `v25.8.2`、Python（仅 sidecar 需要）。
 3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（1.8.3 基线时只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`；1.8.4 尚未提交时应再加上 `plugins/dsh-safeharness` 与 `docs/` 的本轮改动）；`git log --oneline -3` 应看到 `b60c7e1`、`99a9956`、`8e60d74`；`git remote -v` 确认 `dsh` / `github`，**不要碰 `origin`**。
 4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.3` 应分别指向 `57efcc9…` 与 tag 对象 `3d567a7…`；`v1.8.2`（`6684ee4`）仍保留。
-5. **构建/测试**：按 §7 跑 tsc + vitest，期望 **717 passed**（1.8.4；perf 抖动时单独重跑，实测满载偶发 5.19ms > 5ms，单独重跑 1.2ms 通过）。
+5. **构建/测试**：按 §7 跑 tsc + vitest，期望 **745 passed**（1.9.0；perf 抖动时单独重跑，实测满载偶发 5.19ms > 5ms，单独重跑 1.2ms 通过）。
 6. **看运行态**：调 `safeharness_status` / `safeharness_posture`，确认 1.8.3、20 规则 + 3 链、0 FAIL、`plugin_version_mismatch` OK。
 7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `safeharness_audit_query`；确认 `plugin_loaded.version` 是 1.8.3、`rulesetHash` 存在。
 8. **做一次只读 smoke**：设置 → 内置插件 → SafeHarness，截一张概览/设置图；不要开定时巡检。
@@ -733,7 +740,7 @@ A：1.8.3 已把原因拆开。超时 → 模型路由慢（可调 `draft.timeou
 A：三个可能：① loader 是 fail-loud，任意一个文件写错 → **整次加载失败**、保留旧集（看日志 warn，条数不变）；② 文件不在被监视的目录（当前是安装包 `rules/` 或你配的 `rules.dir`）；③ 触发了但输入面没命中（inform 规则不扫工具参数，见 §5.7）。
 
 **Q：能不能让起草结果一键生效？**
-A：目前不能（D37）；1.9.0 候选见 §5.6 / §12.1，需要用户确认。
+A：1.9.0 起可以：面板「规则 → AI 起草」→「写入并重载」。前提是 profile 里配了**绝对路径**的 `rules.dir`；同名文件需要再确认一次覆盖；loader 校验不过则不落盘。模型侧仍然没有对应工具（D62）。
 
 **Q：自定义模型添加失败？**
 A：看错误码：`provider_exists`（重名）、`provider_in_use`（删除时仍被使用）、`provider_unavailable`（无 settings/credentials 服务或找不到 llm-pi-ai entry）、`settings_invalid`（URL/协议/Key/模型不合法）、`settings_write_failed`（宿主拒绝写，可能是 overlay/home patch 覆盖）。Key 不会回显。
@@ -753,7 +760,8 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 
 | 内容 | 位置 |
 |---|---|
-| 1.8.4 状态 | **本地完成、未提交/未发布/未装桌面**；改动与验收见 `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.23，决策 D58–D61，证据 `plugins/dsh-safeharness/evidence/1.8.4-hardening.md`；本地 tarball 327,369 B，sha256 `FF483A911A98733A599F87B05B540C6D81E730BC29B760B7EC05D04E438EB0DC` |
+| 1.9.0 状态 | **本地完成、未发布/未装桌面**；规则落地（写入并重载）见 §5.6、决策 D62、plan §12.24、证据 `plugins/dsh-safeharness/evidence/1.9.0-rule-write.md`；本地 tarball 337,247 B，sha256 `3C6BFDC1AC3C6D89B1E4A79B42FB9CE1048C0487242C83ACB654B9420DB10687` |
+| 1.8.4 状态 | **本地完成、未发布/未装桌面**；改动与验收见 `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.23，决策 D58–D61，证据 `plugins/dsh-safeharness/evidence/1.8.4-hardening.md`；本地 tarball 327,369 B，sha256 `FF483A911A98733A599F87B05B540C6D81E730BC29B760B7EC05D04E438EB0DC` |
 | 1.8.3 证据 | `plugins/dsh-safeharness/evidence/1.8.3-draft-diagnostics.md`（根因、实测耗时、修复与测试） |
 | 1.8.2 证据 | `plugins/dsh-safeharness/evidence/1.8.2-audit-fixes.md`（四类 P0 修复、测试、桌面双向复验） |
 | 1.8.1 证据 | `plugins/dsh-safeharness/evidence/1.8.1-results-enforce.md`（含前后账本对照与真机验证） |

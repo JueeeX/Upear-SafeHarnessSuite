@@ -1329,6 +1329,45 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 ---
 
+### 12.24 1.9.0 规则落地：面板「写入并重载」（2026-11-17）
+
+用户 2026-11-17 明确抱怨的体验点：起草出的 YAML 要人肉去 `node_modules` 粘贴。D37 的“干脆不提供写路径”被 **D62** 取代：**提供一条只有人能触发的受限写路径**。
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V33 | 起草只产文本；`rules.dir` 未配置时唯一落地方式是改安装包 `rules/`（升级即丢） | 需要“人点按钮 → 写 `rules.dir` → 热重载”的路径 |
+| V34 | `reloadRulesForPanel` 与 watcher 回调都用 `apply()` 捕获的 `rulesOptions`，而 `applyHotConfig` 用 `next.rules.dir` | 热改 `rules.dir` 后重载/监视仍指向旧目录，面板却显示新目录 |
+| V35 | “先写临时文件再试编译”会让 watcher 读到坏文件 | 必须有纯内存的候选校验：`validateRuleCandidate` |
+| V36 | `loadRuleSet` 把收集、合并、编译揉在一起 | 抽出 `assembleRuleSet`，让候选校验与真实加载共用同一段代码——“预演 == 实际”才可信 |
+
+**实现**：
+
+- `engine/rules.ts`：抽出 `assembleRuleSet`；新增 `validateRuleCandidate({ …opts, filename, yaml })`（候选按“替换自身”参与 dir 层合并，只有与**另一个**文件重名才报错；坏文件可被覆盖修复）。
+- `panel/rules-write.ts`（新）：目录解析与拒绝（未配置 / 相对路径 / 落在 packaged 内）、文件名白名单、默认不覆盖、loader 门、tmp+rename 原子写、`rules_written` 只记元数据、写入后热重载（失败保留旧集合并标 `reloaded: false`）。
+- `panel/route.ts`：`POST /safeharness/write-rule`（POST-only、body ≤ 16 KiB；错误信封可带 `problems`）。
+- `panel/protocol.ts` / `client/*`：新端点与类型、`rules_written` 审计种类、规则页「写入并重载」+ 二次确认 + 覆盖确认 + problems 列表。
+- `index.ts`：`liveRulesOptions()` 让面板重载与 watcher 读实时配置；`installRuleWatch` 返回 `move()`，`loader/volatile-update` 时迁移监视目录（V34 关闭）。
+
+**真机验证**（2026-11-17，dev profile + 临时 `rules.dir`/`audit.dir`，端口 61557）：
+
+| 步骤 | 结果 |
+|---|---|
+| `POST /status` | `version 1.9.0`、20 规则 / 3 链、`rulesDir` 已配置 |
+| `GET /status` | 405 |
+| 写入 `sh19-probe.yaml` | ok、规则 **20 → 21**、`created: true`、`reloaded: true`、177 B |
+| 同名再写（`overwrite: false`） | `rule_exists` |
+| 同名 `overwrite: true` | ok、`created: false` |
+| `../escape.yaml` | `filename_invalid` |
+| 另一文件同名规则 | `rule_content_invalid`（problems 命中 duplicate），目录里没有新文件 |
+| 账本 | `rules_written` ×2（file/bytes/rules，无内容）、`rules_reloaded` ×3（含 `trigger: watch`、rule_count 21） |
+| 面板载荷 | `rules.count 21`、hash 变化、规则来源 `dir/sh19-probe.yaml` |
+
+**验收**：`tsc` host/client 0 错；**43 文件 / 745 用例**全绿；tarball **337,247 B**。验证后 dev profile 已还原、临时目录已删、dev host 已停。
+
+**仍未做**：桌面 profile 的 `rules.dir` 默认化（§12.1-7，需重启桌面才生效）；输出面 `output: enforce`（产品决策）。
+
+---
+
 ## 13. Day-0 接手清单（逐条执行，不要跳）
 
 1. **读**：本文件 §1 / §3 / §5 / §7 / §9。

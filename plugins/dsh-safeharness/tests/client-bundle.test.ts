@@ -61,7 +61,13 @@ interface SlotRegistration {
     readonly id: string
     readonly order: number
     readonly label: () => string
-    readonly inject: () => { readonly load: () => Promise<unknown> }
+    readonly inject: () => {
+      readonly load: () => Promise<unknown>
+      readonly patrol: () => Promise<unknown>
+      readonly draft: (input: { readonly description: string; readonly kind: 'inform' | 'chain' }) => Promise<unknown>
+      readonly reloadRules: () => Promise<unknown>
+      readonly writeRule: (input: { readonly filename: string; readonly yaml: string; readonly overwrite: boolean }) => Promise<unknown>
+    }
   }
   readonly component: unknown
 }
@@ -155,6 +161,20 @@ describe.skipIf(!built)('lib/client.js', () => {
     const entry = registrations[0] as SlotRegistration
     await expect(entry.options.inject().patrol()).resolves.toEqual(report)
     expect(fetchStub).toHaveBeenCalledWith('/safeharness/patrol', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('posts one rule file and unwraps the landing result', async () => {
+    const value = { filename: 'draft.yaml', bytes: 42, rules: 21, chains: 3, hash: 'abc123456789', created: true, reloaded: true }
+    const fetchStub = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true, value }) }))
+    vi.stubGlobal('fetch', fetchStub)
+    const { registrations } = register(materialize())
+    const entry = registrations[0] as SlotRegistration
+    await expect(entry.options.inject().writeRule({ filename: 'draft.yaml', yaml: 'rules: []', overwrite: false }))
+      .resolves.toEqual(value)
+    expect(fetchStub).toHaveBeenCalledWith('/safeharness/write-rule', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ filename: 'draft.yaml', yaml: 'rules: []', overwrite: false }),
+    }))
   })
   it('surfaces a refused or failed read instead of rendering stale data', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ ok: false, error: { code: 'panel_failed' } }) })))
