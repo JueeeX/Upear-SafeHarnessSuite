@@ -37,9 +37,9 @@
 | 宿主 | DSH `0.2.2-rc.3`（桌面已升级）；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用 `D:\dsh`；Node `v25.8.2` |
 | 桌面端插件 | **已装 1.8.3**（`C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness`，来自 1.8.3 tarball） |
 | 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.8.3.tgz` |
-| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 指向 1.8.3；重装前必须完全退出 DSH，含托盘） |
+| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（**`TGZ=` 已指向 1.9.0**，tarball 已复制到 `plugin-tarballs\`，**尚未执行**；执行前必须完全退出 DSH，含托盘） |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`57efcc9`**，tag **`v1.8.3`**（tag 对象 `3d567a7…`） |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **`d5c3487`**（1.8.4）/ `b60c7e1`（1.8.3 文档），另有**未提交的 1.9.0 改动**；`github` 备份远端 main = `99a9956`，`v1.8.3` 标签已同步 |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **`e22e404`**（1.9.0）/ `d5c3487`（1.8.4）/ `b60c7e1`（1.8.3 文档）；`github` 备份远端 main = `99a9956`，`v1.8.3` 标签已同步 |
 | 测试 | 1.9.0 本机 **43 文件 / 745 用例**；公开树与 CI 口径在发布时重算（1.8.3 为 38 / 691 与 37 / 683） |
 | tarball | 已发布 `dist/upear-dsh-safeharness-1.8.3.tgz`；本地 **`dist/upear-dsh-safeharness-1.9.0.tgz`，337,247 B，sha256 `3C6BFDC1AC3C6D89B1E4A79B42FB9CE1048C0487242C83ACB654B9420DB10687`**（未发布；1.8.4 的 327,369 B tarball 已被 1.9.0 取代） |
 | 账本 | `C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson`（NDJSON、sha256 链、零回显；当前约 6.3 MB、seq 8300+） |
@@ -201,6 +201,8 @@ plugins/dsh-safeharness/
             provider: liao
             model: gpt-6-luna
             timeoutMs: 6000
+        rules:
+          dir: 'C:\Users\xiaojue\.dsh\safeharness\rules'
     - id: invariants
       name: "@deepseek-ai/dsh-invariants"
     - id: safeharness-invariant
@@ -218,6 +220,8 @@ plugins/dsh-safeharness/
         provider: liao
         model: gpt-6-luna
         timeoutMs: 6000
+    rules:
+      dir: 'C:\Users\xiaojue\.dsh\safeharness\rules'
     draft:
       provider: liao
       model: deepseek-v4.1-flash-1017
@@ -226,7 +230,7 @@ plugins/dsh-safeharness/
 注意两点：
 
 - 同一个插件有 **insert 块 + id 覆盖块** 两处配置，实际生效的是二者合并（后者覆盖前者）。改配置时两处都要看，否则会出现“改了没生效”。
-- **没有配置 `rules.dir`** —— 所以操作者规则目录是空的，热监视的是**安装包自带 `rules/`**（见 §5.4）。这是当前“加规则要去 node_modules 粘贴”的直接原因。
+- **2026-11-17 起两处都配了 `rules.dir`**（`C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建）：操作者规则目录不再是空的，热监视也从安装包 `rules/` 换到该目录；1.9.0 装上桌面后，面板「写入并重载」就写到这里（升级不丢规则）。改完这两处后 profile watcher 会热 reconcile，桌面实测**无需重启**即生效（`rulesDir` 已变）。
 
 **开发 profile `safeharness-dev`** 是 observe，另有一条历史遗留 override（judge 关闭、路由空、timeout 4000），无害；不要把它当生产配置。
 
@@ -332,25 +336,23 @@ chain_rules:
 
 **加载优先级**：`inline` > `rules.dir` > packaged `rules/`；同名是**覆盖**（不是重复）；**同一层内**重名直接报错。loader 是 fail-loud 的：只要有一个文件写错，**整次加载失败**、保留旧规则集（日志 warn，面板条数不变）——这正是“文件加了但没生效”的头号原因。
 
-### 5.4 落到哪里（当前桌面）
+### 5.4 落到哪里（当前桌面：已配 `rules.dir`）
 
-当前 profile 没有 `rules.dir`，所以 `installRuleWatch` 监视的是**安装包自带目录**：
+**2026-11-17 起**桌面 profile 已配 `rules.dir: 'C:\Users\xiaojue\.dsh\safeharness\rules'`（两处配置都加了，目录已建），所以 `installRuleWatch` 监视的是这个**操作者目录**，不是安装包：
 
 ```
-C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness\rules\
+C:\Users\xiaojue\.dsh\safeharness\rules\
 ```
 
-**2026-11-17 实测**：往该目录放一个 `zz-operator-probe.yaml`（1 条规则），2 秒内 `ruleCount` 20 → 21、`rulesetHash` 从 `d53dedc1…` 变为 `455a42cc…`，账本新增 `rules_reloaded`（`labels.trigger: watch`、`metrics.rule_count: 21`、seq **8335**、`plugin_version: 1.8.3`）；删除文件后 2 秒内回到 20 条与原 hash。**这条路不需要重启。**
+改完 patch 后 profile watcher 会热 reconcile：桌面实测 `POST /safeharness/status` 的 `rulesDir` 立即变为该路径、`ruleCount` 仍是 20（目录为空）。之后往该目录放文件即热更新，**升级不丢**。
 
-缺点：升级会覆盖这个目录。长期配置建议（还没做）：
+历史（1.8.3 及之前，未配 `rules.dir` 时）：`installRuleWatch` 监视的是**安装包自带目录** `...\node_modules\@upear\dsh-safeharness\rules\`。**2026-11-17 实测**：往该目录放一个 `zz-operator-probe.yaml`（1 条规则），2 秒内 `ruleCount` 20 → 21、`rulesetHash` 从 `d53dedc1…` 变为 `455a42cc…`，账本新增 `rules_reloaded`（`labels.trigger: watch`、`metrics.rule_count: 21`、seq **8335**、`plugin_version: 1.8.3`）；删除文件后 2 秒内回到 20 条与原 hash。**这条路不需要重启**，但升级会覆盖该目录——这正是现在改成 `rules.dir` 的原因。
 
 ```yaml
-# cordis.patch.yml 的 safeharness config 里
+# cordis.patch.yml 的 safeharness config 里（insert 块与 id 覆盖块两处都要加）
 rules:
   dir: 'C:\Users\xiaojue\.dsh\safeharness\rules'
 ```
-
-然后重启一次；之后往该目录放文件即热更新，升级不丢。
 
 **1.9.0 起**：配好 `rules.dir` 后，面板「规则 → AI 起草」多出「写入并重载」按钮（见 §5.6）；没配时按钮会直接说明原因，不会假装能写。`rules.dir` 在运行中改变时，面板重载与文件 watcher 现在都跟随实时配置（watcher 会迁移到新目录；此前只认加载期目录，热改后静默失效）。
 
@@ -614,6 +616,8 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 ## 10. 桌面端现状与升级
 
 - 已装 **1.8.3**：`desktop/node_modules/@upear/dsh-safeharness/package.json` = 1.8.3；profile `package.json` 依赖 = `file:…/upear-dsh-safeharness-1.8.3.tgz`。
+- **1.9.0 已就位、待安装**：`plugin-tarballs\upear-dsh-safeharness-1.9.0.tgz`（337,247 B，sha256 `3C6BFDC1AC3C6D89B1E4A79B42FB9CE1048C0487242C83ACB654B9420DB10687`），`install-safeharness-desktop.cmd` 的 `TGZ=` 已指向它；**安装后需要重启 DSH**，因此这一步会中断当前会话。
+- 桌面 profile 的 `rules.dir` 已在 2026-11-17 配好（`C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建，profile watcher 已热 reconcile，桌面 `POST /safeharness/status` 实测 `rulesDir` 生效、20 规则不变）；1.9.0 装上后「写入并重载」即写这里。
 - `safeharness_status`：`version 1.8.3`、`host 0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`、judge `liao/gpt-6-luna` 可用。
 - 姿态：**0 FAIL / 0 WARN / 9 OK / 1 SKIP**；`plugin_version_mismatch` 已随 rc.3 钉版清掉（1.8.2 时代是 WARN）。
 - 账本 `plugin_loaded` seq **8271**（`2026-11-17T06:19:03Z`）记录 `version 1.8.3`、宿主全部 rc.3。
@@ -714,10 +718,10 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（1.8.3 基线时只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`；1.8.4 尚未提交时应再加上 `plugins/dsh-safeharness` 与 `docs/` 的本轮改动）；`git log --oneline -3` 应看到 `b60c7e1`、`99a9956`、`8e60d74`；`git remote -v` 确认 `dsh` / `github`，**不要碰 `origin`**。
 4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.3` 应分别指向 `57efcc9…` 与 tag 对象 `3d567a7…`；`v1.8.2`（`6684ee4`）仍保留。
 5. **构建/测试**：按 §7 跑 tsc + vitest，期望 **745 passed**（1.9.0；perf 抖动时单独重跑，实测满载偶发 5.19ms > 5ms，单独重跑 1.2ms 通过）。
-6. **看运行态**：调 `safeharness_status` / `safeharness_posture`，确认 1.8.3、20 规则 + 3 链、0 FAIL、`plugin_version_mismatch` OK。
-7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `safeharness_audit_query`；确认 `plugin_loaded.version` 是 1.8.3、`rulesetHash` 存在。
+6. **看运行态**：调 `safeharness_status` / `safeharness_posture`，确认版本（未升级的桌面是 1.8.3，装过 1.9.0 后是 1.9.0）、20 规则 + 3 链、0 FAIL、`plugin_version_mismatch` OK。
+7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `safeharness_audit_query`；确认 `plugin_loaded.version` 与当前版本一致、`rulesetHash` 存在。
 8. **做一次只读 smoke**：设置 → 内置插件 → SafeHarness，截一张概览/设置图；不要开定时巡检。
-9. **试一次规则落地**（可选，建议做）：按 §5.4 放一条测试规则 → 看 `ruleCount` 变化与 `rules_reloaded` → 触发一次 → 在账本看 `rule_ids` → 删除并确认回到 20 条。
+9. **试一次规则落地**（1.9.0 起）：面板「规则 → AI 起草」→「写入并重载」→ 看 `ruleCount` 变化与账本 `rules_written` / `rules_reloaded` → 触发一次 → 在账本看 `rule_ids` → 删除文件并确认回到原条数。
 10. **清理**：按 §9.4；删 `panel-state.json`，确认无测试 provider/凭据残留。
 
 ---
