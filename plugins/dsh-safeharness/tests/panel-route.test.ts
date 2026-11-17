@@ -13,7 +13,7 @@ import { createPanelHandler, isTrustedPanelRequest, registerPanelRoute } from '.
 import { createPatrolRunner } from '../src/panel/patrol-runner.js'
 import type { Runtime } from '../src/runtime.js'
 import type { PatrolReport } from '../src/patrol/index.js'
-import type { DraftResult } from '../src/draft/rule.js'
+import type { DraftResult, DraftStatus } from '../src/draft/rule.js'
 import type { PatrolScheduler } from '../src/panel/schedule.js'
 import type { PanelSettingsHost } from '../src/panel/settings.js'
 import { PanelSettingsError } from '../src/panel/settings.js'
@@ -361,6 +361,28 @@ describe('draft endpoint', () => {
     release?.()
     await pending
     expect(JSON.parse(first.body)).toMatchObject({ ok: true })
+  })
+
+  it('reports the drafter status instead of one generic "unavailable" code', async () => {
+    const cases: readonly (readonly [Exclude<DraftStatus, 'ok'>, string])[] = [
+      ['unavailable', 'draft_unavailable'],
+      ['timeout', 'draft_timeout'],
+      ['empty', 'draft_empty'],
+      ['bad_json', 'draft_bad_json'],
+      ['invalid', 'draft_invalid'],
+      ['error', 'draft_failed'],
+    ]
+    for (const [status, code] of cases) {
+      const handler = createPanelHandler({
+        runtime: stubRuntime({ draftEnabled: true }),
+        startedAt: 0,
+        logger,
+        draft: async () => ({ status, reason: 'why', metrics: { durationMs: 1, promptChars: 1, replyChars: 0 } }),
+      })
+      const out = response()
+      await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/draft', body: { description: 'x' } }), out.res)
+      expect(JSON.parse(out.body), status).toMatchObject({ ok: false, error: { code } })
+    }
   })
 })
 

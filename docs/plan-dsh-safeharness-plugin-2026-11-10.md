@@ -1289,6 +1289,23 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 ---
 
+### 12.22 1.8.3 起草诊断与超时（2026-11-17）
+
+用户截图显示规则页“起草路由不可用”。实测该路由本身可用（同一端点三次调用均 `ok`），问题在诊断链与默认预算：
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V23 | `panel/route.ts` 把起草的所有非 `ok` 状态（timeout/empty/bad_json/invalid/error）都返回成 `draft_unavailable`；`client` 只按 code 显示固定文案 | 任何失败都被说成“路由不可用”，看不到真实原因 |
+| V24 | 实测起草耗时 5.8s / 6.1s / **18.9s**，默认 `draft.timeoutMs` 20000 | 靠近上限，慢一次就超时 |
+| V25 | 默认 `draft.maxTokens` 400，对带推理的模型偏紧 | 可能 empty / bad_json |
+| V26 | 起草失败不写账本 | 事后无法回答“是超时还是模型返回坏了” |
+
+**决策 D56**：按状态返回独立 code（`draft_timeout` / `draft_empty` / `draft_bad_json` / `draft_invalid` / `draft_failed`），把 reason 带回客户端显示；失败写 `invariant_probe`（`reason_code: panel_draft`，只记 status/耗时/字符数）；默认超时 60s、输出 2048 tokens。
+
+**验收**：本机 41 文件 / 709 用例（perf 满载偶发抖动，单独重跑通过）；公开树 38 / 691（688 + 3）；CI 37 / 683（680 + 3）；tarball 321,683 B，sha256 `D77E41D487C92031C16B049DCA4F2EB54FF11F8C5B3A0438779730683163320B`。桌面待升级 1.8.3。
+
+---
+
 ## 13. Day-0 接手清单（逐条执行，不要跳）
 
 1. **读**：本文件 §1 / §3 / §5 / §7 / §9。

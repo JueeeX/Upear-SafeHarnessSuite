@@ -52,7 +52,7 @@ import type {
   PanelSettingsPatch,
   PanelSettingsResult,
 } from './protocol.js'
-import type { DraftKind, DraftResult } from '../draft/rule.js'
+import type { DraftKind, DraftResult, DraftStatus } from '../draft/rule.js'
 import type { PatrolRunner } from './patrol-runner.js'
 import { isScheduleInterval, type PatrolScheduler } from './schedule.js'
 import type { PanelSettingsHost } from './settings.js'
@@ -210,11 +210,26 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
+/** Wire code for one non-ok draft status (the status is the diagnosis). */
+function draftErrorCode(status: DraftStatus): string {
+  switch (status) {
+    case 'unavailable': return 'draft_unavailable'
+    case 'timeout': return 'draft_timeout'
+    case 'empty': return 'draft_empty'
+    case 'bad_json': return 'draft_bad_json'
+    case 'invalid': return 'draft_invalid'
+    case 'error': return 'draft_failed'
+    default: return 'draft_failed'
+  }
+}
+
 /** Project one successful draft onto the wire shape. */
 function toPanelDraft(result: DraftResult): PanelDraftValue | { readonly code: string; readonly message: string } {
   if (result.status !== 'ok') {
     // Coarse code/field names only: the drafter promises no prompt/content echo.
-    return { code: 'draft_unavailable', message: result.reason.slice(0, 200) }
+    // The code distinguishes "no route" from a slow/empty/invalid model reply so
+    // the panel does not tell every failure "the route is unavailable".
+    return { code: draftErrorCode(result.status), message: result.reason.slice(0, 200) }
   }
   return {
     status: 'ok',
@@ -258,7 +273,22 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
     const kind: DraftKind = body.kind === 'chain' ? 'chain' : 'inform'
     draftRunning = true
     try {
-      const projected = toPanelDraft(await run({ description, kind }))
+      const result = await run({ description, kind })
+      if (result.status !== 'ok') {
+        // Diagnosis without content: status plus sizes only, so a later report can
+        // answer "was it a timeout, an empty reply or a bad JSON?".
+        runtime.audit('invariant_probe', {
+          decision: 'warn',
+          reason_code: 'panel_draft',
+          labels: { status: result.status },
+          metrics: {
+            duration_ms: result.metrics.durationMs,
+            prompt_chars: result.metrics.promptChars,
+            reply_chars: result.metrics.replyChars,
+          },
+        })
+      }
+      const projected = toPanelDraft(result)
       return 'code' in projected
         ? { ok: false, error: { code: projected.code, message: projected.message } }
         : { ok: true, value: projected }

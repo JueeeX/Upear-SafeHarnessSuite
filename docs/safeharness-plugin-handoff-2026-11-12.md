@@ -12,11 +12,11 @@
 
 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 里是一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核/语义评审、审批桥、NDJSON 哈希链账本、姿态自检、巡检/通知、规则起草）装进 DSH 的执行生命周期。
 
-当前版本 **1.8.2**（2026-11-16）：源码、`lib/` 与本地 tarball 已就绪；桌面已安装 1.8.2 并完成双向复验，**尚未发布到公开仓库**。1.8.2 修了 1.8.1 审计发现的 P0：面板 Host 栅栏的 DNS rebinding 绕过、`results: enforce` 对源码/配置的误拦、巡检 `config_drift` 自比对、hardened 两个不可达的 `failOn` 码；并对齐 judge/扫描窗口、修 `enforce-buffer` 降级透传、补配置枚举校验与零回显。详见 CHANGELOG 1.8.2 与 §12.21。
+当前版本 **1.8.3**（2026-11-17）：源码、`lib/` 与本地 tarball 已就绪；1.8.2 已发布到公开仓库，桌面装的是 1.8.2（rc.1 钉版构建）。1.8.3 修“起草路由不可用”的诊断链：把 timeout / empty / bad_json / invalid / error 从统一的 `draft_unavailable` 拆开，客户端显示具体原因；起草失败写 `invariant_probe`（只记 status 与耗时/字符数）；`draft.timeoutMs` 20000→60000、`maxTokens` 400→2048。详见 CHANGELOG 1.8.3 与 §12.22。
 
-注意：桌面宿主已升到 **DSH 0.2.2-rc.3**。当前已安装的 1.8.2 包是按 rc.1 钉版的构建，姿态仍报 `plugin_version_mismatch` WARN；**用最终 tarball（rc.3 钉版）重装一次**后该 WARN 才会消失，hardened 才能在 rc.3 上加载。最终 tarball 见 §1。
+注意：桌面宿主是 **DSH 0.2.2-rc.3**；1.8.3 tarball 同时包含 rc.3 钉版，**升级到 1.8.3 一次即可同时清掉 `plugin_version_mismatch` WARN 并拿到起草修复**。见 §9。
 
-剩余工作：公开仓库发布（§7）、桌面用最终 tarball 重装、真实 IM/人工审批环境验收；另有若干 P1/P2 改进清单见 §10 与 §11。没有已知的“加载即失效”缺口。
+剩余工作：桌面装 1.8.3、公开仓库发布 1.8.3、真实 IM/人工审批环境验收；另有若干 P1/P2 改进清单见 §10 与 §11。没有已知的“加载即失效”缺口。
 
 ---
 
@@ -25,16 +25,16 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | `1.8.2`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
+| 当前版本 | `1.8.3`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 会断言） |
 | 宿主 | DSH `0.2.2-rc.3`（桌面已升级；构建期类型仍是 rc.1 的 profile 副本）；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用在 `D:\dsh` |
-| 桌面端插件 | 已安装 **1.8.2**（`results.mode: enforce`，8/8 接缝），但该安装包是 rc.1 钉版；姿态 WARN `plugin_version_mismatch`，需用最终 rc.3 钉版 tarball 重装 |
-| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 指向 1.8.2；重装前必须完全退出 DSH，包括托盘） |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`6684ee4`**，tag **`v1.8.2`**（tag 对象 `50a65f6...`） |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.8.2 提交 `c875ee7`（代码+测试+文档）、`903b918`（文档），以及后续 rc.3 钉版提交；`github` 备份远端已同步 main 与 v1.8.1 标签 |
-| 测试 | 本机 **41 文件 / 708 用例**全绿；公开树 **38 文件 / 690**（687 pass + 3 skip）；CI 口径 **37 / 682**（679 + 3，另剔除 `tests/perf.test.ts`） |
-| tarball | `dist/upear-dsh-safeharness-1.8.2.tgz`，320,850 B，sha256 `6274E5B860669ADE67243FB6B6456C849DC853B02A85BCA43965EFE695886E9C`（rc.3 钉版） |
-| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，不提交；1.8.2 见 `1.8.2-audit-fixes.md`，含双向复验记录） |
-| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（任务卡 §9、决策/风险 §12；1.8.0 见 §12.19，1.8.1 见 §12.20，1.8.2 见 §12.21） |
+| 桌面端插件 | 已安装 **1.8.2**（`results.mode: enforce`，8/8 接缝），该安装包是 rc.1 钉版；姿态 WARN `plugin_version_mismatch`，需升级到 **1.8.3**（同一 tarball 已含 rc.3 钉版与起草修复） |
+| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 指向 1.8.3；重装前必须完全退出 DSH，包括托盘） |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`6684ee4`**，tag **`v1.8.2`**（tag 对象 `50a65f6...`）；**1.8.3 尚未发布** |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` 含 1.8.2 提交 `c875ee7` / `903b918` / `e23066b` / `698bd27`，及 1.8.3 待提交改动；`github` 备份远端已同步 main 与 v1.8.2 标签 |
+| 测试 | 本机 **41 文件 / 709 用例**（`perf.test.ts` 在满载全量跑时会偶发 p99 抖动，单独重跑通过）；公开树 **38 文件 / 691**（688 pass + 3 skip）；CI 口径 **37 / 683**（680 + 3，另剔除 `tests/perf.test.ts`） |
+| tarball | `dist/upear-dsh-safeharness-1.8.3.tgz`，321,683 B，sha256 `D77E41D487C92031C16B049DCA4F2EB54FF11F8C5B3A0438779730683163320B` |
+| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore，不提交；1.8.2 见 `1.8.2-audit-fixes.md`，1.8.3 见 `1.8.3-draft-diagnostics.md`） |
+| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（1.8.0 §12.19、1.8.1 §12.20、1.8.2 §12.21、1.8.3 §12.22） |
 | 公开 README | 插件 README 的 §4.7（面板）、§4.8（顺序/覆盖/评审模型）是给用户的正式说明 |
 
 ---
@@ -297,7 +297,7 @@ cd F:\AgentSecurity\Upear\plugins\dsh-safeharness
 node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit
 node node_modules/typescript/bin/tsc -p tsconfig.client.json
 
-# 全量测试（本机 41 文件 / 708 用例）
+# 全量测试（本机 41 文件 / 709 用例）
 node node_modules/vitest/vitest.mjs run
 node node_modules/vitest/vitest.mjs run tests/panel-settings.test.ts   # 单文件
 
@@ -311,7 +311,7 @@ node scripts/build-client.mjs
 npm pack --pack-destination dist
 ```
 
-`lib/` 是**构建产物**，被 `.gitignore` 忽略；公开仓库不提交 `lib/`，但 tarball 包含。公开树测试口径 38 / 690（687 pass + 3 skip）；CI 剔除 `tests/perf.test.ts` → 37 / 682（679 pass + 3 skip）。
+`lib/` 是**构建产物**，被 `.gitignore` 忽略；公开仓库不提交 `lib/`，但 tarball 包含。公开树测试口径 38 / 691（688 pass + 3 skip）；CI 剔除 `tests/perf.test.ts` → 37 / 683（680 pass + 3 skip）。`perf.test.ts` 在满载全量跑时可能偶发 p99 抖动，单独重跑通过即可。
 
 测试重点：
 
@@ -478,11 +478,11 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 - `desktop/node_modules/@upear/dsh-safeharness/package.json` 版本 **1.8.2**
 - 桌面宿主 **0.2.2-rc.3**；`results.mode: enforce` 已生效，8/8 接缝；`safeharness_status` 返回 1.8.2
 - 已安装的是 rc.1 钉版构建：姿态 `plugin_version_mismatch` WARN（`dsh-tools 0.2.2-rc.3 != 0.2.2-rc.1`）
-- 安装脚本：`C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ` 指 1.8.2）
+- 安装脚本：`C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ` 指向 1.8.3）
 
-**把 rc.3 钉版装到桌面**：把最终 `dist/upear-dsh-safeharness-1.8.2.tgz`（§1 的 320,850 B / `6274E5…`）复制到 `plugin-tarballs\` 覆盖同名文件；完全退出 DSH（含托盘）→ 双击安装脚本 → 重启。升级后用账本 `plugin_loaded.version` 确认 1.8.2、用 `safeharness_posture` 确认 `plugin_version_mismatch` 变为 OK。
+**升级到 1.8.3（一次同时解决两件事）**：把 `dist/upear-dsh-safeharness-1.8.3.tgz`（§1 的 321,683 B / `D77E41…`）复制到 `plugin-tarballs\`，确认安装脚本 `TGZ=` 指它；完全退出 DSH（含托盘）→ 双击脚本 → 重启。1.8.3 同时包含 rc.3 钉版与起草诊断修复。升级后用账本 `plugin_loaded.version` 确认 1.8.3、用 `safeharness_posture` 确认 `plugin_version_mismatch` 变为 OK，并在规则页试一次起草（失败时应显示超时/空回复/非 JSON 等具体原因，而不是统一的“路由不可用”）。
 
-**1.8.2 双向复验（已完成一次）**：① 读取 `src/config.ts` 的 `secret`/`accessToken` 声明**不再**被结果层替换；② 读取含假凭据的临时文件仍返回拦截回执（账本 seq 7902，`credential_assignment` + `credential_openai_key`，`plugin_version=1.8.2`）。重装 rc.3 钉版后建议再跑一次。
+**1.8.2 双向复验（已完成一次）**：① 读取 `src/config.ts` 的 `secret`/`accessToken` 声明**不再**被结果层替换；② 读取含假凭据的临时文件仍返回拦截回执（账本 seq 7902，`credential_assignment` + `credential_openai_key`，`plugin_version=1.8.2`）。1.8.3 升级后建议再跑一次。
 
 **结果层强制拦截的代价**：任何含凭据形态的工具结果（测试 fixture、文档示例、`.credentials.yaml`）都会被整条替换，这是预期行为；开发插件请用 `safeharness-dev`（observe）。
 
@@ -502,20 +502,21 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 10. **结果层强制拦截的代价（1.8.2 已收窄）**：`credential_assignment` 不再把 `apiKey: z.string()`、`token: process.env.X` 这类源码/配置声明当凭据，所以读本插件源码可以正常工作；含真实凭据形态的工具结果（测试 fixture、文档示例、`.credentials.yaml`）仍会被整条替换。输出层仍是 `warn`，若把结果层关掉，模型仍可能把密钥写进回答。`pnpm-lock.yaml` 里的 `sha512-…` SRI 摘要仍会被判为高熵令牌（尚未为 SRI 前缀加豁免），读 lockfile 会被整条拦截。
 11. **侦察命令不单独拦截**：`whoami` / `hostname` / `ipconfig` / `systeminfo` / `net user` 这类身份与环境侦察不在结果扫描的形态里（只认凭据与注入标记），工具面也没有命令级分类；单条属低危，但在不可信内容诱导下是外发前奏，且没有"侦察→外发"的链式规则。**用户 2026-11-12 明确不做**命令级 recon 分类与 egress 收紧，这里只作已知边界记录（详见 §12 D51）。
 12. **面板/provider 仍有 P1 缺口（1.8.2 未做）**：① `addProvider` 先写 `settings.update` 再写 `providers.json`，后者失败时没有回滚，可能留下"配置里有、面板不可删"的路由；② 删除守卫只查 judge/draft.provider，不查 `defaultProvider` 等其他引用；③ `providerConfigurable` 以 `settings.update` 判定，但删除走 `mutate`；④ `status` 仍接受 GET（写端点全部 POST-only），方法违规返回 200 信封而不是 405；⑤ 面板 `logger` 仍会打印宿主错误 message（账本已改为只记长度）。
-13. **宿主已升到 0.2.2-rc.3**：桌面已装 1.8.2（rc.1 钉版构建），姿态 WARN `plugin_version_mismatch`；最终 tarball 已把运行时钉版改为 rc.3（构建期类型仍为 rc.1），重装后 WARN 消失、hardened 可在 rc.3 上加载。`engines.dsh` 仍是 `>=0.2.2-rc.1 <0.3.0`，因此 rc.1/rc.2 主机仍可安装但会看到同样的 WARN。
-14. **1.8.2 已发布**：公开 `main` = `6684ee4`、tag `v1.8.2`；`github` 备份已同步。CI runs 仍需网页确认。
+13. **宿主已是 0.2.2-rc.3**：1.8.3 tarball 已把运行时钉版改为 rc.3（构建期类型仍为 rc.1）；装 1.8.3 后 WARN 消失、hardened 可在 rc.3 上加载。`engines.dsh` 仍是 `>=0.2.2-rc.1 <0.3.0`，因此 rc.1/rc.2 主机仍可安装但会看到同样的 WARN。
+14. **发布状态**：1.8.2 已发布（`6684ee4` / `v1.8.2`）；1.8.3 尚未发布，只在本机与桌面升级包。CI runs 仍需网页确认。
+15. **规则起草依赖模型路由的延迟**：1.8.3 已把超时放宽到 60s、输出上限 2048，并把失败原因拆开显示；但起草仍然是一次真实模型调用（实测 6–19s），没有自动重试，也不会回退到本地启发式。失败时看面板提示或账本 `invariant_probe`（`reason_code: panel_draft`，`labels.status` 为 `timeout` / `empty` / `bad_json` / `invalid` / `error`）。
 
 ---
 
-## 11. 下一步建议（1.8.2 收尾）
+## 11. 下一步建议（1.8.3 收尾）
 
-1. **桌面用最终 tarball 重装（必做）**：见 §9；把 rc.3 钉版 tarball 覆盖到 `plugin-tarballs\` 后重装，确认 `plugin_version_mismatch` 变 OK，并再跑一次“读源码不被拦 / 假凭据仍被拦”。
-2. **发布 1.8.2（已完成 2026-11-16）**：公开 `main` = `6684ee4`、tag `v1.8.2`（`50a65f6...`）；`github` 备份 main（`e23066b`）与 tag 已同步。剩余：网页确认 CI runs。
+1. **桌面装 1.8.3（必做）**：见 §9；一次升级同时拿到 rc.3 钉版与起草诊断修复；装完确认 `plugin_version_mismatch` 变 OK，并试一次起草（失败时显示具体原因）。
+2. **发布 1.8.3（必做，按 §7）**：`publish-public` → 临时树测试（38/691，CI 37/683）→ 删 `lib/` → leak 0 → commit/tag `v1.8.3`/push `dsh` → `github` 同步 → 回写 §15。
 3. **真实 webhook / 人工审批（环境项）**：用户提供飞书/钉钉/企微 webhook 后配置 `patrol.notify` 跑一次巡检；建 `approval: ask` 的 dev profile 走一遍 delegate/policy。
 4. **面板/provider P1（可选）**：见 §10 第 12 条（回滚、删除守卫、CAS、GET 收紧、日志脱敏）。
 5. **输出面凭据规则 + `output: enforce`（可选，产品决策）**：当前 `results` 只保护“结果→模型”，不保护“模型→用户”；开启前要评估误报与流式代价。
 6. **SRI 前缀豁免（可选）**：`^sha(?:1|256|384|512)-` 跳过熵检测，解决读 lockfile 被拦。
-7. **CI**：网页确认 v1.8.2（以及 v1.8.1）的 runs 绿。
+7. **CI**：网页确认 v1.8.3、v1.8.2、v1.8.1 的 runs 绿。
 8. **不做**：命令级 recon 分类、`denyTags: ['egress']` / 网络面收紧（D51）。
 
 ---
@@ -544,6 +545,7 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 | D53 | `credential_assignment` 排除类型/引用表达式（`z.string()`、`process.env.X`、`a.b`），保留真实赋值 | `results: enforce` 下读源码/配置不能被拦；真实密钥仍由引号/前缀/熵等形态命中 |
 | D54 | `config_drift` 先读历史 `posture_report` 再跑当前姿态 | `runPosture` 会立刻写一条新报告，后读会拿到“自己刚写的”而永远 OK |
 | D55 | hardened 只 gate 可达的 code；`approval_never` 移出默认 `failOn`，`hmr_enabled` 改判 FAIL | 无 session 时 approval 永远 SKIP，不可达门禁比漏报更危险；HMR 在 hardened 必须真的拒绝加载 |
+| D56 | 起草失败按状态返回独立 code，并写 `invariant_probe`；默认超时 60s、输出 2048 | 原先所有失败都显示“路由不可用”，掩盖了 timeout/empty/bad_json；实测起草耗时 6–19s，20s 超时过紧、400 tokens 偏小 |
 
 ---
 
@@ -552,11 +554,11 @@ fetch('/safeharness/export', {... body: JSON.stringify({limit:200})})
 1. **读**：本文 §0–§10；需要历史细节再读旧 handoff 与 README §4.7/§4.8。
 2. **核环境**：`$env:DSH_HOME`、`D:\dsh\resources\runtime\cli\bin\dsh.cmd --version`、Node `v25.8.2`、Python（若 sidecar）。
 3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（应只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`）；`git log --oneline -3` 应看到 `1fa45a6` 与随后的文档提交；`git remote -v` 确认 `dsh`/`github`，不要碰 `origin`。
-4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.2` 应分别指向 `6684ee4...` 与 tag 对象 `50a65f6...`；`v1.8.1`（`0062f4f`）仍保留。
-5. **构建/测试**：按 §6 跑 tsc + vitest，期望 708 passed。
-6. **起 dev host**：§8.1，打开面板，确认五个标签、版本 1.8.2、设置页读到 `providerConfigurable: true`。
-7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `/safeharness audit 20`；确认 `plugin_loaded` 的 `version` 是 1.8.2、`ruleset_hash` 存在。
-8. **看桌面**：桌面已装 1.8.2（宿主 rc.3），用 `safeharness_status` 确认版本/接缝、`safeharness_posture` 看 `plugin_version_mismatch`；若是 rc.1 钉版构建，按 §9 用最终 tarball 重装。
+4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.2` 应分别指向 `6684ee4...` 与 tag 对象 `50a65f6...`；`v1.8.3` 尚未发布（本地源码/tarball 已就绪）。
+5. **构建/测试**：按 §6 跑 tsc + vitest，期望 709 passed（perf 抖动时单独重跑）。
+6. **起 dev host**：§8.1，打开面板，确认五个标签、版本 1.8.3、设置页读到 `providerConfigurable: true`。
+7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `/safeharness audit 20`；确认 `plugin_loaded` 的 `version` 是 1.8.3、`ruleset_hash` 存在。
+8. **看桌面**：桌面仍是 1.8.2；按 §9 升级到 1.8.3 后确认 `plugin_loaded.version`、`results=enforce` 与 `plugin_version_mismatch=OK`。
 9. **做一次只读 smoke**：设置 → 内置插件 → SafeHarness，截一张概览/设置图；不要开定时巡检。
 10. **清理**：按 §8.4；删 `panel-state.json`，确认无测试 provider/凭据残留。
 
@@ -609,6 +611,10 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 | 1.8.2 本地提交 | `c875ee7`（代码+测试+文档）、`903b918`（文档）、`e23066b`（rc.3 钉版） |
 | 1.8.2 公开提交 | `6684ee4`，tag `v1.8.2`（tag 对象 `50a65f6...`） |
 | 1.8.2 tarball | 320,850 B，sha256 `6274E5B860669ADE67243FB6B6456C849DC853B02A85BCA43965EFE695886E9C`（rc.3 钉版） |
+| 1.8.3 证据 | `plugins/dsh-safeharness/evidence/1.8.3-draft-diagnostics.md`（根因、实测耗时、修复与测试） |
+| 1.8.3 本地提交 | 待提交（本轮起草诊断 + 默认值） |
+| 1.8.3 公开提交 | 待发布 |
+| 1.8.3 tarball | 321,683 B，sha256 `D77E41D487C92031C16B049DCA4F2EB54FF11F8C5B3A0438779730683163320B` |
 
 **安全纪律（每次改代码/证据/文档前重温）**：
 

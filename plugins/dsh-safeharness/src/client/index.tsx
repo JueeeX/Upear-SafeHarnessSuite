@@ -125,7 +125,13 @@ async function call(endpoint: string, body: unknown = {}): Promise<unknown> {
   })
   if (!response.ok) throw new Error(`panel_http_${response.status}`)
   const result = (await response.json()) as Envelope
-  if (!result.ok) throw new Error(result.error.code)
+  if (!result.ok) {
+    // Keep the server's coarse reason: the panel explains a timeout / empty reply
+    // instead of showing one generic "unavailable" line for every failure.
+    const failure = new Error(result.error.code) as Error & { detail?: string }
+    failure.detail = result.error.message
+    throw failure
+  }
   return result.value
 }
 

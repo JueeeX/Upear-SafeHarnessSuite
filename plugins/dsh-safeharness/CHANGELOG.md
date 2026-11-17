@@ -1,6 +1,15 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.8.3 — 2026-11-17
+
+起草诊断与超时修复：**“起草路由不可用”不再吞掉真实原因**。
+
+- **根因**：面板把所有非 `ok` 的起草状态（`timeout` / `empty` / `bad_json` / `invalid` / `error`）都映射成 `draft_unavailable`，客户端又只按错误码显示固定文案。实测起草调用耗时 5.8s / 6.1s / **18.9s**，默认 20s 超时很容易被触发。
+- **修复**：服务端按状态返回 `draft_timeout` / `draft_empty` / `draft_bad_json` / `draft_invalid` / `draft_failed`，并把 reason 带回客户端；面板显示具体原因，不再一律说“路由不可用”。
+- **可观测性**：起草失败写一条 `invariant_probe`（`reason_code: panel_draft`），只记录 status、耗时与 prompt/reply 字符数，不记录描述或回复内容。
+- **默认值**：`draft.timeoutMs` 20000 → 60000，`draft.maxTokens` 400 → 2048（起草模型实测接近 19s；400 tokens 对带推理的模型偏紧）。
+- **测试**：新增状态映射用例。41 文件 / 709 用例（公开 38 / 691；CI 37 / 683）。
 ## 1.8.2 — 2026-11-16
 
 安全修复与证据完整性：**面板栅栏的 DNS rebinding 绕过、结果层对源码的误拦、巡检漂移自比对、hardened 门禁的两个不可达 code**。
