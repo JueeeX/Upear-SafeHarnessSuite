@@ -1389,6 +1389,26 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 ---
 
+### 12.26 1.9.2 让包成为真正的组合包（2026-11-17）
+
+1.9.1 装机验证时发现的 **P0 UX 缺口**：面板在桌面 app 里点不到。
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V39 | 用真实登录 cookie 驱动 headless 浏览器打开桌面 GUI，侧栏「已安装」列了 4 个内置配置页 + 4 个实验性组合包，**没有 SafeHarness** | 面板的 `settings.plugins.tab` 没有宿主条目页 |
+| V40 | `window.__DSH_BOOT__` 里**有** safeharness 条目 | 客户端半边加载了，问题不在打包产物 |
+| V41 | 桌面 profile 的 `dsh.profile.bundles` 只有 6 个官方 bundle | 我们的包不在其中 |
+| V42 | 宿主文档：*"A bundle is a package whose `package.json` declares `dsh.bundle.patch`"* | 只有 `dsh.client` 的包永远进不了 bundle 清单 |
+| V43 | GUI「添加插件」两次（直接装 1.9.1 / 先删依赖再装）都被拒：`Already up to date`、*无法从依赖变更中确定安装了哪一个包*，清单回滚 | 不是流程问题，是包缺 `dsh.bundle.patch` |
+
+**决策**：把包做成组合包——`cordis.patch.yml`（`insert` 一行 `safeharness`，不带 config，让 schema 默认值生效）+ `package.json` 的 `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }` + `files` 里加该文件；`scripts/publish-public.mjs` 的白名单同步。装完即挂载，profile 里只保留**按 id 的覆盖**（不能再写 `insert`/`name`，否则同 id 两行）。
+
+**验收**：`tsc` host/client = 0；**45 文件 / 751 用例**全绿（新增 `tests/bundle-patch.test.ts` 4 条，`acceptance-m4` 的 `files` 断言同步）；tarball `upear-dsh-safeharness-1.9.2.tgz` 338,908 B（137 文件，含 `cordis.patch.yml`），sha256 `24007725B2EBFE2C5F65C7A1EBBB097A82C5CE9FE672AE8382B842CA9B1F07FF`；README §3.3/§3.4/§4.7 与 CHANGELOG 已改。
+
+**待办**：桌面 profile 用 GUI「添加插件」装 1.9.2（这次依赖版本真的变了，能过校验）→ 把 profile `cordis.patch.yml` 里那行手工 `insert: safeharness` 改成按 id 覆盖 → 重启 → 插件页出条目页 → headless 截图存证。
+
+---
+
 ## 13. Day-0 接手清单（逐条执行，不要跳）
 
 1. **读**：本文件 §1 / §3 / §5 / §7 / §9。

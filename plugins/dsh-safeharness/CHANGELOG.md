@@ -1,6 +1,15 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.9.2 — 2026-11-17
+
+打包形态修复：**这个包现在是一个真正的 DSH 组合包（bundle）**，装完就能在宿主「插件」页里点开面板。
+
+- **问题（1.9.1 实测发现）**：≤1.9.1 的包只声明了 `dsh.client`，没有 `dsh.bundle.patch`。靠手写 `insert:` 挂载时功能一切正常（`safeharness_status` / 端点 / 账本都对），但宿主不把它当作组合包：`dsh.profile.bundles` 里没有它，「插件」页里没有它的条目页，于是 `settings.plugins.tab` 的五个标签**无处渲染**——桌面 app 里用户根本没有入口点开面板。历史上面板截图全部来自 `dsh web` 起的 web/dev profile，正是这个原因。
+- **修法**：包内新增 `cordis.patch.yml`（`insert: [ { id: safeharness, name: '@upear/dsh-safeharness' } ]`，不带 `config`，让 schema 默认值生效），`package.json` 增加 `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`，并把该文件加进 `files`。这是宿主文档对组合包的定义（*"A bundle is a package whose `package.json` declares `dsh.bundle.patch`"*，与官方包写法一致）。
+- **安装方式随之变简单**：`dsh plugin add` / 桌面 app「添加插件」装完即挂载，**不需要再写 patch**。要覆盖配置时，profile 的 `cordis.patch.yml` 用**按 id 的覆盖**（只写 `id:` + `config:`，不要 `insert:` / `name:`），否则同一 id 会出现两行；覆盖是整体替换该行 `config`。README §3.3 / §3.4 已按此重写。
+- **测试**：45 文件 / 751 用例；新增 `tests/bundle-patch.test.ts`（声明了 `dsh.bundle.patch`、patch 进 `files`、`dsh.client` 仍在、patch 能被 loader 方言解析且只 insert 本包一行），`tests/acceptance-m4.test.ts` 的 `files` 断言同步。
+- **未改**：运行期行为、账本格式、规则装载、面板端点与闸门全部不变——这一版只改打包与文档。
 ## 1.9.1 — 2026-11-17
 
 1.9.0 装机验证时发现的一个真实缺口：**账本新种类没有接进查询工具**。

@@ -1,0 +1,16 @@
+# dsh-safeharness bundle patch.
+#
+# `package.json` declares `dsh.bundle.patch` -> this file, which is what makes the
+# package a DSH *bundle* rather than a bare dependency. Installing it through the
+# app's plugin page records it in the profile's bundle list, mounts the row below,
+# and (because `dsh.client` is also declared) loads the browser half that registers
+# the panel tab.
+#
+# A later layer — the profile's own `cordis.patch.yml` or a `--patch` overlay — may
+# target this row by id, and a patch replaces the row's *whole* `config`. This row
+# therefore carries no config: the plugin's schema defaults apply, and a deployment
+# that wants a judge route, a writable `rules.dir`, or different modes restates the
+# complete config there.
+- insert:
+    - id: safeharness
+      name: '@upear/dsh-safeharness'
