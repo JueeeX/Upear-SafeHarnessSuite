@@ -1368,6 +1368,23 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 ---
 
+### 12.25 1.9.1 账本种类单一来源（2026-11-17）
+
+1.9.0 装机验证时发现：`safeharness_audit_query { kind: "rules_written" }` 被参数校验拒绝。
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V37 | `AuditKind` 是 TS 联合类型，运行期不可枚举 | `surface/tools.ts` 维护了第二份 `AUDIT_KINDS` 数组 |
+| V38 | 1.9.0 只在联合类型里加了 `rules_written`，数组没同步 | 账本写了、工具查不到（面板事件页也不显示 `decision: ok`） |
+
+**决策**：种类列表改成单一来源——`export const AUDIT_KINDS = [...] as const`，`AuditKind` 从中派生，工具枚举直接引用同一数组。顺带把 `safeharness_draft_rule` 的 `next` 文案补上面板落地路径。
+
+**验收**：`tsc` 0 错；**44 文件 / 747 用例**全绿（新增 `tests/audit-kinds.test.ts` + `hooks.test.ts` 的枚举断言）；tarball 337,700 B。证据：`evidence/1.9.1-audit-query-kind.md`。
+
+**仍未做**：1.9.1 桌面安装（需重启）；发布（公开仓库仍 1.8.3）。
+
+---
+
 ## 13. Day-0 接手清单（逐条执行，不要跳）
 
 1. **读**：本文件 §1 / §3 / §5 / §7 / §9。

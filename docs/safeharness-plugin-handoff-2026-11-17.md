@@ -1,4 +1,4 @@
-# DSH SafeHarness 插件交接文档（2026-11-17；桌面 1.8.3，本地 1.9.0 未发布）
+# DSH SafeHarness 插件交接文档（2026-11-17；桌面 1.9.0 已装，本地 1.9.1 待装）
 
 > 读者：**没有任何上下文的后续对话 / 新模型 / 新智能体 / 新同事**。
 > 目标：只读这一份，就能接手开发、验证、发布、答疑；不需要再问原作者。
@@ -12,7 +12,7 @@
 > - **1.8.4 加固**：面板**全端点 POST-only**（其他方法 405 + `Allow: POST`，栅栏先于方法判断）、自定义路由**两存储一次提交**（索引写失败回滚路由与凭据）+ 引用守卫覆盖 `defaultProvider` 等 + `providerConfigurable` 与实际写路径统一、设置写入 **revision CAS**（`settings_conflict`）、面板 settings 日志零回显、**SRI 摘要豁免**（读 `pnpm-lock.yaml` 不再被结果面整条替换）。决策 D58–D61，证据 `evidence/1.8.4-hardening.md`。
 > - **1.9.0 规则落地**：面板「写入并重载」——只写 `rules.dir`、文件名白名单、默认不覆盖、写前用真实 loader 试编译、原子写、账本只记元数据；`rules.dir` 热改后 watcher/重载跟随实时配置。决策 D62（取代 D37 后半段），见 §5.6。
 >
-> 桌面仍是 1.8.3。
+> 桌面已是 **1.9.0**（2026-11-17 装机验证通过：写入 20→21、账本 `rules_written` 无内容、删文件后 watcher 回到 20）。**1.9.1 已打包待装**：修了 `safeharness_audit_query` 的 kind 枚举漏掉 `rules_written`（账本种类改成单一来源），需要再重启装一次。
 
 ---
 
@@ -20,11 +20,9 @@
 
 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 是一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核/语义评审、审批桥、NDJSON 哈希链账本、姿态自检、巡检/通知、规则起草、Web 面板）装进 DSH 的执行生命周期。
 
-当前**已发布版本 1.8.3**，**本地、公开仓库、桌面三处都已对齐**：桌面实测 `safeharness_status` 返回 1.8.3、宿主 `0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`、姿态 **0 FAIL / 0 WARN / 9 OK / 1 SKIP**（`plugin_version_mismatch` 已随 rc.3 钉版一起清掉）。
+当前**已发布版本 1.8.3**（公开仓库 tag `v1.8.3`）；**桌面已装 1.9.0**（2026-11-17 装机验证：`safeharness_status` = 1.9.0、20 规则 / 3 链、姿态 0 FAIL、写入链路端到端通过）；**本地 1.9.1 已打包待装**。宿主 `0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`。
 
-**本地 main 已推进到 1.9.0**（1.8.4 加固 + 1.9.0 规则写入；见文首增量块、plan §12.23/§12.24），但**未发布、未装桌面**——桌面上的 1.8.3 仍是当前对外状态。
-
-没有已知的“加载即失效”缺口。剩余的是**环境项**（真实 webhook、真实人工审批）、**桌面配置**（`rules.dir` 还没配，写入按钮不可用，见 §5.4/§12.1-7）和一个产品决策项（输出面 `enforce`，§12.1-6）。
+**本地 main 已推进到 1.9.1**（1.8.4 加固 + 1.9.0 规则写入 + 1.9.1 账本种类单一来源），**未发布**；公开仓库与已发布 tag 仍停在 1.8.3。<br>没有已知的“加载即失效”缺口。剩余的是**环境项**（真实 webhook、真实人工审批）和一个产品决策项（输出面 `enforce`，§12.1-6），以及 1.9.1 的桌面安装（需再重启一次）。
 
 ---
 
@@ -33,15 +31,15 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | **本地 `1.9.0`（未发布）**；已发布/桌面 = `1.8.3`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 断言） |
+| 当前版本 | **本地 `1.9.1`（未发布，待装桌面）**；桌面 = `1.9.0`；已发布 = `1.8.3`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 断言） |
 | 宿主 | DSH `0.2.2-rc.3`（桌面已升级）；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用 `D:\dsh`；Node `v25.8.2` |
-| 桌面端插件 | **已装 1.8.3**（`C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness`，来自 1.8.3 tarball） |
-| 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.8.3.tgz` |
-| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（**`TGZ=` 已指向 1.9.0**，tarball 已复制到 `plugin-tarballs\`，**尚未执行**；执行前必须完全退出 DSH，含托盘） |
+| 桌面端插件 | **已装 1.9.0**（`C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness`，来自 1.9.0 tarball） |
+| 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.9.0.tgz` |
+| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（**`TGZ=` 已指向 1.9.1**，tarball 已复制，**尚未执行**；执行前必须完全退出 DSH，含托盘） |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`57efcc9`**，tag **`v1.8.3`**（tag 对象 `3d567a7…`） |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **`e22e404`**（1.9.0）/ `d5c3487`（1.8.4）/ `b60c7e1`（1.8.3 文档）；`github` 备份远端 main = `99a9956`，`v1.8.3` 标签已同步 |
-| 测试 | 1.9.0 本机 **43 文件 / 745 用例**；公开树与 CI 口径在发布时重算（1.8.3 为 38 / 691 与 37 / 683） |
-| tarball | 已发布 `dist/upear-dsh-safeharness-1.8.3.tgz`；本地 **`dist/upear-dsh-safeharness-1.9.0.tgz`，337,247 B，sha256 `3C6BFDC1AC3C6D89B1E4A79B42FB9CE1048C0487242C83ACB654B9420DB10687`**（未发布；1.8.4 的 327,369 B tarball 已被 1.9.0 取代） |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **1.9.1**（`git log -1`；前序 `e22e404` 1.9.0 / `9c0b717` 1.9.0 文档 / `d5c3487` 1.8.4 / `b60c7e1` 1.8.3 文档）；`github` 备份远端 main = `99a9956`，`v1.8.3` 标签已同步 |
+| 测试 | 1.9.1 本机 **44 文件 / 747 用例**；公开树与 CI 口径在发布时重算（1.8.3 为 38 / 691 与 37 / 683） |
+| tarball | 已发布 `dist/upear-dsh-safeharness-1.8.3.tgz`；桌面已装 `1.9.0`；本地 **`dist/upear-dsh-safeharness-1.9.1.tgz`，337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E`**（未发布/未安装） |
 | 账本 | `C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson`（NDJSON、sha256 链、零回显；当前约 6.3 MB、seq 8300+） |
 | 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore；1.8.3 见 `1.8.3-draft-diagnostics.md`，1.8.4 见 `1.8.4-hardening.md`，1.9.0 见 `1.9.0-rule-write.md`） |
 | 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（1.8.0 §12.19、1.8.1 §12.20、1.8.2 §12.21、1.8.3 §12.22、1.8.4 §12.23、1.9.0 §12.24） |
@@ -615,9 +613,9 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 
 ## 10. 桌面端现状与升级
 
-- 已装 **1.8.3**：`desktop/node_modules/@upear/dsh-safeharness/package.json` = 1.8.3；profile `package.json` 依赖 = `file:…/upear-dsh-safeharness-1.8.3.tgz`。
-- **1.9.0 已就位、待安装**：`plugin-tarballs\upear-dsh-safeharness-1.9.0.tgz`（337,247 B，sha256 `3C6BFDC1AC3C6D89B1E4A79B42FB9CE1048C0487242C83ACB654B9420DB10687`），`install-safeharness-desktop.cmd` 的 `TGZ=` 已指向它；**安装后需要重启 DSH**，因此这一步会中断当前会话。
-- 桌面 profile 的 `rules.dir` 已在 2026-11-17 配好（`C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建，profile watcher 已热 reconcile，桌面 `POST /safeharness/status` 实测 `rulesDir` 生效、20 规则不变）；1.9.0 装上后「写入并重载」即写这里。
+- 已装 **1.9.0**（2026-11-17 升级）：`desktop/node_modules/@upear/dsh-safeharness/package.json` = 1.9.0；profile 依赖 = `file:…/upear-dsh-safeharness-1.9.0.tgz`；账本 `plugin_loaded` **seq 9254**（`version 1.9.0`、宿主全 rc.3、20 规则 / 3 链）。
+- **1.9.1 已就位、待安装**：`plugin-tarballs\upear-dsh-safeharness-1.9.1.tgz`（337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E`），`install-safeharness-desktop.cmd` 的 `TGZ=` 已指向它；**安装后需要重启 DSH**，会中断当前会话。
+- 桌面 profile 的 `rules.dir` 已配好（`C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建）。**1.9.0 装机后端到端验证**：面板写 `operator-desktop-probe.yaml` → 规则 20 → 21、`rules_written` seq **9269**（file/mode/bytes/rules，**无内容**）；同名再写 → `rule_exists`；删除文件后 watcher 2 秒内回到 20 条（`rules_reloaded` seq **9328**，`trigger: watch`）。测试文件已删除，目录为空。
 - `safeharness_status`：`version 1.8.3`、`host 0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`、judge `liao/gpt-6-luna` 可用。
 - 姿态：**0 FAIL / 0 WARN / 9 OK / 1 SKIP**；`plugin_version_mismatch` 已随 rc.3 钉版清掉（1.8.2 时代是 WARN）。
 - 账本 `plugin_loaded` seq **8271**（`2026-11-17T06:19:03Z`）记录 `version 1.8.3`、宿主全部 rc.3。
@@ -717,7 +715,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 2. **核环境**：`$env:DSH_HOME`（默认 `C:\Users\xiaojue\.dsh`）、`D:\dsh\resources\runtime\cli\bin\dsh.cmd --version`、Node `v25.8.2`、Python（仅 sidecar 需要）。
 3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（1.8.3 基线时只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`；1.8.4 尚未提交时应再加上 `plugins/dsh-safeharness` 与 `docs/` 的本轮改动）；`git log --oneline -3` 应看到 `b60c7e1`、`99a9956`、`8e60d74`；`git remote -v` 确认 `dsh` / `github`，**不要碰 `origin`**。
 4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.3` 应分别指向 `57efcc9…` 与 tag 对象 `3d567a7…`；`v1.8.2`（`6684ee4`）仍保留。
-5. **构建/测试**：按 §7 跑 tsc + vitest，期望 **745 passed**（1.9.0；perf 抖动时单独重跑，实测满载偶发 5.19ms > 5ms，单独重跑 1.2ms 通过）。
+5. **构建/测试**：按 §7 跑 tsc + vitest，期望 **747 passed**（1.9.1；perf 抖动时单独重跑，实测满载偶发 5.19ms > 5ms，单独重跑 1.2ms 通过）。
 6. **看运行态**：调 `safeharness_status` / `safeharness_posture`，确认版本（未升级的桌面是 1.8.3，装过 1.9.0 后是 1.9.0）、20 规则 + 3 链、0 FAIL、`plugin_version_mismatch` OK。
 7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `safeharness_audit_query`；确认 `plugin_loaded.version` 与当前版本一致、`rulesetHash` 存在。
 8. **做一次只读 smoke**：设置 → 内置插件 → SafeHarness，截一张概览/设置图；不要开定时巡检。
@@ -764,7 +762,8 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 
 | 内容 | 位置 |
 |---|---|
-| 1.9.0 状态 | **本地完成、未发布/未装桌面**；规则落地（写入并重载）见 §5.6、决策 D62、plan §12.24、证据 `plugins/dsh-safeharness/evidence/1.9.0-rule-write.md`；本地 tarball 337,247 B，sha256 `3C6BFDC1AC3C6D89B1E4A79B42FB9CE1048C0487242C83ACB654B9420DB10687` |
+| 1.9.1 状态 | **本地完成、未发布/未装桌面**：`AUDIT_KINDS` 单一来源修复（`safeharness_audit_query` 此前不接受 `rules_written`），证据 `plugins/dsh-safeharness/evidence/1.9.1-audit-query-kind.md`；tarball 337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E` |
+| 1.9.0 状态 | **桌面已装并验证**（写入 20→21、`rules_written` seq 9269、watcher 回落 seq 9328）；见 §5.6、决策 D62、plan §12.24、证据 `plugins/dsh-safeharness/evidence/1.9.0-rule-write.md` |
 | 1.8.4 状态 | **本地完成、未发布/未装桌面**；改动与验收见 `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.23，决策 D58–D61，证据 `plugins/dsh-safeharness/evidence/1.8.4-hardening.md`；本地 tarball 327,369 B，sha256 `FF483A911A98733A599F87B05B540C6D81E730BC29B760B7EC05D04E438EB0DC` |
 | 1.8.3 证据 | `plugins/dsh-safeharness/evidence/1.8.3-draft-diagnostics.md`（根因、实测耗时、修复与测试） |
 | 1.8.2 证据 | `plugins/dsh-safeharness/evidence/1.8.2-audit-fixes.md`（四类 P0 修复、测试、桌面双向复验） |

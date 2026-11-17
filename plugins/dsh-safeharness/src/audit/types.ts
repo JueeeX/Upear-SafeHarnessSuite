@@ -4,28 +4,39 @@
  * @module
  */
 
+/**
+ * Every record kind the ledger writes, as one closed list.
+ *
+ * The `AuditKind` type derives from this array, and the `safeharness_audit_query`
+ * tool takes its parameter enum from the same array, so adding a kind here cannot
+ * leave the tool unable to filter on it (which is exactly what happened when
+ * `rules_written` was added in 1.9.0 and the tool kept its own copy of the list).
+ */
+export const AUDIT_KINDS = [
+  'plugin_loaded',
+  'plugin_unloaded',
+  'posture_report',
+  'input_checked',
+  'input_denied',
+  'tool_checked',
+  'tool_denied',
+  'tool_asked',
+  'tool_executed',
+  'tool_result',
+  'tool_result_flagged',
+  'output_reviewed',
+  'approval_asked',
+  'approval_decided',
+  'rules_reloaded',
+  'rules_written',
+  'patrol_report',
+  'invariant_probe',
+  'budget_exceeded',
+  'error',
+] as const
+
 /** Every record kind the ledger writes. Keep this list closed: a typo is a bug. */
-export type AuditKind =
-  | 'plugin_loaded'
-  | 'plugin_unloaded'
-  | 'posture_report'
-  | 'input_checked'
-  | 'input_denied'
-  | 'tool_checked'
-  | 'tool_denied'
-  | 'tool_asked'
-  | 'tool_executed'
-  | 'tool_result'
-  | 'tool_result_flagged'
-  | 'output_reviewed'
-  | 'approval_asked'
-  | 'approval_decided'
-  | 'rules_reloaded'
-  | 'rules_written'
-  | 'patrol_report'
-  | 'invariant_probe'
-  | 'budget_exceeded'
-  | 'error'
+export type AuditKind = (typeof AUDIT_KINDS)[number]
 
 /** Fields every record may carry. Unknown content never appears here as raw text. */
 export interface AuditFields {

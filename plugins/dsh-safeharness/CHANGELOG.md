@@ -1,6 +1,15 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.9.1 — 2026-11-17
+
+1.9.0 装机验证时发现的一个真实缺口：**账本新种类没有接进查询工具**。
+
+- **问题**：`rules_written` 加进了 `AuditKind`，但 `safeharness_audit_query` 工具自己维护了一份 kind 白名单，于是 `kind: "rules_written"` 被参数校验拒绝——记录写进了账本却查不出来（面板事件页也不显示 `decision: ok`，只能手读 NDJSON）。
+- **修法**：把账本种类改成**单一来源** `AUDIT_KINDS`（`as const` 数组），`AuditKind` 从中派生，工具的参数枚举直接引用同一数组——以后再加种类不会再漏。
+- **顺带**：`safeharness_draft_rule` 的 `next` 文案补上 1.9.0 的面板落地路径（人点「写入并重载」），不再只说“自己存文件”。
+- **回归**：新增 `tests/audit-kinds.test.ts`（种类唯一、含 `rules_reloaded` / `rules_written`），并在 `tests/hooks.test.ts` 钉住“工具枚举 == `AUDIT_KINDS`”。
+- **测试**：44 文件 / 747 用例。
 ## 1.9.0 — 2026-11-17
 
 规则落地体验：**起草出来的 YAML 可以在面板里“写入并重载”**，不再需要去 `node_modules` 里粘贴。新增的是**人发起的一条受限写路径**，不是模型可调用的工具。
