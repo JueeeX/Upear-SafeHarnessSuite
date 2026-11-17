@@ -35,8 +35,8 @@
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
 | 当前版本 | **本地 = `1.9.2`（组合包形态，未发布）**；桌面 = `1.9.1`（待装 1.9.2 并重启）；已发布 = `1.9.1`（`1cddce1` / tag `v1.9.1`；`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 断言） |
 | 宿主 | DSH `0.2.2-rc.3`（桌面已升级）；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用 `D:\dsh`；Node `v25.8.2` |
-| 桌面端插件 | **已装 1.9.1**（`C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness`，`package.json` = 1.9.1，来自 1.9.1 tarball；2026-11-17 16:28 重启生效） |
-| 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.9.1.tgz` |
+| 桌面端插件 | **已装 1.9.2、待重启生效**（`profiles/desktop/node_modules/@upear/dsh-safeharness` = 1.9.2，来自 1.9.2 tarball；`dsh.profile.bundles` 已含 `@upear/dsh-safeharness`，profile patch 只剩按 id 的覆盖） |
+| 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.9.2.tgz` |
 | 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 已指向 **1.9.2**，tarball 已复制；但 1.9.2 起推荐用 GUI「添加插件」装——那才会写进 profile 的 bundle 清单，见 §11.17） |
 | 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`1cddce1`**（release 1.9.1），tag **`v1.9.1`**（tag 对象 `61124be…`）；CI `ci` badge = **passing**；2026-11-17 16:33 推送（直连 443 不可达，走本机 `127.0.0.1:7897` 代理） |
 | 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **1.9.1**（`git log -1`；前序 `1203d9c` 验证文档 / `e22e404` 1.9.0 / `9c0b717` 1.9.0 文档 / `d5c3487` 1.8.4 / `b60c7e1` 1.8.3 文档）；`github` 备份远端 main = **`1203d9c`**（+ 本条文档提交），`v1.9.1` 标签已同步 |
@@ -672,7 +672,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
       结论：**不是流程问题，是打包缺件**——宿主文档明确：*"A bundle is a package whose `package.json` declares `dsh.bundle.patch`"*（官方包写法：`"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`）。我们的包只有 `dsh.client`，永远进不了 bundle 清单。
       现场已恢复：`package.json` 从 `.bak-sh191b` 还原（依赖指向 1.9.1 tarball）、`node_modules` 仍是 1.9.1、lockfile 完好；`safeharness_status` = 1.9.1 / 20 规则 / 8/8 接缝 / 0 失败。备份文件保留：`profiles/desktop/{package.json,cordis.patch.yml,pnpm-lock.yaml,pnpm-workspace.yaml}.bak-sh191b`。
     - **1.9.2 计划（拿到面板截图的唯一正路）**：① 包内加 `cordis.patch.yml`（insert 本插件条目，等价于当前 profile 里那几条手工 patch）；② `package.json` 加 `dsh.bundle.patch`；③ 重新打包（版本 1.9.2）；④ GUI「添加插件」装 1.9.2 → 清单出现 SafeHarness 条目；⑤ 删掉 profile `cordis.patch.yml` 里的手工 insert（只留按 id 的 config 覆盖），避免双份加载；⑥ 重启 → 插件页出现条目页与五标签 → 用同一套 headless Edge 截图。
-    - **状态：①②③ 已做（1.9.2，见 `evidence/1.9.2-bundle.md`）**，④⑤⑥ 待做——④ 需要在运行中的 app 里点一次「添加插件」，⑤ 是我能直接改的 profile 文件，⑥ 需要重启（会结束当前会话）。
+    - **状态：①②③④⑤ 已完成（2026-11-17 19:14）**，只差 ⑥ 重启：GUI「添加插件」装 1.9.2 成功（插件页出现「已安装插件 → `@upear/dsh-safeharness`」，详情页 1 运行中 / 当前版本 1.9.2）；但 app **不自动写** `dsh.profile.bundles`，已手工把包名追加进去（6 → 7）；profile patch 的手工 `insert:` 行已删，只留按 id 的覆盖（`preset` / `results` / `output.judge` / `rules.dir` / `draft` 写全），`invariants` / `safeharness-invariant` 仍走 `insert:`。迁移用复制出来的 `profiles/shotcheck` 跑 `dsh --profile shotcheck --dump-config` 离线验证过（exit 0、1592 行、组合包层 `# == @upear/dsh-safeharness` 生效、覆盖值在位），验证后已删除。详见 `evidence/1.9.2-bundle.md` §5。**重启后**应看到「插件」页的 `SafeHarness` 条目页与五个标签。
 
 ---
 

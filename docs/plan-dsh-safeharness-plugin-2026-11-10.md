@@ -1405,7 +1405,9 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 **验收**：`tsc` host/client = 0；**45 文件 / 751 用例**全绿（新增 `tests/bundle-patch.test.ts` 4 条，`acceptance-m4` 的 `files` 断言同步）；tarball `upear-dsh-safeharness-1.9.2.tgz` 338,908 B（137 文件，含 `cordis.patch.yml`），sha256 `24007725B2EBFE2C5F65C7A1EBBB097A82C5CE9FE672AE8382B842CA9B1F07FF`；README §3.3/§3.4/§4.7 与 CHANGELOG 已改。
 
-**待办**：桌面 profile 用 GUI「添加插件」装 1.9.2（这次依赖版本真的变了，能过校验）→ 把 profile `cordis.patch.yml` 里那行手工 `insert: safeharness` 改成按 id 覆盖 → 重启 → 插件页出条目页 → headless 截图存证。
+**桌面迁移（2026-11-17 19:14）**：GUI「添加插件」装 1.9.2 成功（插件页出现「已安装插件」行、详情页 1 运行中 / 1.9.2）；app 不自动写 `dsh.profile.bundles`，已手工追加（6 → 7）；profile patch 的手工 `insert:` 行删除，只留按 id 的覆盖（`preset` / `results` / `output.judge` / `rules.dir` / `draft`），`invariants` 两行保留 `insert:`。迁移先用复制出的 `profiles/shotcheck` 跑 `dsh --profile shotcheck --dump-config` 离线验证（exit 0 / 1592 行 / 组合包层生效 / 覆盖值在位），验证后删除。
+
+**待重启**：重启后应看到「插件」页的 `SafeHarness` 条目页与五个标签，随后用 headless 浏览器截图存证。
 
 ---
 
