@@ -1381,7 +1381,11 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 **验收**：`tsc` 0 错；**44 文件 / 747 用例**全绿（新增 `tests/audit-kinds.test.ts` + `hooks.test.ts` 的枚举断言）；tarball 337,700 B。证据：`evidence/1.9.1-audit-query-kind.md`。
 
-**仍未做**：1.9.1 桌面安装（需重启）；发布（公开仓库仍 1.8.3）。
+**发布**（2026-11-17 16:33 +08:00）：公开仓库 `main` = `1cddce1`、tag `v1.9.1`（tag 对象 `61124be…`），CI `ci` badge = passing；备份远端 `github` `main` = `1203d9c`、tag 已同步。直连 `github.com:443` 仍不可达，推送走本机 `127.0.0.1:7897` 代理（`-c http.proxy=…`）。
+
+**桌面安装**（2026-11-17 16:28）：`plugin_loaded` seq **9423** 起为 1.9.1（20 规则 / 3 链、`startup_ms 7`），姿态 0 FAIL / 0 WARN / 9 OK / 1 SKIP；`safeharness_audit_query { kind: "rules_written" }` 活体返回 seq 9269（枚举修复生效，且记录里仍无规则正文）。
+
+**仍未做**：输出面 `output: enforce`（产品决策）、两个环境项（真实 webhook、真实人工审批）。
 
 ---
 

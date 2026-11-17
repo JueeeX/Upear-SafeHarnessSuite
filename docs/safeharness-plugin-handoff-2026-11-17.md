@@ -1,4 +1,4 @@
-# DSH SafeHarness 插件交接文档（2026-11-17；桌面 1.9.0 已装，本地 1.9.1 待装）
+# DSH SafeHarness 插件交接文档（2026-11-17；桌面 1.9.1 已装，1.9.1 已发布）
 
 > 读者：**没有任何上下文的后续对话 / 新模型 / 新智能体 / 新同事**。
 > 目标：只读这一份，就能接手开发、验证、发布、答疑；不需要再问原作者。
@@ -7,12 +7,14 @@
 > 上一版入口是 [`safeharness-plugin-handoff-2026-11-12.md`](safeharness-plugin-handoff-2026-11-12.md)（1.8.2 基线，本文已取代它）。
 > 内部文档，**不要提交到公开仓库**（公开仓库只发布 `plugins/dsh-safeharness` 的可发布子树）。
 
-> **本地增量（2026-11-17，1.8.4 + 1.9.0，未发布 / 未装桌面）**
+> **本轮增量（2026-11-17，1.8.4 + 1.9.0 + 1.9.1，均已发布并装到桌面）**
 >
 > - **1.8.4 加固**：面板**全端点 POST-only**（其他方法 405 + `Allow: POST`，栅栏先于方法判断）、自定义路由**两存储一次提交**（索引写失败回滚路由与凭据）+ 引用守卫覆盖 `defaultProvider` 等 + `providerConfigurable` 与实际写路径统一、设置写入 **revision CAS**（`settings_conflict`）、面板 settings 日志零回显、**SRI 摘要豁免**（读 `pnpm-lock.yaml` 不再被结果面整条替换）。决策 D58–D61，证据 `evidence/1.8.4-hardening.md`。
 > - **1.9.0 规则落地**：面板「写入并重载」——只写 `rules.dir`、文件名白名单、默认不覆盖、写前用真实 loader 试编译、原子写、账本只记元数据；`rules.dir` 热改后 watcher/重载跟随实时配置。决策 D62（取代 D37 后半段），见 §5.6。
 >
-> 桌面已是 **1.9.0**（2026-11-17 装机验证通过：写入 20→21、账本 `rules_written` 无内容、删文件后 watcher 回到 20）。**1.9.1 已打包待装**：修了 `safeharness_audit_query` 的 kind 枚举漏掉 `rules_written`（账本种类改成单一来源），需要再重启装一次。
+> > - **1.9.1 账本种类单一来源**：`safeharness_audit_query` 此前拒绝 `kind: "rules_written"`（联合类型不可枚举，工具侧另维护一份数组）；改成 `AUDIT_KINDS as const` 派生后，桌面 1.9.1 上已能直接回查 seq 9269。见 §12.25。
+>
+> 桌面已是 **1.9.1**（2026-11-17 16:28 重启生效，`plugin_loaded` seq 9423；写入链路在 1.9.0 时已端到端验证：写入 20→21、账本 `rules_written` 无正文、删文件后 watcher 回到 20）。**1.9.1 已发布**：公开 `main = 1cddce1`、tag `v1.9.1`、CI `ci` = passing。
 
 ---
 
@@ -20,9 +22,9 @@
 
 `F:\AgentSecurity\Upear\plugins\dsh-safeharness` 是一个 **DSH（DeepSeek Harness）profile 级 Cordis 安全插件** `@upear/dsh-safeharness`，把 SafeHarness 的安全语义（输入拦截、工具管控、结果守卫、输出复核/语义评审、审批桥、NDJSON 哈希链账本、姿态自检、巡检/通知、规则起草、Web 面板）装进 DSH 的执行生命周期。
 
-当前**已发布版本 1.8.3**（公开仓库 tag `v1.8.3`）；**桌面已装 1.9.0**（2026-11-17 装机验证：`safeharness_status` = 1.9.0、20 规则 / 3 链、姿态 0 FAIL、写入链路端到端通过）；**本地 1.9.1 已打包待装**。宿主 `0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`。
+当前**已发布版本 1.9.1**（公开仓库 `main = 1cddce1`、tag `v1.9.1`，CI `ci` = passing）；**桌面已装 1.9.1**（2026-11-17 16:28 重启后生效，`plugin_loaded` seq **9423**：`version = 1.9.1`、20 规则 / 3 链、启动 7 ms；姿态 0 FAIL / 0 WARN / 9 OK / 1 SKIP；`safeharness_audit_query { kind: "rules_written" }` 修复后可直接回查 seq 9269）；**1.9.1 已发布**（公开 `main = 1cddce1`、tag `v1.9.1`、CI passing）。宿主 `0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`。
 
-**本地 main 已推进到 1.9.1**（1.8.4 加固 + 1.9.0 规则写入 + 1.9.1 账本种类单一来源），**未发布**；公开仓库与已发布 tag 仍停在 1.8.3。<br>没有已知的“加载即失效”缺口。剩余的是**环境项**（真实 webhook、真实人工审批）和一个产品决策项（输出面 `enforce`，§12.1-6），以及 1.9.1 的桌面安装（需再重启一次）。
+**本地 main 已推进到 1.9.1**（1.8.4 加固 + 1.9.0 规则写入 + 1.9.1 账本种类单一来源），**2026-11-17 16:33 已发布**；公开仓库 `main` = `1cddce1`、tag `v1.9.1`。<br>没有已知的“加载即失效”缺口。剩余的是**环境项**（真实 webhook、真实人工审批）、一个产品决策项（输出面 `enforce`，§12.1-6），以及 1.9.1 的桌面安装（需再重启一次）。
 
 ---
 
@@ -31,26 +33,27 @@
 | 项 | 值 |
 |---|---|
 | 插件包 | `F:\AgentSecurity\Upear\plugins\dsh-safeharness`（包名 `@upear/dsh-safeharness`） |
-| 当前版本 | **本地 `1.9.1`（未发布，待装桌面）**；桌面 = `1.9.0`；已发布 = `1.8.3`（`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 断言） |
+| 当前版本 | **本地 / 桌面 = `1.9.1`（已发布、已安装）**；已发布 = `1.9.1`（`1cddce1` / tag `v1.9.1`；`package.json` / `src/version.ts` / README 三处一致，`tests/version.test.ts` 断言） |
 | 宿主 | DSH `0.2.2-rc.3`（桌面已升级）；CLI `D:\dsh\resources\runtime\cli\bin\dsh.cmd`；桌面应用 `D:\dsh`；Node `v25.8.2` |
-| 桌面端插件 | **已装 1.9.0**（`C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness`，来自 1.9.0 tarball） |
-| 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.9.0.tgz` |
-| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（**`TGZ=` 已指向 1.9.1**，tarball 已复制，**尚未执行**；执行前必须完全退出 DSH，含托盘） |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`57efcc9`**，tag **`v1.8.3`**（tag 对象 `3d567a7…`）；**1.9.1 已预演待推**（worktree `sh-public-191`，leaks 0，41 / 726+3），2026-11-17 16:20 GitHub 不可达 |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **1.9.1**（`git log -1`；前序 `e22e404` 1.9.0 / `9c0b717` 1.9.0 文档 / `d5c3487` 1.8.4 / `b60c7e1` 1.8.3 文档）；`github` 备份远端 main = `99a9956`，`v1.8.3` 标签已同步 |
+| 桌面端插件 | **已装 1.9.1**（`C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness`，`package.json` = 1.9.1，来自 1.9.1 tarball；2026-11-17 16:28 重启生效） |
+| 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.9.1.tgz` |
+| 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 指向 1.9.1，**已执行**；升级时必须完全退出 DSH，含托盘） |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`1cddce1`**（release 1.9.1），tag **`v1.9.1`**（tag 对象 `61124be…`）；CI `ci` badge = **passing**；2026-11-17 16:33 推送（直连 443 不可达，走本机 `127.0.0.1:7897` 代理） |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **1.9.1**（`git log -1`；前序 `1203d9c` 验证文档 / `e22e404` 1.9.0 / `9c0b717` 1.9.0 文档 / `d5c3487` 1.8.4 / `b60c7e1` 1.8.3 文档）；`github` 备份远端 main = **`1203d9c`**（+ 本条文档提交），`v1.9.1` 标签已同步 |
 | 测试 | 1.9.1 本机 **44 文件 / 747 用例**；公开树与 CI 口径在发布时重算（1.8.3 为 38 / 691 与 37 / 683） |
-| tarball | 已发布 `dist/upear-dsh-safeharness-1.8.3.tgz`；桌面已装 `1.9.0`；本地 **`dist/upear-dsh-safeharness-1.9.1.tgz`，337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E`**（未发布/未安装） |
+| tarball | 已发布 `dist/upear-dsh-safeharness-1.8.3.tgz`；桌面已装 `1.9.1`；本地 **`dist/upear-dsh-safeharness-1.9.1.tgz`，337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E`**（已发布、已安装） |
 | 账本 | `C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson`（NDJSON、sha256 链、零回显；当前约 6.3 MB、seq 8300+） |
-| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore；1.8.3 见 `1.8.3-draft-diagnostics.md`，1.8.4 见 `1.8.4-hardening.md`，1.9.0 见 `1.9.0-rule-write.md`） |
-| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（1.8.0 §12.19、1.8.1 §12.20、1.8.2 §12.21、1.8.3 §12.22、1.8.4 §12.23、1.9.0 §12.24） |
+| 证据 | `plugins/dsh-safeharness/evidence/`（内部，gitignore；1.8.3 见 `1.8.3-draft-diagnostics.md`，1.8.4 见 `1.8.4-hardening.md`，1.9.0 见 `1.9.0-rule-write.md`，1.9.1 见 `1.9.1-audit-query-kind.md`） |
+| 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md`（1.8.0 §12.19、1.8.1 §12.20、1.8.2 §12.21、1.8.3 §12.22、1.8.4 §12.23、1.9.0 §12.24、1.9.1 §12.25） |
 | 公开 README | 插件 README 的 §4.7（面板）、§4.8（顺序/覆盖/评审模型）是给用户的正式说明 |
 
 **2026-11-17 当天实测状态**（`safeharness_status` + `safeharness_posture`）：
 
-- `version: 1.8.3`，`preset: balanced`，`rulesetHash: d53dedc1652b594a…`，`ruleCount: 20`，`chainCount: 3`
+- `version: 1.9.1`，`preset: balanced`，`rulesetHash: d53dedc1652b594a…`，`ruleCount: 20`，`chainCount: 3`，`uptimeMs ≈ 817 000`（≈13.6 min），`sessions: 15`，`judge = liao / gpt-6-luna`
 - `modes`：`input: enforce` / `tools: enforce` / `results: enforce` / `output: warn` / `approval: delegate`
-- 账本 `plugin_loaded`（seq **8271**，`2026-11-17T06:19:03Z`）`version = 1.8.3`、宿主全部 `0.2.2-rc.3`
-- 姿态：`sandbox_danger_full_access` OK、`approval_never` SKIP、`hmr_enabled` OK、`rules_loaded` OK、`ledger_writable` OK、`ledger_chain_ok` OK、`output_guard_off` OK、`judge_unavailable` OK、`plugin_version_mismatch` OK、`engine_sidecar_unavailable` OK
+- 账本 `plugin_loaded`（seq **9423**，`2026-11-17T08:28:00Z`）`version = 1.9.1`、宿主全部 `0.2.2-rc.3`、`startup_ms: 7`；`ledger.records = 96` 是本进程追加计数，`ledger_chain_ok` 由姿态确认
+- 姿态：**0 FAIL / 0 WARN / 9 OK / 1 SKIP**（`approval_never` 仍 SKIP，需带会话复跑；其余全 OK：`sandbox_*`、`rules_loaded` 20、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`）
+- 1.9.1 修复的活体验证：`safeharness_audit_query { kind: "rules_written" }` 返回 seq **9269**（`file` / `mode: create` / `bytes: 202` / `rules: 21` / `chains: 3`，**无规则正文**）
 
 ---
 
@@ -485,7 +488,7 @@ npm pack --pack-destination dist
 | `origin` | `https://github.com/liu-yang-maker/SafeHarness.git` | **上游，绝不要 push** |
 | `gitcode` | `git@gitcode.com:Jue_Xiao/Upear.git` | 另一个远端，本流程不使用 |
 
-### 8.2 标准步骤（1.8.3 实际执行过）
+### 8.2 标准步骤（1.8.3 与 1.9.1 实际执行过）
 
 1. 本地 `main` 提交功能 + 文档；工作树只留其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`（**不要 add/删**）。
 2. `git fetch dsh main`；从 `dsh/main` 建发布 worktree：
@@ -548,18 +551,20 @@ git worktree remove <worktree> --force
 - 删 `tools/` 目录前先确认 `tools/agentprobe` 是 tracked；误删后 `git restore --source=HEAD -- tools`。
 - CRLF 警告很多，不要手工修；`git add -A` 后 diff 会归一化。
 - 公开仓库 tag 对象和本地 tag 共享；在主仓 push tag 即可。
-- 本机 `api.github.com` 超时，CI runs 状态需要在网页确认。
+- 本机 `api.github.com` 匿名访问会被代理出口 IP 限流（403）；要看 CI 就抓 workflow badge（`.../actions/workflows/ci.yml/badge.svg?branch=main`，绿=passing），或网页上看。
 - GitHub push 偶发 `Connection was reset` / timeout：加 `-c http.version=HTTP/1.1` 重试通常能过。
 - **已发布的 tag 不要重写**；修复只发新版本。
 
-**2026-11-17 1.9.1 发布预演（已做到推之前一步）**：`git fetch dsh main` 当时**连不上 github.com:443**（`Failed to connect … after 22328 ms`），所以 `dsh/main` 仍是缓存的 `57efcc9`。公开树已按 §8.2 在 `C:\Users\xiaojue\.codex\worktrees\sh-public-191`（分支 `release/1.9.1`）预演完成：
+**2026-11-17 1.9.1 发布（已执行，16:33 完成）**：直连 `github.com:443` 仍不通（DNS 正常、TCP 443 被墙、系统代理 `ProxyEnable=0`），但本机 `127.0.0.1:7897`（Clash 端口）在监听——给 git 加一条 `http.proxy` / `https.proxy` 指向它就通了（`ls-remote` 先验，再推）。公开树在 `C:\Users\xiaojue\.codex\worktrees\sh-public-191`（分支 `release/1.9.1`）：
 
-- `publish-public.mjs --target <worktree>` → 116 文件、跳过 8 个内部资产；
-- junction `node_modules` → 主仓；`tsc -p tsconfig.json --noEmit` = 0；`build-client.mjs` 成功；
-- `vitest run` = **41 文件 / 726 passed + 3 skipped**；
-- 删 `lib/` 后 `--check` → **leaks: 0**；worktree 内 `package.json` = 1.9.1、无 `evidence/`。
+- `publish-public.mjs --target <worktree>` 刷新 → 116 文件、跳过 8 个内部资产（重跑是幂等的：83 条 CRLF 差异、4 个新文件）；
+- junction `node_modules` → 主仓；`tsc -p tsconfig.json --noEmit` = 0；`build-client.mjs` 成功；`vitest run` = **41 文件 / 726 passed + 3 skipped**；
+- 删 `lib/` 后 `--check` → **leaks: 0**；`git add -A` → **23 文件 / +1811 −161**（其余是 CRLF 归一化）→ commit `1cddce1`；
+- `git push dsh HEAD:main` → `57efcc9..1cddce1`；`git tag -a v1.9.1`（对象 `61124be…`）→ `git push dsh v1.9.1`；
+- 主仓 `git push github main` → `99a9956..1203d9c`、`git push github v1.9.1`；
+- 远端核对：`dsh` `main = 1cddce1`、tag `= 61124be`；`github` `main = 1203d9c`、tag 同步；`ci` badge = **passing**。
 
-网络恢复后**只差**：`cd` 进该 worktree → `git add -A` → commit → `git push dsh HEAD:main` → `git tag -a v1.9.1 -m "dsh-safeharness 1.9.1"` → `git push dsh v1.9.1`（失败可加 `-c http.version=HTTP/1.1`）→ 主仓 `git push github main` / `git push github v1.9.1`。
+**本次新坑（下次照做）**：直连 GitHub 挂着时先看 `Test-NetConnection github.com -Port 443` 与注册表 `Internet Settings` 的 `ProxyServer`，有本机代理端口就直接给 git 加 `http.proxy` 参数，别去改全局配置。
 
 ---
 
@@ -622,12 +627,11 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 
 ## 10. 桌面端现状与升级
 
-- 已装 **1.9.0**（2026-11-17 升级）：`desktop/node_modules/@upear/dsh-safeharness/package.json` = 1.9.0；profile 依赖 = `file:…/upear-dsh-safeharness-1.9.0.tgz`；账本 `plugin_loaded` **seq 9254**（`version 1.9.0`、宿主全 rc.3、20 规则 / 3 链）。
-- **1.9.1 已就位、待安装**：`plugin-tarballs\upear-dsh-safeharness-1.9.1.tgz`（337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E`），`install-safeharness-desktop.cmd` 的 `TGZ=` 已指向它；**安装后需要重启 DSH**，会中断当前会话。
-- 桌面 profile 的 `rules.dir` 已配好（`C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建）。**1.9.0 装机后端到端验证**：面板写 `operator-desktop-probe.yaml` → 规则 20 → 21、`rules_written` seq **9269**（file/mode/bytes/rules，**无内容**）；同名再写 → `rule_exists`；删除文件后 watcher 2 秒内回到 20 条（`rules_reloaded` seq **9328**，`trigger: watch`）。测试文件已删除，目录为空。
-- `safeharness_status`：`version 1.8.3`、`host 0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`、judge `liao/gpt-6-luna` 可用。
+- 已装 **1.9.1**（2026-11-17 16:28 重启生效）：`desktop/node_modules/@upear/dsh-safeharness/package.json` = 1.9.1；profile 依赖 = `file:…/upear-dsh-safeharness-1.9.1.tgz`；账本 `plugin_loaded` **seq 9423**（`version 1.9.1`、宿主全 rc.3、20 规则 / 3 链、`startup_ms 7`）。
+- **1.9.1 已发布**：公开 `main = 1cddce1`、tag `v1.9.1`（tag 对象 `61124be…`），CI `ci` badge = passing；备份远端 `github` `main = 1203d9c`、tag 已同步。
+- 桌面 profile 的 `rules.dir` 已配好（`C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建）。**1.9.0 装机后端到端验证**：面板写 `operator-desktop-probe.yaml` → 规则 20 → 21、`rules_written` seq **9269**（file/mode/bytes/rules，**无内容**）；同名再写 → `rule_exists`；删除文件后 watcher 2 秒内回到 20 条（`rules_reloaded` seq **9328**，`trigger: watch`）。测试文件已删除，目录为空；1.9.1 上 `safeharness_audit_query { kind: "rules_written" }` 可直接回查 seq 9269。
+- `safeharness_status`：`version 1.9.1`、`host 0.2.2-rc.3`、8/8 接缝、`input/tools/results = enforce`、`output = warn`、`approval = delegate`、judge `liao/gpt-6-luna` 可用。
 - 姿态：**0 FAIL / 0 WARN / 9 OK / 1 SKIP**；`plugin_version_mismatch` 已随 rc.3 钉版清掉（1.8.2 时代是 WARN）。
-- 账本 `plugin_loaded` seq **8271**（`2026-11-17T06:19:03Z`）记录 `version 1.8.3`、宿主全部 rc.3。
 
 **重装/升级步骤**（以后每次发版同样适用）：完全退出 DSH（含托盘）→ 双击 `install-safeharness-desktop.cmd`（确认 `TGZ=` 指向新 tarball）→ 重启 → 用 `safeharness_status` 的 `version` 与账本 `plugin_loaded.version` 双向确认。
 
@@ -647,14 +651,14 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 6. **设置写入有 revision CAS（1.8.4）**：面板把读到的 `revision` 作为 `expectedRevision` 回传，宿主拒绝过期写入并映射为 `settings_conflict`；宿主 `describe()` 不暴露 revision 的旧构建退化为 last-writer-wins。
 7. **`llm-pi-ai` 被 home patch / `--patch` overlay 覆盖时**，`settings.update('llm-pi-ai')` 可能被宿主拒绝（teammate 在 overlay profile 实测到）；正常 profile 可用。添加自定义模型失败时不会破坏现有配置。
 8. **面板动作有限**：**1.9.0 起可写 `rules.dir` 下的一个规则文件**（人确认，见 §5.6；绝不写 packaged `rules/`）、不做通用调度、不提供 provider 编辑（只能添加/删除同名重建）；导出只在浏览器端保存。
-9. **CI 状态未在本地读取**（`api.github.com` 超时）；push 成功，runs 需要在网页确认。
+9. **CI 状态**：本机 `api.github.com` 匿名访问被代理出口 IP 限流（403），改读 workflow badge 确认 `ci` = **passing**（`main`，2026-11-17 16:40）；具体 run 列表仍建议在网页上看一眼。
 10. **结果层强制拦截的代价（1.8.2 收窄，1.8.4 再放行 SRI）**：`credential_assignment` 不再把 `apiKey: z.string()`、`token: process.env.X` 这类声明当凭据；含真实凭据形态的结果仍会被整条替换。输出层仍是 `warn`，若把结果层关掉，模型仍可能把密钥写进回答。1.8.4 起 `sha1-` / `sha256-` / `sha384-` / `sha512-` 前缀的 SRI 摘要豁免熵检测，读 `pnpm-lock.yaml` 不再被整条拦截；无前缀的同类令牌仍会命中。
 11. **侦察命令不单独拦截**：`whoami` / `hostname` / `ipconfig` / `systeminfo` / `net user` 这类身份与环境侦察不在结果扫描的形态里（只认凭据与注入标记），工具面也没有命令级分类；单条属低危，但在不可信内容诱导下是外发前奏，且没有“侦察→外发”的链式规则。**用户 2026-11-12 明确不做**命令级 recon 分类与 egress 收紧（D51）。
 12. **面板/provider 的 P1 缺口已关闭（1.8.4）**：① `addProvider` 索引写失败现在回滚路由与凭据并返回 `provider_index_failed`；② 删除守卫扫描 `llm-pi-ai` 里所有引用（含 `defaultProvider`）；③ `providerConfigurable` 要求 `update` 与 `mutate` 都存在；④ 全端点 POST-only、方法违规 405 + `Allow: POST`（栅栏先于方法判断）；⑤ 面板 settings 日志只记错误名/机器码/长度。仍存在的相关限制：面板不写规则文件（§5.6 / D57）、不做通用调度、不提供 provider 编辑（只能删除后重建）。
 13. **宿主已是 0.2.2-rc.3**：1.8.3 运行时 `PINNED_VERSIONS` = rc.3（构建期类型仍为 rc.1）；`engines.dsh` 仍是 `>=0.2.2-rc.1 <0.3.0`，rc.1/rc.2 主机仍可安装但会看到 `plugin_version_mismatch` WARN。
-14. **发布状态**：1.8.2（`6684ee4` / `v1.8.2`）与 1.8.3（`57efcc9` / `v1.8.3`）均已发布；`github` 备份已同步。CI runs 仍需网页确认。
+14. **发布状态**：1.8.2（`6684ee4` / `v1.8.2`）、1.8.3（`57efcc9` / `v1.8.3`）、**1.9.1（`1cddce1` / `v1.9.1`，CI passing）** 均已发布；`github` 备份已同步到 `1203d9c`。1.9.1 公开树同时包含 1.8.4 / 1.9.0 / 1.9.1 三轮改动。
 15. **规则起草依赖模型路由的延迟**：1.8.3 已把超时放宽到 60s、输出上限 2048，并把失败原因拆开显示；但起草仍是一次真实模型调用（实测 5.8s / 6.1s / **18.9s**），没有自动重试，也不会回退到本地启发式。失败时看面板提示或账本 `invariant_probe`（`reason_code: panel_draft`，`labels.status` 为 `timeout` / `empty` / `bad_json` / `invalid` / `error`）。
-16. **规则落地仍是手工流程**：见 §5.6；这是 2026-11-17 用户明确抱怨的体验点，1.9.0 首选改进。
+16. **规则落地已进面板（1.9.0）**：面板「规则」页填文件名 → 确认 → 写 `rules.dir` 下的一个文件并热重载，见 §5.6；仍不支持在面板里编辑已有文件的正文、不支持删除文件（删除请直接用文件系统，watcher 会自动回落）、不写 packaged `rules/`。
 
 ---
 
@@ -668,7 +672,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 4. ~~**`status` 收紧**~~ **已完成（1.8.4，D58）**：全端点 POST-only、错误方法 405、栅栏先于方法判断；面板 logger 已脱敏。
 5. ~~**SRI 前缀豁免**~~ **已完成（1.8.4，D61）**：`^sha(?:1|256|384|512)-` 跳过熵检测，读 lockfile 不再被拦。
 6. **输出面凭据规则 + `output: enforce`**（产品决策）：当前 `results` 只保护“结果→模型”，不保护“模型→用户”；开启前评估误报与流式代价。
-7. **`rules.dir` 默认化**：在桌面 profile 里把 `rules.dir` 配好（`C:\Users\xiaojue\.dsh\safeharness\rules`）。**这是 1.9.0 写入按钮的前置**（没有 `rules.dir` 就没有合法写入目标）；配好后重启一次。
+7. ~~**`rules.dir` 默认化**~~ **已完成（2026-11-17）**：桌面 profile 两处块都配了 `C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建，重启后生效（面板载荷 `rulesDir` 已显示该路径）。
 8. ~~**`rules.dir` 热改后 watcher/面板重载跟随运行时目录**~~ **已完成（1.9.0）**：面板重载与 watcher 都读实时配置，watcher 随目录迁移。
 
 ### 12.2 环境项（需要用户配合）
@@ -722,10 +726,10 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 
 1. **读**：本文 §0–§12；需要历史细节再读旧 handoff 与 README §4.7/§4.8。
 2. **核环境**：`$env:DSH_HOME`（默认 `C:\Users\xiaojue\.dsh`）、`D:\dsh\resources\runtime\cli\bin\dsh.cmd --version`、Node `v25.8.2`、Python（仅 sidecar 需要）。
-3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（1.8.3 基线时只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`；1.8.4 尚未提交时应再加上 `plugins/dsh-safeharness` 与 `docs/` 的本轮改动）；`git log --oneline -3` 应看到 `b60c7e1`、`99a9956`、`8e60d74`；`git remote -v` 确认 `dsh` / `github`，**不要碰 `origin`**。
-4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.8.3` 应分别指向 `57efcc9…` 与 tag 对象 `3d567a7…`；`v1.8.2`（`6684ee4`）仍保留。
+3. **核仓库**：`git -C F:\AgentSecurity\Upear status --short`（当前基线只有其他会话的 `docs/deploy-patrol.md`、`outputs/`、`src/version.ts`）；`git log --oneline -3` 应看到 1.9.1 的提交（`a875a45`、`1203d9c` 及后续文档提交）；`git remote -v` 确认 `dsh` / `github`，**不要碰 `origin`**。
+4. **核发布**：`git ls-remote dsh refs/heads/main refs/tags/v1.9.1` 应分别指向 `1cddce1…` 与 tag 对象 `61124be…`；`v1.8.3`（`57efcc9`）、`v1.8.2`（`6684ee4`）仍保留。GitHub 直连不通时加本机代理（§8.2 末尾）。
 5. **构建/测试**：按 §7 跑 tsc + vitest，期望 **747 passed**（1.9.1；perf 抖动时单独重跑，实测满载偶发 5.19ms > 5ms，单独重跑 1.2ms 通过）。
-6. **看运行态**：调 `safeharness_status` / `safeharness_posture`，确认版本（未升级的桌面是 1.8.3，装过 1.9.0 后是 1.9.0）、20 规则 + 3 链、0 FAIL、`plugin_version_mismatch` OK。
+6. **看运行态**：调 `safeharness_status` / `safeharness_posture`，确认版本 = **1.9.1**、20 规则 + 3 链、0 FAIL、`plugin_version_mismatch` OK。
 7. **看账本**：`C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson` 尾部，或 `safeharness_audit_query`；确认 `plugin_loaded.version` 与当前版本一致、`rulesetHash` 存在。
 8. **做一次只读 smoke**：设置 → 内置插件 → SafeHarness，截一张概览/设置图；不要开定时巡检。
 9. **试一次规则落地**（1.9.0 起）：面板「规则 → AI 起草」→「写入并重载」→ 看 `ruleCount` 变化与账本 `rules_written` / `rules_reloaded` → 触发一次 → 在账本看 `rule_ids` → 删除文件并确认回到原条数。
@@ -771,9 +775,9 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 
 | 内容 | 位置 |
 |---|---|
-| 1.9.1 状态 | **本地完成、未发布/未装桌面**：`AUDIT_KINDS` 单一来源修复（`safeharness_audit_query` 此前不接受 `rules_written`），证据 `plugins/dsh-safeharness/evidence/1.9.1-audit-query-kind.md`；tarball 337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E` |
-| 1.9.0 状态 | **桌面已装并验证**（写入 20→21、`rules_written` seq 9269、watcher 回落 seq 9328）；见 §5.6、决策 D62、plan §12.24、证据 `plugins/dsh-safeharness/evidence/1.9.0-rule-write.md` |
-| 1.8.4 状态 | **本地完成、未发布/未装桌面**；改动与验收见 `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.23，决策 D58–D61，证据 `plugins/dsh-safeharness/evidence/1.8.4-hardening.md`；本地 tarball 327,369 B，sha256 `FF483A911A98733A599F87B05B540C6D81E730BC29B760B7EC05D04E438EB0DC` |
+| 1.9.1 状态 | **已发布、桌面已装并活体验证**：`AUDIT_KINDS` 单一来源修复（`safeharness_audit_query` 此前不接受 `rules_written`），公开 `main = 1cddce1`、tag `v1.9.1`（`61124be…`）、CI `ci` = passing；桌面 `plugin_loaded` seq 9423 起为 1.9.1，`kind: "rules_written"` 查询返回 seq 9269。证据 `plugins/dsh-safeharness/evidence/1.9.1-audit-query-kind.md`；tarball 337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E` |
+| 1.9.0 状态 | **桌面已装并验证**（写入 20→21、`rules_written` seq 9269、watcher 回落 seq 9328）；见 §5.6、决策 D62、plan §12.24、证据 `plugins/dsh-safeharness/evidence/1.9.0-rule-write.md`；1.9.1 的公开树一并包含 |
+| 1.8.4 状态 | **随 1.9.1 公开**（公开树 = 1.9.1 全量快照）；改动与验收见 `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.23，决策 D58–D61，证据 `plugins/dsh-safeharness/evidence/1.8.4-hardening.md`；本地 tarball 327,369 B，sha256 `FF483A911A98733A599F87B05B540C6D81E730BC29B760B7EC05D04E438EB0DC` |
 | 1.8.3 证据 | `plugins/dsh-safeharness/evidence/1.8.3-draft-diagnostics.md`（根因、实测耗时、修复与测试） |
 | 1.8.2 证据 | `plugins/dsh-safeharness/evidence/1.8.2-audit-fixes.md`（四类 P0 修复、测试、桌面双向复验） |
 | 1.8.1 证据 | `plugins/dsh-safeharness/evidence/1.8.1-results-enforce.md`（含前后账本对照与真机验证） |
@@ -782,6 +786,8 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 | 研究笔记 | `docs/1.7.0-notes-q4-q5.md`（顺序/覆盖/judge 模型） |
 | 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.19–§12.23 |
 | 旧交接 | `docs/safeharness-plugin-handoff-2026-11-11.md`（历史坑与早期决策）、`…-2026-11-12.md`（1.8.2 基线） |
+| 1.9.1 本地提交 | `a875a45`（枚举单一来源）、`1203d9c`（1.9.0 桌面验证 + 1.9.1 发布预演文档），以及本条文档提交 |
+| 1.9.1 公开提交 | `1cddce1`，tag `v1.9.1`（tag 对象 `61124be…`）；`ci` badge = passing |
 | 1.8.3 本地提交 | `8e60d74`（起草诊断 + 默认值）、`99a9956`（发布文档） |
 | 1.8.3 公开提交 | `57efcc9`，tag `v1.8.3`（tag 对象 `3d567a7…`） |
 | 1.8.3 tarball | 321,683 B，sha256 `D77E41D487C92031C16B049DCA4F2EB54FF11F8C5B3A0438779730683163320B` |
