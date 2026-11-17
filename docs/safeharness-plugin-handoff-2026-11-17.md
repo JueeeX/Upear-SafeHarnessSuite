@@ -673,7 +673,9 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
       现场已恢复：`package.json` 从 `.bak-sh191b` 还原（依赖指向 1.9.1 tarball）、`node_modules` 仍是 1.9.1、lockfile 完好；`safeharness_status` = 1.9.1 / 20 规则 / 8/8 接缝 / 0 失败。备份文件保留：`profiles/desktop/{package.json,cordis.patch.yml,pnpm-lock.yaml,pnpm-workspace.yaml}.bak-sh191b`。
     - **1.9.2 计划（拿到面板截图的唯一正路）**：① 包内加 `cordis.patch.yml`（insert 本插件条目，等价于当前 profile 里那几条手工 patch）；② `package.json` 加 `dsh.bundle.patch`；③ 重新打包（版本 1.9.2）；④ GUI「添加插件」装 1.9.2 → 清单出现 SafeHarness 条目；⑤ 删掉 profile `cordis.patch.yml` 里的手工 insert（只留按 id 的 config 覆盖），避免双份加载；⑥ 重启 → 插件页出现条目页与五标签 → 用同一套 headless Edge 截图。
     - **状态：①②③④⑤⑥ 全部完成，唯独"面板标签"这一眼还没看到（2026-11-17 19:25 重启后）**：`safeharness_status` = **1.9.2**、姿态 0 FAIL；GUI「插件」页出现 **「已安装插件 → `@upear/dsh-safeharness`」**（详情页 *1 运行中 / 1.9.2*），浏览器也确实以 200 拉取并执行了 `@upear/dsh-safeharness/client.js`；但插件页标签栏仍只有「已安装 / 发现」。
-    - **卡点（重要）**：`settings.plugins.tab` 的宿主是**设置（Settings）里的「插件」分区**，而桌面端设置是 **Electron 原生对话框**——页面 DOM 里根本没有“设置”入口（整页 `innerText` 的 `设置` 命中数为 0，点「更多」/「账号菜单」不弹菜单，页内派发 `Ctrl+,` 无人响应），headless 打不开。**因此面板标签只能由真机窗口确认**：`Ctrl+,`（或菜单 → 设置）→ 左侧「插件」→ `SafeHarness` 标签。详见 `evidence/1.9.2-bundle.md` §6。
+    - **✅ 已解决（1.9.2 + 真机确认，2026-11-17 20:03）**：用户在桌面窗口打开「设置 → 内置插件」，`SafeHarness` 标签渲染成功——规则列表（`inform_19` 与三条 chain）、「AI 起草规则 · 已启用 · 描述上限 500 字」卡片（textarea / 类型下拉 / 起草按钮 / `0 / 500` 计数）、页脚 `读取于 … 20:03:12` 全部在位。截图：`evidence/1.9.2-panel-rules-draft.png`（面板）与 `evidence/1.9.2-plugin-detail.png`（插件页 v1.9.2 + 卸载 + 启用开关）。
+    - **修复要点回顾**：`dsh.profile.bundles` → 包内 `cordis.patch.yml`（1.9.2 新增）让宿主给它准备了条目页，`settings.plugins.tab` 的五个标签才有地方挂。
+    - **为什么 headless 到不了**（留档）：桌面端设置是 Electron 原生对话框，页面 DOM 里没有“设置”入口，headless 只能跑到插件页；标签渲染必须由真机窗口确认。
 
 ---
 
@@ -687,7 +689,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 4. ~~**`status` 收紧**~~ **已完成（1.8.4，D58）**：全端点 POST-only、错误方法 405、栅栏先于方法判断；面板 logger 已脱敏。
 5. ~~**SRI 前缀豁免**~~ **已完成（1.8.4，D61）**：`^sha(?:1|256|384|512)-` 跳过熵检测，读 lockfile 不再被拦。
 6. **输出面凭据规则 + `output: enforce`**（产品决策）：当前 `results` 只保护“结果→模型”，不保护“模型→用户”；开启前评估误报与流式代价。
-6b. **【P0】让桌面 GUI 里能点开面板**（§11.17）：先按 GUI「添加插件」流程重装一次（写进 profile 的 bundle 清单），或用 `dsh.profile.bundles` 手工登记，重启后确认「插件」页出现 SafeHarness 条目页与五个标签；验证脚本：headless Edge + 真实 cookie（取法见 §11.17 注）打开 `http://127.0.0.1:<port>/` → 插件 → 条目 → 规则。
+6b. ~~**【P0】让桌面 GUI 里能点开面板**~~ **已完成（1.9.2，真机确认）**：包里补 `dsh.bundle.patch` + `cordis.patch.yml`，GUI「添加插件」装 1.9.2、`dsh.profile.bundles` 登记、重启后「设置 → 内置插件 → SafeHarness」渲染出规则页（截图 `evidence/1.9.2-panel-rules-draft.png`）。细节见 §11.17。
 7. ~~**`rules.dir` 默认化**~~ **已完成（2026-11-17）**：桌面 profile 两处块都配了 `C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建，重启后生效（面板载荷 `rulesDir` 已显示该路径）。
 8. ~~**`rules.dir` 热改后 watcher/面板重载跟随运行时目录**~~ **已完成（1.9.0）**：面板重载与 watcher 都读实时配置，watcher 随目录迁移。
 
