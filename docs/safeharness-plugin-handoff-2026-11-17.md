@@ -38,8 +38,8 @@
 | 桌面端插件 | **已装 1.9.2、已重启生效**（`profiles/desktop/node_modules/@upear/dsh-safeharness` = 1.9.2；`plugin_loaded.version = 1.9.2`，姿态 0 FAIL；`dsh.profile.bundles` 含 `@upear/dsh-safeharness`，profile patch 只剩按 id 的覆盖） |
 | 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.9.2.tgz` |
 | 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（`TGZ=` 已指向 **1.9.2**，tarball 已复制；但 1.9.2 起推荐用 GUI「添加插件」装——那才会写进 profile 的 bundle 清单，见 §11.17） |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`1cddce1`**（release 1.9.1），tag **`v1.9.1`**（tag 对象 `61124be…`）；CI `ci` badge = **passing**；2026-11-17 16:33 推送（直连 443 不可达，走本机 `127.0.0.1:7897` 代理） |
-| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **1.9.1**（`git log -1`；前序 `1203d9c` 验证文档 / `e22e404` 1.9.0 / `9c0b717` 1.9.0 文档 / `d5c3487` 1.8.4 / `b60c7e1` 1.8.3 文档）；`github` 备份远端 main = **`1203d9c`**（+ 本条文档提交），`v1.9.1` 标签已同步 |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`896034f`**（release 1.9.2），tag **`v1.9.2`**（tag 对象 `5aa7dfb…`），**CI `ci` = passing**；2026-11-17 20:12 推送（直连 443 时通时断，用 `-c http.version=HTTP/1.1` 过的） |
+| 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **1.9.2**（`git log -1`；前序 `6394ee5`/`a50a816` 1.9.2 验证文档 / `99f7905` 1.9.2 代码 / `668c4c7` 安装迁移文档 / `8b26eff` 入口缺口 / `1203d9c` 1.9.1 验证 / `e22e404` 1.9.0 / `d5c3487` 1.8.4）；`github` 备份远端 main = **`a50a816`**（+ 本条文档提交），`v1.9.2` 标签已同步 |
 | 测试 | 1.9.2 本机 **45 文件 / 751 用例**；公开树与 CI 口径在发布时重算（1.9.1 公开树为 41 / 726+3） |
 | tarball | 已发布 `dist/upear-dsh-safeharness-1.9.1.tgz`（337,700 B）；本地 **`dist/upear-dsh-safeharness-1.9.2.tgz`，338,908 B（137 文件，含 `cordis.patch.yml`），sha256 `24007725B2EBFE2C5F65C7A1EBBB097A82C5CE9FE672AE8382B842CA9B1F07FF`**（未发布、未装桌面；已复制到 `plugin-tarballs\`） |
 | 账本 | `C:\Users\xiaojue\.dsh\safeharness\audit\ledger.ndjson`（NDJSON、sha256 链、零回显；当前约 6.3 MB、seq 8300+） |
@@ -658,7 +658,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 11. **侦察命令不单独拦截**：`whoami` / `hostname` / `ipconfig` / `systeminfo` / `net user` 这类身份与环境侦察不在结果扫描的形态里（只认凭据与注入标记），工具面也没有命令级分类；单条属低危，但在不可信内容诱导下是外发前奏，且没有“侦察→外发”的链式规则。**用户 2026-11-12 明确不做**命令级 recon 分类与 egress 收紧（D51）。
 12. **面板/provider 的 P1 缺口已关闭（1.8.4）**：① `addProvider` 索引写失败现在回滚路由与凭据并返回 `provider_index_failed`；② 删除守卫扫描 `llm-pi-ai` 里所有引用（含 `defaultProvider`）；③ `providerConfigurable` 要求 `update` 与 `mutate` 都存在；④ 全端点 POST-only、方法违规 405 + `Allow: POST`（栅栏先于方法判断）；⑤ 面板 settings 日志只记错误名/机器码/长度。仍存在的相关限制：面板不写规则文件（§5.6 / D57）、不做通用调度、不提供 provider 编辑（只能删除后重建）。
 13. **宿主已是 0.2.2-rc.3**：1.8.3 运行时 `PINNED_VERSIONS` = rc.3（构建期类型仍为 rc.1）；`engines.dsh` 仍是 `>=0.2.2-rc.1 <0.3.0`，rc.1/rc.2 主机仍可安装但会看到 `plugin_version_mismatch` WARN。
-14. **发布状态**：1.8.2（`6684ee4` / `v1.8.2`）、1.8.3（`57efcc9` / `v1.8.3`）、**1.9.1（`1cddce1` / `v1.9.1`，CI passing）** 均已发布；`github` 备份已同步到 `1203d9c`。1.9.1 公开树同时包含 1.8.4 / 1.9.0 / 1.9.1 三轮改动。
+14. **发布状态**：1.8.2（`6684ee4` / `v1.8.2`）、1.8.3（`57efcc9` / `v1.8.3`）、1.9.1（`1cddce1` / `v1.9.1`）、**1.9.2（`896034f` / `v1.9.2`，CI passing）** 均已发布；`github` 备份已同步到 `a50a816`。公开树是**每个版本的完整快照**（1.9.2 含 1.8.4 / 1.9.0 / 1.9.1 / 1.9.2 四轮改动），公开侧测试口径 **42 文件 / 723 passed + 10 skipped**。
 15. **规则起草依赖模型路由的延迟**：1.8.3 已把超时放宽到 60s、输出上限 2048，并把失败原因拆开显示；但起草仍是一次真实模型调用（实测 5.8s / 6.1s / **18.9s**），没有自动重试，也不会回退到本地启发式。失败时看面板提示或账本 `invariant_probe`（`reason_code: panel_draft`，`labels.status` 为 `timeout` / `empty` / `bad_json` / `invalid` / `error`）。
 16. **规则落地已进面板（1.9.0）**：面板「规则」页填文件名 → 确认 → 写 `rules.dir` 下的一个文件并热重载，见 §5.6；仍不支持在面板里编辑已有文件的正文、不支持删除文件（删除请直接用文件系统，watcher 会自动回落）、不写 packaged `rules/`。
 17. **【2026-11-17 新发现，P0 UX 缺口】桌面 app 里点不到面板**：用真实登录 cookie 驱动 headless Edge 打开桌面 GUI（`GET /` = 200）后确认——侧栏「插件」页只有 **已安装 / 发现** 两个标签，内容为「内置插件配置」+「实验性插件」，**没有「已安装插件」分组、也没有 SafeHarness 行**，整页 HTML 里 `/safeharness/i` 不命中。
@@ -805,6 +805,7 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 | 计划 | `docs/plan-dsh-safeharness-plugin-2026-11-10.md` §12.19–§12.23 |
 | 旧交接 | `docs/safeharness-plugin-handoff-2026-11-11.md`（历史坑与早期决策）、`…-2026-11-12.md`（1.8.2 基线） |
 | 1.9.1 本地提交 | `a875a45`（枚举单一来源）、`1203d9c`（1.9.0 桌面验证 + 1.9.1 发布预演文档），以及本条文档提交 |
+| 1.9.2 公开提交 | `896034f`，tag `v1.9.2`（tag 对象 `5aa7dfb…`）；`ci` badge = passing；公开树 42 文件 / 723 passed + 10 skipped |
 | 1.9.1 公开提交 | `1cddce1`，tag `v1.9.1`（tag 对象 `61124be…`）；`ci` badge = passing |
 | 1.8.3 本地提交 | `8e60d74`（起草诊断 + 默认值）、`99a9956`（发布文档） |
 | 1.8.3 公开提交 | `57efcc9`，tag `v1.8.3`（tag 对象 `3d567a7…`） |

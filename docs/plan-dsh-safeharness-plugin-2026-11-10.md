@@ -1407,7 +1407,9 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 **桌面迁移（2026-11-17 19:14）**：GUI「添加插件」装 1.9.2 成功（插件页出现「已安装插件」行、详情页 1 运行中 / 1.9.2）；app 不自动写 `dsh.profile.bundles`，已手工追加（6 → 7）；profile patch 的手工 `insert:` 行删除，只留按 id 的覆盖（`preset` / `results` / `output.judge` / `rules.dir` / `draft`），`invariants` 两行保留 `insert:`。迁移先用复制出的 `profiles/shotcheck` 跑 `dsh --profile shotcheck --dump-config` 离线验证（exit 0 / 1592 行 / 组合包层生效 / 覆盖值在位），验证后删除。
 
-**待重启**：重启后应看到「插件」页的 `SafeHarness` 条目页与五个标签，随后用 headless 浏览器截图存证。
+**重启后验证（19:25）**：`safeharness_status` = **1.9.2**、姿态 0 FAIL；手工 `insert:` 已删而插件仍加载（组合层生效）；真机（用户 20:03 截图）确认 **设置 → 内置插件 → SafeHarness** 渲染出规则页（规则清单 + 「AI 起草规则 · 已启用 · 描述上限 500 字」卡片 + `读取于 20:03:12`），`evidence/1.9.2-panel-rules-draft.png`。
+
+**发布（20:12）**：公开仓库 `main` = **`896034f`**（release 1.9.2）、tag **`v1.9.2`**（tag 对象 `5aa7dfb…`），CI `ci` = **passing**；备份远端 `github` `main` = `a50a816`、tag 已同步。直连 443 时通时断，用 `-c http.version=HTTP/1.1` 推成功（代理当次没在监听）。公开树 118 文件、leaks 0、**42 文件 / 723 passed + 10 skipped**。
 
 ---
 
