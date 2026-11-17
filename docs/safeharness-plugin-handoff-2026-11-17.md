@@ -140,6 +140,8 @@ plugins/dsh-safeharness/
 
 五个标签：**概览 / 事件 / 规则 / 巡检 / 设置**。浏览器半是 `lib/client.js`（预构建 CJS 闭包工厂），通过 `ctx.slots.inject('settings.plugins.tab', …)` 注册；只用平台 seed 的 `react`，不 import 任何 DSH client 包。所有标签常驻挂载（非当前标签 `display:none`），避免切页丢草稿/筛选/巡检结果。
 
+> **入口前提（2026-11-17 补）**：`settings.plugins.tab` 的宿主是「插件」页里的**插件条目页**。桌面 profile 目前没把本插件登记成 profile 选中的 bundle，所以条目页不存在、标签无处渲染——见 §11.17。
+
 宿主半路由（全部挂在 `/safeharness` 前缀，全部 POST-only、loopback Host + 同源 Origin 栅栏、body ≤ 16 KiB）：
 
 | 端点 | 作用 | 关键约束 |
@@ -659,6 +661,11 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 14. **发布状态**：1.8.2（`6684ee4` / `v1.8.2`）、1.8.3（`57efcc9` / `v1.8.3`）、**1.9.1（`1cddce1` / `v1.9.1`，CI passing）** 均已发布；`github` 备份已同步到 `1203d9c`。1.9.1 公开树同时包含 1.8.4 / 1.9.0 / 1.9.1 三轮改动。
 15. **规则起草依赖模型路由的延迟**：1.8.3 已把超时放宽到 60s、输出上限 2048，并把失败原因拆开显示；但起草仍是一次真实模型调用（实测 5.8s / 6.1s / **18.9s**），没有自动重试，也不会回退到本地启发式。失败时看面板提示或账本 `invariant_probe`（`reason_code: panel_draft`，`labels.status` 为 `timeout` / `empty` / `bad_json` / `invalid` / `error`）。
 16. **规则落地已进面板（1.9.0）**：面板「规则」页填文件名 → 确认 → 写 `rules.dir` 下的一个文件并热重载，见 §5.6；仍不支持在面板里编辑已有文件的正文、不支持删除文件（删除请直接用文件系统，watcher 会自动回落）、不写 packaged `rules/`。
+17. **【2026-11-17 新发现，P0 UX 缺口】桌面 app 里点不到面板**：用真实登录 cookie 驱动 headless Edge 打开桌面 GUI（`GET /` = 200）后确认——侧栏「插件」页只有 **已安装 / 发现** 两个标签，内容为「内置插件配置」+「实验性插件」，**没有「已安装插件」分组、也没有 SafeHarness 行**，整页 HTML 里 `/safeharness/i` 不命中。
+    - 但客户端半边是加载了的：`window.__DSH_BOOT__` 里能找到 safeharness 条目（插件 `package.json` 的 `dsh.client` 注入 `dsh-client-runtime` / `dsh-client-connection` 已生效）。
+    - 根因：插件是**手改 `profiles/desktop/package.json` 的 dependencies + `cordis.patch.yml`** 装进去的；而桌面 profile 由 Electron 独占管理（`dsh plugin --profile desktop …` 与 `--dump-config` 都被拒：*profile is managed exclusively by the Electron application*），其 `dsh.profile.bundles` 只有 6 个官方 bundle。按宿主文档（ui-settings-plugins）：第三方配置页要么挂在 `plugins.item`（官方）、要么按 `plugins.bundle.config`（以 bundle 包名为键）渲染，「没有组合包 patch 的依赖不是插件，除非 profile 选中了它才会带异常标签列出」——我们不属于任何一种，于是宿主根本没有可挂 `settings.plugins.tab` 的条目页。
+    - 影响：**HTTP 面板端全通、写入链路照常工作**，但用户在桌面 GUI 里没有入口点开它；历史上所有面板截图都来自 `dsh web` 起的 dev/web profile，桌面装机验证一直只用 `safeharness_status` / curl。
+    - 待办（需产品决策）：把插件改成「profile 选中」的条目（GUI「添加插件」流程，或手工在 `dsh.profile.bundles` 加 `@upear/dsh-safeharness`）后重启，再看是否出现条目页与标签；或维持现状，把面板定位成 dev/web profile 的能力。
 
 ---
 
@@ -672,6 +679,7 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
 4. ~~**`status` 收紧**~~ **已完成（1.8.4，D58）**：全端点 POST-only、错误方法 405、栅栏先于方法判断；面板 logger 已脱敏。
 5. ~~**SRI 前缀豁免**~~ **已完成（1.8.4，D61）**：`^sha(?:1|256|384|512)-` 跳过熵检测，读 lockfile 不再被拦。
 6. **输出面凭据规则 + `output: enforce`**（产品决策）：当前 `results` 只保护“结果→模型”，不保护“模型→用户”；开启前评估误报与流式代价。
+6b. **【P0】让桌面 GUI 里能点开面板**（§11.17）：先按 GUI「添加插件」流程重装一次（写进 profile 的 bundle 清单），或用 `dsh.profile.bundles` 手工登记，重启后确认「插件」页出现 SafeHarness 条目页与五个标签；验证脚本：headless Edge + 真实 cookie（取法见 §11.17 注）打开 `http://127.0.0.1:<port>/` → 插件 → 条目 → 规则。
 7. ~~**`rules.dir` 默认化**~~ **已完成（2026-11-17）**：桌面 profile 两处块都配了 `C:\Users\xiaojue\.dsh\safeharness\rules`，目录已建，重启后生效（面板载荷 `rulesDir` 已显示该路径）。
 8. ~~**`rules.dir` 热改后 watcher/面板重载跟随运行时目录**~~ **已完成（1.9.0）**：面板重载与 watcher 都读实时配置，watcher 随目录迁移。
 
