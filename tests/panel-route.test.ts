@@ -17,6 +17,7 @@ import type { DraftResult, DraftStatus } from '../src/draft/rule.js'
 import type { PatrolScheduler } from '../src/panel/schedule.js'
 import type { PanelSettingsHost } from '../src/panel/settings.js'
 import { PanelSettingsError } from '../src/panel/settings.js'
+import { RuleWriteError } from '../src/panel/rules-write.js'
 import type { PanelJudgeProbe, PanelSettingsValue } from '../src/panel/protocol.js'
 
 /** One request, with an optional JSON body the handler can read. */
@@ -203,6 +204,23 @@ describe('createPanelHandler', () => {
     expect(out.status).toBe(405)
   })
 
+  it('is entirely POST-only, including the read-only status endpoint', async () => {
+    for (const url of ['/safeharness/status', '/safeharness/patrol', '/safeharness/settings']) {
+      const out = response()
+      await createPanelHandler(options)(request({ host: '127.0.0.1:61112' }, { method: 'GET', url }), out.res)
+      expect(out.status, url).toBe(405)
+      expect(out.headers['allow'], url).toBe('POST')
+      expect(out.body, url).toBe('')
+    }
+  })
+
+  it('fences an untrusted host before it can learn the method rules', async () => {
+    const out = response()
+    await createPanelHandler(options)(request({ host: 'evil.example' }, { method: 'GET', url: '/safeharness/status' }), out.res)
+    expect(out.status).toBe(403)
+    expect(out.body).toBe('forbidden')
+  })
+
   it('answers unknown endpoints with a coded envelope', async () => {
     const out = response()
     await createPanelHandler(options)(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/other' }), out.res)
@@ -243,7 +261,9 @@ describe('patrol endpoint', () => {
     const out = response()
     await handler(request({ host: '127.0.0.1:61112' }, { method: 'GET', url: '/safeharness/patrol' }), out.res)
     expect(calls).toBe(0)
-    expect(JSON.parse(out.body)).toEqual({ ok: false, error: { code: 'method_not_allowed', message: 'patrol requires POST' } })
+    expect(out.status).toBe(405)
+    expect(out.headers['allow']).toBe('POST')
+    expect(out.body).toBe('')
   })
 
   it('enforces the cooldown window between operator-triggered runs', async () => {
@@ -594,7 +614,100 @@ describe('export endpoint', () => {
 
     const get = response()
     await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/export', method: 'GET' }), get.res)
-    expect(JSON.parse(get.body)).toMatchObject({ ok: false, error: { code: 'method_not_allowed' } })
+    expect(get.status).toBe(405)
+    expect(get.headers['allow']).toBe('POST')
+    expect(get.body).toBe('')
+  })
+})
+
+describe('write-rule endpoint', () => {
+  const logger = { info: () => {}, warn: () => {}, error: () => {} }
+  const url = '/safeharness/write-rule'
+
+  it('reports unavailability when this profile wires no writer', async () => {
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { filename: 'a.yaml', yaml: 'rules: []' } }), out.res)
+    expect(JSON.parse(out.body)).toEqual({
+      ok: false,
+      error: { code: 'write_unavailable', message: 'rule writing is not wired in this profile' },
+    })
+  })
+
+  it('rejects a body without string filename/yaml', async () => {
+    const writer = { write: async () => { throw new Error('must not be called') } }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleWriter: writer })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { filename: 7, yaml: 'rules: []' } }), out.res)
+    expect(JSON.parse(out.body)).toMatchObject({ ok: false, error: { code: 'invalid_body' } })
+  })
+
+  it('lands one rule and forwards the overwrite flag verbatim', async () => {
+    const calls: Array<{ filename: string; yaml: string; overwrite: boolean }> = []
+    const writer = {
+      write: async (input: { filename: string; yaml: string; overwrite: boolean }) => {
+        calls.push(input)
+        return { filename: input.filename, bytes: 20, rules: 21, chains: 3, hash: 'abc123456789', created: true, reloaded: true }
+      },
+    }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleWriter: writer })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, {
+      url,
+      body: { filename: 'draft.yaml', yaml: 'rules: []', overwrite: false },
+    }), out.res)
+    expect(JSON.parse(out.body)).toEqual({
+      ok: true,
+      value: { filename: 'draft.yaml', bytes: 20, rules: 21, chains: 3, hash: 'abc123456789', created: true, reloaded: true },
+    })
+    expect(calls).toEqual([{ filename: 'draft.yaml', yaml: 'rules: []', overwrite: false }])
+  })
+
+  it('treats a missing or non-true overwrite as "do not replace"', async () => {
+    const seen: boolean[] = []
+    const writer = {
+      write: async (input: { overwrite: boolean }) => {
+        seen.push(input.overwrite)
+        return { filename: 'a.yaml', bytes: 1, rules: 1, chains: 0, hash: 'h', created: true, reloaded: true }
+      },
+    }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleWriter: writer })
+    for (const body of [{ filename: 'a.yaml', yaml: 'x' }, { filename: 'a.yaml', yaml: 'x', overwrite: 'yes' }]) {
+      await handler(request({ host: '127.0.0.1:61112' }, { url, body }), response().res)
+    }
+    expect(seen).toEqual([false, false])
+  })
+
+  it('carries the loader problems of a rejected rule to the browser', async () => {
+    const writer = {
+      write: async () => {
+        throw new RuleWriteError('rule_content_invalid', 'the rule file does not pass the loader gate', [
+          "rule 'x': pattern does not compile",
+        ])
+      },
+    }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleWriter: writer })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { filename: 'x.yaml', yaml: 'x' } }), out.res)
+    expect(JSON.parse(out.body)).toEqual({
+      ok: false,
+      error: {
+        code: 'rule_content_invalid',
+        message: 'the rule file does not pass the loader gate',
+        problems: ["rule 'x': pattern does not compile"],
+      },
+    })
+  })
+
+  it('maps an unexpected writer failure to a content-free code', async () => {
+    const writer = { write: async () => { throw new Error('disk on fire at C:\\secret') } }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleWriter: writer })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { filename: 'x.yaml', yaml: 'x' } }), out.res)
+    const envelope = JSON.parse(out.body) as { ok: boolean; error: { code: string; message: string } }
+    expect(envelope.ok).toBe(false)
+    expect(envelope.error.code).toBe('rule_write_failed')
+    expect(JSON.stringify(envelope)).not.toContain('secret')
   })
 })
 

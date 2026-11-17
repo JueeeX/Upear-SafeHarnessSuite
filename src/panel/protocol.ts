@@ -25,6 +25,9 @@ export const PANEL_SCHEDULE_ENDPOINT = 'schedule'
 /** Endpoint that re-reads the rule directory. */
 export const PANEL_RELOAD_ENDPOINT = 'reload-rules'
 
+/** Endpoint that lands one operator rule file in `rules.dir` and hot-reloads it. */
+export const PANEL_RULE_WRITE_ENDPOINT = 'write-rule'
+
 /** Endpoint that reads/saves the judge and drafting routes, and probes the judge. */
 export const PANEL_SETTINGS_ENDPOINT = 'settings'
 
@@ -238,12 +241,23 @@ export interface PanelSettingsValue {
   readonly customProviders: readonly PanelCustomProvider[]
   /** True when the pi-ai provider entry is editable here (add/delete routes). */
   readonly providerConfigurable: boolean
+  /**
+   * Revision of this plugin entry's raw config when the value was read, or null when
+   * the host exposes none. Echoed back as {@link PanelSettingsPatch.expectedRevision}
+   * so a stale form is refused instead of silently overwriting a concurrent change.
+   */
+  readonly revision: number | null
   /** Absolute profile patch path, or null when the host cannot edit config. */
   readonly configPath: string | null
 }
 
 /** Fields one save may change; omitted fields keep their current value. */
 export interface PanelSettingsPatch {
+  /**
+   * The revision the form was rendered at (from {@link PanelSettingsValue.revision}).
+   * Omitted by internal callers: the Host then reads the current revision itself.
+   */
+  readonly expectedRevision?: number
   readonly judge?: {
     readonly enabled?: boolean
     readonly scope?: 'flagged' | 'always'
@@ -391,6 +405,33 @@ export interface PanelReloadOk {
 /** What a rule reload resolves to. */
 export type PanelReloadResult = PanelReloadOk | PanelError
 
+/** One landed operator rule file (metadata only: no content, no absolute path). */
+export interface PanelRuleWriteValue {
+  /** File name inside `rules.dir` (whitelisted token). */
+  readonly filename: string
+  /** Bytes written (UTF-8). */
+  readonly bytes: number
+  /** Rules in force after the write. */
+  readonly rules: number
+  /** Chain rules in force after the write. */
+  readonly chains: number
+  /** Rule-set hash prefix in force after the write. */
+  readonly hash: string
+  /** False when an existing file was replaced. */
+  readonly created: boolean
+  /** False when the file landed but the hot reload kept the previous set. */
+  readonly reloaded: boolean
+}
+
+/** Successful rule write. */
+export interface PanelRuleWriteOk {
+  readonly ok: true
+  readonly value: PanelRuleWriteValue
+}
+
+/** What a rule write resolves to. */
+export type PanelRuleWriteResult = PanelRuleWriteOk | PanelError
+
 /** Everything the SafeHarness settings tab renders. */
 export interface PanelPayload {
   /** When the Host produced the payload. */
@@ -440,7 +481,15 @@ export interface PanelOk {
 /** Failed RPC envelope (the Host's own result shape, structurally). */
 export interface PanelError {
   readonly ok: false
-  readonly error: { readonly code: string; readonly message: string }
+  readonly error: {
+    readonly code: string
+    readonly message: string
+    /**
+     * Loader problems for a rejected rule file (the operator's own rule text, the
+     * same vocabulary the rules tab already shows). Absent for every other endpoint.
+     */
+    readonly problems?: readonly string[]
+  }
 }
 
 /** One patrol finding (codes and counts only — patrol's own contract). */

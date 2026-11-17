@@ -1,6 +1,38 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.9.1 — 2026-11-17
+
+1.9.0 装机验证时发现的一个真实缺口：**账本新种类没有接进查询工具**。
+
+- **问题**：`rules_written` 加进了 `AuditKind`，但 `safeharness_audit_query` 工具自己维护了一份 kind 白名单，于是 `kind: "rules_written"` 被参数校验拒绝——记录写进了账本却查不出来（面板事件页也不显示 `decision: ok`，只能手读 NDJSON）。
+- **修法**：把账本种类改成**单一来源** `AUDIT_KINDS`（`as const` 数组），`AuditKind` 从中派生，工具的参数枚举直接引用同一数组——以后再加种类不会再漏。
+- **顺带**：`safeharness_draft_rule` 的 `next` 文案补上 1.9.0 的面板落地路径（人点「写入并重载」），不再只说“自己存文件”。
+- **回归**：新增 `tests/audit-kinds.test.ts`（种类唯一、含 `rules_reloaded` / `rules_written`），并在 `tests/hooks.test.ts` 钉住“工具枚举 == `AUDIT_KINDS`”。
+- **测试**：44 文件 / 747 用例。
+## 1.9.0 — 2026-11-17
+
+规则落地体验：**起草出来的 YAML 可以在面板里“写入并重载”**，不再需要去 `node_modules` 里粘贴。新增的是**人发起的一条受限写路径**，不是模型可调用的工具。
+
+- **新端点** `POST /safeharness/write-rule`（body：`filename` / `yaml` / `overwrite`）。只写 `rules.dir`：未配置或不是绝对路径直接拒绝；解析后落在安装包自带 `rules/` 内的也拒绝（升级会覆盖它）。
+- **文件名校验**：`[a-z0-9][a-z0-9._-]{0,63}\.ya?ml`，拒绝路径分隔符、`..`、盘符、前导点与 Windows 设备名；正文 ≤ 12 KB。
+- **默认不覆盖**：同名文件先返回 `rule_exists`，只有前端第二次确认（`overwrite: true`）才会替换。
+- **写前 loader 试编译**：新增 `validateRuleCandidate()`，用**真实 loader** 把候选文件与 packaged/dir/inline 三层合并后编译；候选文件按“替换自身”参与合并（覆盖不会与自己的旧规则重名），失败返回具体 problems、**一个字节都不落盘**。它与真实加载共用 `assembleRuleSet`，所以“会不会加载失败”与“加载失败”不会分叉。
+- **原子写**：同目录 `tmp`（不带 `.yaml` 后缀，watcher 不会读到半截文件）+ rename；成功后写账本 `rules_written`（只记文件名/字节数/规则数/链数），然后热重载；重载失败保留旧规则集并在返回里标 `reloaded: false`。
+- **热更新跟随**：`rules.dir` 在运行中改变时，面板重载与文件 watcher 现在都按**实时配置**读取，watcher 也会随目录迁移（此前只认加载期目录，热改后静默失效）。
+- **不变量**：仍然是“人点按钮才能落地”，插件没有对应工具，端点有 loopback + 同源栅栏；D37 因此改写为 D62。
+- **测试**：43 文件 / 745 用例（新增候选校验 10、写入器 11、端点闸门 6、客户端动作 1）。
+## 1.8.4 — 2026-11-17
+
+面板与结果扫描的加固：**收紧面板方法面、补齐自定义路由的两处一致性缺口、设置写入加 CAS、SRI 摘要不再当凭据**。没有新增能力，也没有新增磁盘写路径；「写入并重载规则」仍是 1.9.0 的待定项。
+
+- **面板方法面（安全）**：所有端点（含只读 `status`）改为 **POST-only**，其他方法返回真正的 `405` + `Allow: POST`。此前 `status` 接受 GET，写端点用 GET 会拿到 200 信封 `method_not_allowed`——代理、测试脚本或 devtools 都可能把拒绝当载荷解析；GET 也是导航 / `<img>` / 预取能触发的请求。栅栏（Host loopback + 同源 Origin）现在先于方法判断执行，未受信 Host 连“方法规则”都问不到。
+- **自定义路由双写回滚（一致性问题）**：`addProvider` 先写 profile、再写面板索引 `providers.json`；索引写失败时**回滚刚写的路由与凭据**并返回 `provider_index_failed`。此前索引写失败只告警，留下“配置里有、面板删不掉”的孤儿路由（1.8.0 起的 P1）。
+- **删除守卫扩展（安全问题）**：删除自定义路由时，除评审/起草路由外，还扫描 `llm-pi-ai` 里**所有**指向该 id 的字段（如 `defaultProvider`），命中即 `provider_in_use`；`providerConfigurable` 改为 `update` 与 `mutate` 都存在才为真（删除走 `mutate`，此前会给出一个必然失败的按钮）。
+- **设置写入 CAS**：面板把读到的 `revision` 作为 `expectedRevision` 回传，`settings.update` / `mutate` 在配置已被别处改过时拒绝，映射为 `settings_conflict`（不再 last-writer-wins）。宿主 `describe()` 不暴露 revision 时行为不变。
+- **日志零回显**：面板 settings 日志不再打印宿主异常 message（可能含 profile 路径或配置值），只记错误名 + 机器码 + 消息长度。
+- **SRI 豁免（结果面误报）**：高熵启发式对 `sha1-` / `sha256-` / `sha384-` / `sha512-` 前缀的完整性摘要直接放行，读 `pnpm-lock.yaml` 不再被 `results.mode: enforce` 整条替换；长度/熵阈值不变，无前缀的同类令牌仍会命中。
+- **测试**：41 文件 / 717 用例（新增 revision CAS、冲突映射、索引回滚、引用守卫、只读判定、405 方法面、SRI 共 8 条）。
 ## 1.8.3 — 2026-11-17
 
 起草诊断与超时修复：**“起草路由不可用”不再吞掉真实原因**。

@@ -8,6 +8,7 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { Runtime } from '../runtime.js'
 import type { PostureReport } from '../posture/report.js'
 import type { PatrolReport } from '../patrol/index.js'
+import { AUDIT_KINDS } from '../audit/types.js'
 import type { AuditKind } from '../audit/types.js'
 import type { DraftKind, DraftResult, RuleDrafter } from '../draft/rule.js'
 import { VERSION } from '../version.js'
@@ -260,36 +261,13 @@ export function draftRuleTool(drafter: RuleDrafter, limits: () => DraftToolLimit
         status: result.status,
         ...(result.status === 'ok' ? { draft: result.draft } : { reason: result.reason }),
         metrics: result.metrics,
-        next: 'Nothing was applied. Save the YAML into a .yml file under `rules.dir`, or add it to `rules.inline`, then reload.',
+        next: 'Nothing was applied. Either let a human land it from the panel (规则 → AI 起草 → 写入并重载, which writes one file into `rules.dir` after the loader gate), or save the YAML under `rules.dir` / `rules.inline` yourself and reload.',
       })
     },
     // Pure: it spends one model call and touches no shared state.
     isConcurrencySafe: () => true,
   })
 }
-
-/** Valid audit kinds, for parameter validation and documentation. */
-const AUDIT_KINDS: readonly string[] = [
-  'plugin_loaded',
-  'plugin_unloaded',
-  'posture_report',
-  'input_checked',
-  'input_denied',
-  'tool_checked',
-  'tool_denied',
-  'tool_asked',
-  'tool_executed',
-  'tool_result',
-  'tool_result_flagged',
-  'output_reviewed',
-  'approval_asked',
-  'approval_decided',
-  'rules_reloaded',
-  'patrol_report',
-  'invariant_probe',
-  'budget_exceeded',
-  'error',
-]
 
 /** Default and maximum record counts for the query tool. */
 const QUERY_DEFAULT = 50

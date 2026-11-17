@@ -324,5 +324,12 @@ describe('surfaces (T1.7 / T1.8)', () => {
     const auditValue = (await audit.execute({ limit: 5 }, {} as never)) as Record<string, unknown>
     expect(auditValue.count).toBe(0)
     expect(auditValue.limit).toBe(5)
+    // 1.9.0 shipped `rules_written` into the ledger while the query tool still had
+    // its own copy of the kind list, so filtering on it was rejected. The enum now
+    // derives from AUDIT_KINDS; this pins the wiring rather than the array contents.
+    const projected = audit.parameters as { properties?: { kind?: { enum?: unknown } } } | undefined
+    const kindEnum = projected?.properties?.kind?.enum
+    expect(Array.isArray(kindEnum)).toBe(true)
+    expect(kindEnum as string[]).toContain('rules_written')
   })
 })

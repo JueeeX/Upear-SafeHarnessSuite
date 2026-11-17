@@ -21,6 +21,7 @@ import {
   PANEL_EXPORT_ENDPOINT,
   PANEL_PATROL_ENDPOINT,
   PANEL_RELOAD_ENDPOINT,
+  PANEL_RULE_WRITE_ENDPOINT,
   PANEL_SCHEDULE_ENDPOINT,
   PANEL_SETTINGS_ENDPOINT,
   PANEL_STATUS_ENDPOINT,
@@ -40,6 +41,8 @@ import type {
   PanelProviderResult,
   PanelReloadResult,
   PanelResult,
+  PanelRuleWriteResult,
+  PanelRuleWriteValue,
   PanelSchedule,
   PanelScheduleResult,
   PanelSettingsPatch,
@@ -74,6 +77,15 @@ export interface PanelFace {
   readonly schedule: (input: { readonly enabled: boolean; readonly intervalMinutes: number | null }) => Promise<PanelSchedule>
   /** Re-read the rule directory without restarting the host. */
   readonly reloadRules: () => Promise<{ readonly rules: number; readonly chains: number; readonly hash: string }>
+  /**
+   * Land one drafted rule as a file in `rules.dir` and hot-reload it. The Host owns
+   * every gate (whitelist, loader pre-check, atomic write, no-overwrite default).
+   */
+  readonly writeRule: (input: {
+    readonly filename: string
+    readonly yaml: string
+    readonly overwrite: boolean
+  }) => Promise<PanelRuleWriteValue>
   /** Read the judge/drafting routes and the provider catalog (1.7.0 `settings` endpoint). */
   readonly loadSettings: () => Promise<PanelSettingsValue>
   /** Save a partial route change; the Host validates and hot-reloads it. */
@@ -101,6 +113,7 @@ type Envelope =
   | PanelDraftResult
   | PanelScheduleResult
   | PanelReloadResult
+  | PanelRuleWriteResult
   | PanelSettingsResult
   | PanelProbeResult
   | PanelProviderResult
@@ -127,9 +140,11 @@ async function call(endpoint: string, body: unknown = {}): Promise<unknown> {
   const result = (await response.json()) as Envelope
   if (!result.ok) {
     // Keep the server's coarse reason: the panel explains a timeout / empty reply
-    // instead of showing one generic "unavailable" line for every failure.
-    const failure = new Error(result.error.code) as Error & { detail?: string }
+    // instead of showing one generic "unavailable" line for every failure. A rule
+    // write may also carry the loader's problems, which the operator needs verbatim.
+    const failure = new Error(result.error.code) as Error & { detail?: string; problems?: readonly string[] }
     failure.detail = result.error.message
+    if (result.error.problems !== undefined) failure.problems = result.error.problems
     throw failure
   }
   return result.value
@@ -146,6 +161,7 @@ export function apply(ctx: ClientContextLike): void {
     draft: async (input) => (await call(PANEL_DRAFT_ENDPOINT, input)) as PanelDraftValue,
     schedule: async (input) => (await call(PANEL_SCHEDULE_ENDPOINT, input)) as PanelSchedule,
     reloadRules: async () => (await call(PANEL_RELOAD_ENDPOINT)) as { rules: number; chains: number; hash: string },
+    writeRule: async (input) => (await call(PANEL_RULE_WRITE_ENDPOINT, input)) as PanelRuleWriteValue,
     // The settings endpoint is new in 1.7.0: on an older Host build the route
     // answers `unknown_endpoint`, which the settings tab renders as a readable
     // "server not ready" notice instead of breaking the panel.

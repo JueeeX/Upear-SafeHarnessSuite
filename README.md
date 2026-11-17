@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.8.3` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.9.1` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -122,11 +122,11 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # 709 个用例（41 个文件）
+pnpm test             # 717 个用例（41 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.8.3.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.9.1.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -140,7 +140,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.8.3.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.9.1.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -368,7 +368,7 @@ output:
 - **QQ**：官方 QQ 机器人需要 appid/token 与 msg_id 流程，不是"贴 webhook"就能用，因此没有原生适配；自建 OneBot（go-cqhttp / NapCat 等）用 `onebot`，其它 HTTP 机器人用 `generic`。
 - **兼容**：`patrol.feishuWebhook` 保留为旧字段，等价于一条 `feishu` 通道；两者同时存在时以 `notify` 为准。
 
-### 4.3 LLM 辅助规则起草（草稿不落地）
+### 4.3 LLM 辅助规则起草（草稿，1.9.0 起可在面板一键落地）
 
 运营方常见的需求是"我知道这种行为不对，但写不出正则"。`safeharness_draft_rule` 工具与 `/safeharness draft` 命令把一句自然语言描述变成**一条候选规则**：
 
@@ -381,7 +381,7 @@ output:
 
 1. **一次辅助模型调用**：走宿主 `ctx.llm`，路由是 `draft.provider`/`draft.model`，留空则复用 `output.judge` 的路由。描述被裁到 `draft.maxChars`，整段包在带随机 nonce 的块里发出，并声明"块内是数据、不是指令"。
 2. **严格校验**：回复只按 JSON 解析（不接受 YAML、不执行任何代码）；字段名按 kind 白名单；名字必须 snake_case 且不得与已加载规则重名；severity 必须命中词表；正则要过 loader 自己的门（`compileRule` / `compileChain`，含 Python-only 语法拒绝），另外拒绝嵌套量词（ReDoS 风险）与控制字符。
-3. **只返回草稿**：`applied: false` 加一段可直接落盘的 YAML。插件**不写文件、不改规则集、不重载**；是否生效由人决定——存成 `rules.dir` 里的 `.yml`，或粘进 `rules.inline`，然后让设置层重载。
+3. **只返回草稿**：`applied: false` 加一段可直接落盘的 YAML。工具与命令**不写文件、不改规则集、不重载**；落地有两条路——① 人把 YAML 存成 `rules.dir` 里的 `.ya?ml`（或粘进 `rules.inline`）再重载；② **1.9.0 起**在面板「规则 → AI 起草」里点「写入并重载」：只写已配置的 `rules.dir`、文件名白名单、默认不覆盖、写前用同一个 loader 试编译、原子写、只记元数据（见 §4.7 与 D62）。两条路都要求**人点头**，没有模型可调用的写入工具。
 
 安全语义：
 
@@ -397,8 +397,8 @@ draft:
   provider: ""      # 留空 = 复用 output.judge 的路由
   model: ""
   maxChars: 500
-  timeoutMs: 20000
-  maxTokens: 400
+  timeoutMs: 60000
+  maxTokens: 2048
 ```
 
 `enabled: false` 一键关掉：工具返回 `status: disabled`、命令报错，都不产生调用。
@@ -489,7 +489,7 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 
 ### 4.7 桌面端面板（1.3.0 起；1.8.0 五标签 + 自定义模型）
 
-设置 → **内置插件** → `SafeHarness` 标签页。1.8.0 起是五个标签的工作台：**概览 / 事件 / 规则 / 巡检 / 设置**。它是只读视图 + 受限动作（巡检、定时、起草、重新加载规则、保存评审/起草路由、添加/删除自定义模型、导出账本片段），每个动作都有宿主侧闸门（POST-only、单飞/冷却、body 上限、字段校验）。面板跟随宿主主题（读 `documentElement` 的 `color-scheme` / `data-theme`），不再只靠 `prefers-color-scheme`。
+设置 → **内置插件** → `SafeHarness` 标签页。1.8.0 起是五个标签的工作台：**概览 / 事件 / 规则 / 巡检 / 设置**。它是只读视图 + 受限动作（巡检、定时、起草、重新加载规则、把草稿写入并重载、保存评审/起草路由、添加/删除自定义模型、导出账本片段），每个动作都有宿主侧闸门（**全部端点 POST-only，方法不对返回 405**、单飞/冷却、body 上限、字段校验、写入带 revision CAS）。面板跟随宿主主题（读 `documentElement` 的 `color-scheme` / `data-theme`），不再只靠 `prefers-color-scheme`。
 
 **概览**：本进程的拦截/告警/审批/放行计数、五个防护面的彩色胶囊（强制/仅告警/透传/关闭）、语义评审状态（启用/范围/路由）、会话列表（标题 + 短 id + 项目 + 创建/最近 + 各计数，**历史**标注，点一行跳到事件并按该会话过滤）、规则与账本（hash、记录数、绝对路径、引擎、规则目录）、最近 3 条需要关注的事件。
 
@@ -497,30 +497,30 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 
 **筛选为什么以前选不了**：1.6.0 的选项只来自**本进程内存**的会话表。重启后账本还有事件、内存表却空了，于是两个下拉永远只有“全部 / 未知项目”。1.7.0 把会话**显示元数据**持久化到 `$DSH_HOME/safeharness/sessions.json`（只有 `sessionId / workspace / createdAt / title / touchedAt`；没有计数、trail、prompt、参数或输出），重启后这些会话以“历史”行回到选项里；选项还会并上账本事件中出现过的会话，所以即使索引丢了也能按 id 选。文件用 tmp+rename 原子写、750ms 合并、损坏时忽略、卸载时 flush。
 
-**规则**：列出编译后的规则与链（名称/类别/严重度/来源/模式原文/本事件窗口命中数），可搜索。**AI 起草**（`POST /safeharness/draft`）：输入一句描述 → 调辅助模型返回经 loader 门校验的 YAML + 形状 warnings，**不写入、不启用**；复制 YAML 放进 rules 目录后点**重新加载规则**（`POST /safeharness/reload-rules`，失败保留旧规则集并写日志）。
+**规则**：列出编译后的规则与链（名称/类别/严重度/来源/模式原文/本事件窗口命中数），可搜索。**AI 起草**（`POST /safeharness/draft`）：输入一句描述 → 调辅助模型返回经 loader 门校验的 YAML + 形状 warnings，不写入、不启用。**写入并重载（1.9.0，`POST /safeharness/write-rule`）**：把草稿写成 `rules.dir` 下的一个文件并立即热重载——文件名白名单、默认不覆盖（同名要先点“覆盖”）、写前用**同一个 loader** 试编译（失败一个字节都不落盘）、同目录 tmp+rename 原子写、账本只记 `rules_written` 的文件名/字节数/规则数。只写已配置的绝对路径 `rules.dir`，**绝不写安装包自带 `rules/`**；未配置时按钮直接说明原因。**重新加载规则**（`POST /safeharness/reload-rules`）仍用于手工放进目录的文件。
 
 **巡检**：手动巡检两步确认；**定时巡检**可设 5–1440 分钟，状态写到插件自己的 `$DSH_HOME/safeharness/panel-state.json`（重启恢复；写失败降级 memory-only 并在面板标注）。调度器在宿主进程内，随插件卸载停止；手动与定时共享单飞，冷却只作用于手动点击。每次运行照旧写 `patrol_report`、按配置发通知。
 
 **设置**（`POST /safeharness/settings`，`op: read | save | probe | add-provider | delete-provider`）：
 
-- **自定义模型**：路由名、显示名、协议（`openai-completions` / `openai-responses` / `anthropic-messages`）、Base URL、API Key、模型 ID/显示名；可选“添加后设为评审模型”。Key 只经 loopback 提交一次，写入宿主凭据服务（`.credentials.yaml`），**不写进 profile YAML、不回显、不进账本**；路由写进 `llm-pi-ai` 的 `providers.<id>`（整段 `providers` 是 volatile 字段），宿主热更新后出现在供应方/模型下拉里。列表只显示本面板添加的路由（`$DSH_HOME/safeharness/providers.json`，只含 id/协议/URL/模型/凭据引用名），删除时若仍被评审/起草路由使用会拒绝（`provider_in_use`）。pi-ai 的手写路由只支持上述三种协议；Bedrock / Vertex / Azure / Codex OAuth 需要各自的环境与签名，不能用一个 URL + Key 表达。
+- **自定义模型**：路由名、显示名、协议（`openai-completions` / `openai-responses` / `anthropic-messages`）、Base URL、API Key、模型 ID/显示名；可选“添加后设为评审模型”。Key 只经 loopback 提交一次，写入宿主凭据服务（`.credentials.yaml`），**不写进 profile YAML、不回显、不进账本**；路由写进 `llm-pi-ai` 的 `providers.<id>`（整段 `providers` 是 volatile 字段），宿主热更新后出现在供应方/模型下拉里。列表只显示本面板添加的路由（`$DSH_HOME/safeharness/providers.json`，只含 id/协议/URL/模型/凭据引用名）。**1.8.4 起**：添加是“两条存储一次提交”——profile 写入成功但面板索引写失败时，会回滚刚写的路由与凭据（`provider_index_failed`），不再留下“配置里有、面板删不掉”的孤儿路由；删除会检查 `llm-pi-ai` 里**所有**指向该路由的引用（`defaultProvider` 等），不只评审/起草路由；`providerConfigurable` 与实际写路径统一（`update` 与 `mutate` 都在才可写）。pi-ai 的手写路由只支持上述三种协议；Bedrock / Vertex / Azure / Codex OAuth 需要各自的环境与签名，不能用一个 URL + Key 表达。
 - **导出账本片段**：概览的账本卡片可导出最近 200 条（`POST /safeharness/export`，上限 500）的 NDJSON，内容就是账本已有的脱敏记录（哈希/长度/代码），由浏览器保存为文件，宿主不落盘、不新增字段。
 - **语义评审**：启用开关、评审范围（只评审已标记输出 / 全部输出）、供应方、模型、送入评审的最大字符数、超时。供应方/模型下拉来自宿主 `llm` 服务的真实目录（`listProviders` + `listModels`，缓存 30s，上限 24 个 provider / 600 个 model）；留空表示使用宿主默认路由。
 - **规则起草路由**：起草供应方/模型（留空跟随评审路由）。`draft.enabled` 由 profile 配置控制，面板可以显式改写这一项（写入后立即生效）。
 - **测试连接**：`op: probe` 发一次最小结构化请求，只回 `status / verdict / 耗时`，**不回模型回复文本**。
-- **写入路径**：`settings.update(entryId, patch)` → 宿主写 `cordis.patch.yml` → loader 热更新 → 本插件 `applyHotConfig`。只改 **volatile** 字段；字段校验（`maxChars` 500–200000、`timeoutMs` 500–60000、启用时 provider/model 必填）在写之前完成；失败只回 `settings_invalid` / `settings_write_failed` 等粗粒度码，不转发宿主原文。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
+- **写入路径**：`settings.update(entryId, patch)` → 宿主写 `cordis.patch.yml` → loader 热更新 → 本插件 `applyHotConfig`。只改 **volatile** 字段；字段校验（`maxChars` 500–200000、`timeoutMs` 500–60000、启用时 provider/model 必填）在写之前完成；**1.8.4 起带 revision CAS**：面板把读到时的 `revision` 作为 `expectedRevision` 回传，宿主发现配置已被别处改过就拒绝（`settings_conflict`），不再 last-writer-wins 覆盖。失败只回 `settings_invalid` / `settings_write_failed` / `settings_conflict` 等粗粒度码，不转发宿主原文；宿主异常的日志只记 **错误名 + 机器码 + 消息长度**（零回显）。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
 - **只读原因**：profile 没有 `settings` 服务、或找不到本插件的可编辑 entry 时，页面照常显示并说明“只读”，不假装能保存。
 
 数据通路（两段）：
 
-1. **宿主半**（`src/panel/`）：`apply()` 检测到 `webServer` 后，在 `/safeharness` 前缀注册路由（`status` / `patrol` / `draft` / `schedule` / `reload-rules` / `settings` / `export`）。注册结果写一条 `invariant_probe`（`labels.state = route_registered` / `web_server_unavailable` / `route_failed`），“面板为什么没出现”可直接查账本。
+1. **宿主半**（`src/panel/`）：`apply()` 检测到 `webServer` 后，在 `/safeharness` 前缀注册路由（`status` / `patrol` / `draft` / `schedule` / `reload-rules` / `write-rule` / `settings` / `export`）。注册结果写一条 `invariant_probe`（`labels.state = route_registered` / `web_server_unavailable` / `route_failed`），“面板为什么没出现”可直接查账本。
 2. **浏览器半**（`src/client/`）：预构建的 `lib/client.js`（CJS 闭包工厂，唯一副作用是 `window.__ModuleLoader__.load({id, factory})`）。组件只用平台 seed 的 `react`，通过 `ctx.slots.inject('settings.plugins.tab', …)` 注册标签页——等待槽声明，不假设宿主一定有它。
 
 安全口径：
 
 - 所有端点只接受 **loopback Host + 同源 Origin**（带跨站标记直接拒），与宿主 `/api` 的浏览器栅栏同义；插件不读 `trustedHosts`，因此**不会**从 LAN 暴露。
 - 响应是固定投影：事件（`ts`/`kind`/`decision`/`reason_code`/`tool`/`severity`/`category`/规则 id/参数 hash 前缀/短会话 id/项目/标题）、会话摘要、规则清单（操作者自己写的模式）、定时状态、评审/起草路由与模型目录。不含 prompt、工具参数原文、模型输出、webhook 或凭据；内部异常只返回 `panel_failed` / `draft_failed` / `schedule_*` / `reload_failed` / `settings_*`，不回显堆栈或消息。
-- 所有动作 POST-only 且 body ≤ 16 KiB；起草描述 ≤ 2000 字；定时间隔必须是 5–1440 的整数；起草单飞；巡检单飞 + 手动冷却；设置字段有独立取值范围；账本导出的 `limit` 为 1–500。
+- **所有端点（含只读的 `status`）只接受 POST**，其他方法一律 `405` + `Allow: POST`（1.8.4 起；此前 `status` 还接受 GET，写端点用 GET 会得到 200 信封）；body ≤ 16 KiB；起草描述 ≤ 2000 字；规则正文 ≤ 12 000 字符、文件名必须匹配 `[a-z0-9][a-z0-9._-]{0,63}\.ya?ml`；定时间隔必须是 5–1440 的整数；起草单飞；巡检单飞 + 手动冷却；设置字段有独立取值范围且带 revision CAS；账本导出的 `limit` 为 1–500。
 - 自定义模型的 API Key 只经 loopback 提交一次，写入宿主凭据服务；它不写 profile、不回显、不进账本/日志/错误消息。路由配置只含 `apiKeyEnv` 引用名。账本导出返回的 `content` 就是账本已有的脱敏记录，不新增字段。
 - 面板不可用（headless profile 没有 `webServer`，或浏览器半未构建）时插件照常加载，不抛错。
 
@@ -750,15 +750,15 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。
 11. **桌面端命令面**：`/safeharness status` 与 `/safeharness judge probe` 已在桌面端输入框实测（2026-11-11，真实 judge 路由 `liao/gpt-6-luna`，`status=ok verdict=allow duration_ms=4347`）；`/safeharness patrol` 的 UI 触发仍只有处理器单测（`safeharness_patrol` 工具已在真实 host 跑通）。
 12. **通知通道**：飞书 / 钉钉 / 企业微信 / OneBot / 通用五种信封已实现，每种都有 payload 单测，并有一次本地真实 HTTP 五通道联调（`tests/notify.test.ts`）；飞书的完整投递路径另有真实 HTTP 验证（本地 sink，内部证据未随仓库分发）。**真实飞书 / 钉钉 / 企业微信机器人投递：待验证**（需要真实 webhook URL / access_token；信封与加签已按官方格式单测，并有本地真实 HTTP 五通道联调）。配好任意一个真实通道后，制造一次 FAIL 巡检即可确认。
-13. **高熵令牌启发式（1.8.1 已收紧）**：现在只有同时含**小写、大写和数字**、**不是纯 hex**、且**不是 Windows 路径**（`C:/...` / `file:///C:/...`）的 ≥40 字符令牌才参与熵计算。纯十六进制摘要（`safeharness_status` 的 64 位 ruleset 哈希、`safeharness_audit_query` 的 sha256 链哈希、`git log` 的 40 位 commit id）、全小写路径片段（如 `@scope/pkg/lib/entry`）与 Node 报错里的 `file:///C:/.../x.mjs` 不再误报 `credential_high_entropy`；`results.mode: enforce` 因此不会再拦掉插件自己的诊断结果。代价：全小写、无前缀的随机串不再由熵启发式兜底（仍可由 `credential_assignment` 等形态规则命中）。旧行为见 §12 R35，新决策见 R50。
+13. **高熵令牌启发式（1.8.1 收紧，1.8.4 加 SRI 豁免）**：只有同时含**小写、大写和数字**、**不是纯 hex**、**不是 Windows 路径**（`C:/...` / `file:///C:/...`）、且**不是 `sha1-` / `sha256-` / `sha384-` / `sha512-` 前缀的 SRI 摘要**的 ≥40 字符令牌才参与熵计算。纯十六进制摘要（`safeharness_status` 的 64 位 ruleset 哈希、`safeharness_audit_query` 的 sha256 链哈希、`git log` 的 40 位 commit id）、全小写路径片段（如 `@scope/pkg/lib/entry`）、Node 报错里的 `file:///C:/.../x.mjs`，以及 `pnpm-lock.yaml` 里的 `sha512-<base64>` 完整性摘要都不再误报 `credential_high_entropy`；`results.mode: enforce` 因此不会再拦掉插件自己的诊断结果、也不会把读 lockfile 整条替换。代价：全小写、无前缀的随机串不再由熵启发式兜底（仍可由 `credential_assignment` 等形态规则命中）。旧行为见 §12 R35，新决策见 R50。
 14. **输出面目前只覆盖回答**：不覆盖 compaction / session-title 等内部 LLM 调用（judge 请求本身有递归防护，但内部调用不送审）。
 15. **judge 的 URL/Key 属于宿主配置，不属于插件配置**：插件只携带 `provider`/`model` 路由，Key 由 DSH 凭据层按 `apiKeyEnv` 引用解析，插件既不读也不打印。换端点 = 改 profile 的 `llm-pi-ai.providers`，不需要改插件。
 16. **真实模型冒烟只做过一次最小会话**：用真实 OpenAI 兼容端点（`gpt-6-luna`）跑通一轮 observe：`usage_input=29280 / usage_output=26`、judge `status=ok`（`judge_ms=7319`）。不同供应商在工具调用形态、流式分片、usage 上报上的差异仍需各自冒烟；`/safeharness judge probe` 就是为此准备的自检入口。
-17. **规则起草只是"草稿"**：模型给的正则可能过宽（误杀）也可能过窄（漏检），插件只保证"结构与语法能过 loader 门"，不保证语义正确。`1.1.1` 起会对**明显过窄的形状**（纯字面量、短于 12 字符、单词元、chain 字面工具名）给出 `warnings`，但那仍然只是形状判断，最终要靠人看。起草需要一条可用的辅助路由（默认复用 judge 路由）；路由不可用时工具返回 `unavailable`，不会退回本地启发式，也不会静默生成一条看起来能用的规则。
+17. **规则起草只是"草稿"**：模型给的正则可能过宽（误杀）也可能过窄（漏检），插件只保证"结构与语法能过 loader 门"，不保证语义正确。`1.1.1` 起会对**明显过窄的形状**（纯字面量、短于 12 字符、单词元、chain 字面工具名）给出 `warnings`，但那仍然只是形状判断，最终要靠人看。起草需要一条可用的辅助路由（默认复用 judge 路由）；路由不可用时工具返回 `unavailable`，不会退回本地启发式，也不会静默生成一条看起来能用的规则。**1.9.0 起草稿可在面板一键落地**，但落地的仍是模型写的正则：loader 门只管"能不能加载"，不改变这条限制。
 18. **Python sidecar 是可选增强，不是默认路径**：需要本机 Python 与 `src/safeharness` 可 import；只接管输入面，不接管 `tools.guard`（同步无 IO 约束）。规则热更新后到子进程确认前的输入会被拒绝（hardened）或回落内置引擎（observe/balanced）。它刻意不做 Python `InformPolicy` 的 NFKC/零宽清理，以保持与内置引擎判定一致；不做这一点是**显式取舍**，见 §4.4。子进程超时只让当次请求失败、不会自动重启；连续超时会让输入面持续降级，此时应看 `safeharness_status.engine` 与姿态 code。
 19. **设置页只显示"显式覆盖"，不显示 preset 展开值**：DSH 设置页的表单值来自 profile patch 的 `config`（以及 schema 默认值）。本插件的预设展开在 `resolveConfig` 里完成，schema 刻意没有默认值（否则会废掉预设，R37），所以 `balanced` 下输入框里 `input.mode` 会是空的，而实际运行值是 `enforce`。改任一字段只会写该字段的覆盖值，不会把 preset 固化下来；这正是"preset 仍可整体切换"的前提。
 
-20. **面板是“可选 UI + 有限动作”，不是第二个真相源**：四个计数是**本进程**计数（重启归零）；事件来自账本尾部，会话来自“持久化元数据索引 ∪ 账本事件”，两者重启后可能对不上——面板把“本进程计数 / 历史会话”分开标注，不做归一；账本轮转后事件列表只显示当前文件里的记录。1.8.0 起面板的动作是：运行巡检（写 `patrol_report`、可能通知）、定时巡检（5–1440 分钟，状态写 `$DSH_HOME/safeharness/panel-state.json`）、AI 起草（一次辅助模型调用，返回草稿，**不写入不启用**）、重新加载规则（重读 rules 目录，失败保留旧规则集）、保存评审/起草路由（经宿主 `settings` 服务写 `cordis.patch.yml` 的 volatile 字段并热更新）、添加/删除自定义模型（写 `llm-pi-ai.providers.<id>`；Key 写宿主凭据服务，不写 profile、不回显、不进账本）、导出账本片段（返回账本已有的脱敏 NDJSON，浏览器保存）。它仍然**不写规则文件、不做通用调度**，也不替代 `safeharness_status` 工具。**会话标题来自宿主 `sessionTitle` 服务**（用户重命名或标题提供方建议），与工作区/创建时间一起写入 `$DSH_HOME/safeharness/sessions.json`（只有 `sessionId / workspace / createdAt / title / touchedAt`，无计数、trail、prompt、参数或输出）；标题只用于面板显示，不进账本、不进模型上下文，取不到时回落“项目 + 短会话 id”。样式跟随宿主主题（读 `documentElement` 的 `color-scheme`/`data-theme`），设置弹窗高度固定，面板内容较长时在弹窗内滚动。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。自定义路由只支持 pi-ai 的三种手写协议（OpenAI Completions / OpenAI Responses / Anthropic Messages），Bedrock/Vertex/Azure/Codex 需要各自环境与签名。插件顺序是“prepend 最佳努力 + guard 单调兜底”，不是绝对优先；详见 §4.8。
+20. **面板是“可选 UI + 有限动作”，不是第二个真相源**：四个计数是**本进程**计数（重启归零）；事件来自账本尾部，会话来自“持久化元数据索引 ∪ 账本事件”，两者重启后可能对不上——面板把“本进程计数 / 历史会话”分开标注，不做归一；账本轮转后事件列表只显示当前文件里的记录。1.8.0 起面板的动作是：运行巡检（写 `patrol_report`、可能通知）、定时巡检（5–1440 分钟，状态写 `$DSH_HOME/safeharness/panel-state.json`）、AI 起草（一次辅助模型调用，返回草稿，**不写入不启用**）、重新加载规则（重读 rules 目录，失败保留旧规则集）、保存评审/起草路由（经宿主 `settings` 服务写 `cordis.patch.yml` 的 volatile 字段并热更新）、添加/删除自定义模型（写 `llm-pi-ai.providers.<id>`；Key 写宿主凭据服务，不写 profile、不回显、不进账本）、导出账本片段（返回账本已有的脱敏 NDJSON，浏览器保存）。它仍然**不做通用调度**，也不替代 `safeharness_status` 工具；**1.9.0 起它多了一条人发起的写路径**——把草稿写成 `rules.dir` 下的一个文件并热重载（文件名白名单、默认不覆盖、写前 loader 试编译、原子写、账本只记 `rules_written` 的元数据），但**绝不写安装包自带 `rules/`**，也没有模型可调用的对应工具。**会话标题来自宿主 `sessionTitle` 服务**（用户重命名或标题提供方建议），与工作区/创建时间一起写入 `$DSH_HOME/safeharness/sessions.json`（只有 `sessionId / workspace / createdAt / title / touchedAt`，无计数、trail、prompt、参数或输出）；标题只用于面板显示，不进账本、不进模型上下文，取不到时回落“项目 + 短会话 id”。样式跟随宿主主题（读 `documentElement` 的 `color-scheme`/`data-theme`），设置弹窗高度固定，面板内容较长时在弹窗内滚动。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。自定义路由只支持 pi-ai 的三种手写协议（OpenAI Completions / OpenAI Responses / Anthropic Messages），Bedrock/Vertex/Azure/Codex 需要各自环境与签名。插件顺序是“prepend 最佳努力 + guard 单调兜底”，不是绝对优先；详见 §4.8。
 
 ---
 

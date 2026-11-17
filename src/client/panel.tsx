@@ -38,6 +38,7 @@ import type {
   PanelProviderOption,
   PanelProviderProtocol,
   PanelRule,
+  PanelRuleWriteValue,
   PanelSchedule,
   PanelSession,
   PanelSettingsPatch,
@@ -117,6 +118,18 @@ type DraftState =
   | { readonly status: 'running' }
   | { readonly status: 'done'; readonly value: PanelDraftValue }
   | { readonly status: 'error'; readonly code: string; readonly detail?: string }
+
+/**
+ * Rule-file write state: draft → confirm → write, with `exists` as the extra gate
+ * that only a second click may pass (overwriting is never the default).
+ */
+type RuleWriteState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'confirming' }
+  | { readonly status: 'saving' }
+  | { readonly status: 'exists' }
+  | { readonly status: 'done'; readonly value: PanelRuleWriteValue }
+  | { readonly status: 'error'; readonly code: string; readonly detail?: string; readonly problems?: readonly string[] }
 
 /** Settings form (the judge half); numbers stay strings while being edited. */
 interface JudgeForm {
@@ -909,6 +922,12 @@ function detailOf(error: unknown): string | undefined {
   return typeof detail === 'string' && detail.length > 0 ? detail : undefined
 }
 
+/** Loader problems attached to a rejected rule write, when present. */
+function problemsOf(error: unknown): readonly string[] {
+  const problems = (error as { readonly problems?: unknown } | null)?.problems
+  return Array.isArray(problems) ? problems.filter((item): item is string => typeof item === 'string') : []
+}
+
 /** Best-effort clipboard copy; the text stays visible on failure. */
 function copyText(text: string): void {
   try {
@@ -934,6 +953,15 @@ function actionError(code: string, detail?: string): string {
       case 'schedule_unavailable': return '本 profile 没有接定时巡检。'
       case 'reload_unavailable': return '本 profile 不支持在线重新加载。'
       case 'reload_failed': return '重新加载失败，已保留旧规则集（看日志）。'
+      case 'write_unavailable': return '本 profile 没有接规则写入。'
+      case 'rules_dir_unconfigured': return '未配置 rules.dir：在 profile 里给它一个绝对路径并重启一次。'
+      case 'rules_dir_not_absolute': return 'rules.dir 必须是绝对路径。'
+      case 'rules_dir_packaged': return '拒绝写入安装包自带的 rules/：把 rules.dir 指到别的目录。'
+      case 'rules_dir_unwritable': return '规则目录不可写（检查路径与权限）。'
+      case 'filename_invalid': return '文件名不合法：小写字母/数字/._-，以 .yaml 结尾，不能带路径。'
+      case 'rule_content_invalid': return '规则未通过 loader 校验，没有写入。'
+      case 'rule_exists': return '同名规则文件已存在：确认覆盖才会替换。'
+      case 'rule_write_failed': return '写入规则文件失败（看日志）。'
       case 'patrol_cooldown': return '刚运行过巡检，请几秒后再试。'
       case 'patrol_in_progress': return '已经有一次巡检在运行。'
       case 'patrol_unavailable': return '本 profile 没有接巡检。'
@@ -952,6 +980,7 @@ function settingsErrorMessage(code: string): string {
     case 'settings_readonly': return '配置是只读的，宿主机不允许写入（settings_readonly）。'
     case 'settings_invalid': return '要保存的取值不合法（settings_invalid），请检查字符数与超时。'
     case 'settings_write_failed': return '写入 profile 配置失败（settings_write_failed），看宿主日志。'
+    case 'settings_conflict': return '配置在读取之后被别处改过（settings_conflict）：刷新面板再保存。'
     case 'probe_unavailable': return '本 profile 不能探测评审路由（probe_unavailable）。'
     case 'judge_unavailable': return '本 profile 没有可用的 llm 服务（judge_unavailable）。'
     case 'unknown_endpoint': return '当前服务端还没有 /settings 接口（unknown_endpoint）。'
@@ -978,6 +1007,8 @@ function providerErrorMessage(code: string): string {
     case 'provider_unavailable': return '本 profile 没有可写的 pi-ai 供应商条目或凭据服务。'
     case 'settings_invalid': return '输入不合法：检查路由 id、base URL、API key 与模型 id。'
     case 'settings_write_failed': return '宿主拒绝写入配置（settings_write_failed），看宿主日志。'
+    case 'settings_conflict': return '配置在读取之后被别处改过（settings_conflict）：刷新面板再试。'
+    case 'provider_index_failed': return '路由与面板索引未能同时写入（provider_index_failed）：重试一次，或看日志。'
     case 'unknown_endpoint': return '当前服务端还没有这个接口（unknown_endpoint）。'
     case 'panel_http_404': return '当前服务端没有这个接口（HTTP 404）。'
     default: return `操作失败（${code}）。`
@@ -1056,6 +1087,10 @@ function buildPatch(value: PanelSettingsValue, judge: JudgeForm, draft: DraftFor
   if (!hasJudge && !hasDraft) return { patch: undefined, invalid: null }
   return {
     patch: {
+      // Echo the revision this form was rendered at: the next save is refused as stale
+      // instead of overwriting a change another window (or the native settings page)
+      // made in the meantime. Null means the host exposes no revision.
+      ...(value.revision === null ? {} : { expectedRevision: value.revision }),
       ...(hasJudge ? { judge: judgePatch } : {}),
       ...(hasDraft ? { draft: draftPatch } : {}),
     },
@@ -1783,7 +1818,18 @@ function EventsTab({ payload, filter, onFilter }: {
   )
 }
 
-/** The rules tab: inventory, search, reload, AI drafting. */
+/** A landing file name for one draft: lowercase token with a YAML suffix. */
+function ruleFilenameFor(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, '-')
+    .replace(/-{2,}/gu, '-')
+    .replace(/^[-.]+|[-.]+$/gu, '')
+    .slice(0, 48)
+  return `${slug.length > 0 ? slug : 'operator-rule'}.yaml`
+}
+
+/** The rules tab: inventory, search, reload, AI drafting, land-as-file. */
 function RulesTab({ payload, face, onRefresh }: {
   readonly payload: PanelPayload
   readonly face: PanelFace
@@ -1794,8 +1840,14 @@ function RulesTab({ payload, face, onRefresh }: {
   const [description, setDescription] = useState('')
   const [kind, setKind] = useState<'inform' | 'chain'>('inform')
   const [draft, setDraft] = useState<DraftState>({ status: 'idle' })
+  const [filename, setFilename] = useState('')
+  const [write, setWrite] = useState<RuleWriteState>({ status: 'idle' })
   const [reloading, setReloading] = useState(false)
   const [reloadMessage, setReloadMessage] = useState<string | null>(null)
+
+  // Landing a draft needs a configured `rules.dir`; without one the only option is
+  // copy-paste, and the button explains that instead of failing on click.
+  const writable = payload.rulesDir.length > 0
 
   const rules = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -1807,8 +1859,13 @@ function RulesTab({ payload, face, onRefresh }: {
   const startDraft = (): void => {
     if (description.trim().length === 0) return
     setDraft({ status: 'running' })
+    setWrite({ status: 'idle' })
+    setFilename('')
     void face.draft({ description: description.trim(), kind }).then(
-      value => { setDraft({ status: 'done', value }) },
+      value => {
+        setDraft({ status: 'done', value })
+        setFilename(ruleFilenameFor(value.name))
+      },
       (error: unknown) => {
         const detail = detailOf(error)
         setDraft({ status: 'error', code: codeOf(error), ...(detail === undefined ? {} : { detail }) })
@@ -1828,6 +1885,36 @@ function RulesTab({ payload, face, onRefresh }: {
       (error: unknown) => {
         setReloading(false)
         setReloadMessage(actionError(codeOf(error)))
+      },
+    )
+  }
+
+  /**
+   * Land the current draft. `overwrite: false` first: the Host answers `rule_exists`
+   * when the name is taken, and only the explicit "覆盖并重载" click passes `true`.
+   */
+  const writeRule = (overwrite: boolean): void => {
+    if (draft.status !== 'done') return
+    setWrite({ status: 'saving' })
+    void face.writeRule({ filename: filename.trim(), yaml: draft.value.yaml, overwrite }).then(
+      (value) => {
+        setWrite({ status: 'done', value })
+        onRefresh()
+      },
+      (error: unknown) => {
+        const code = codeOf(error)
+        if (code === 'rule_exists') {
+          setWrite({ status: 'exists' })
+          return
+        }
+        const detail = detailOf(error)
+        const problems = problemsOf(error)
+        setWrite({
+          status: 'error',
+          code,
+          ...(detail === undefined ? {} : { detail }),
+          ...(problems.length === 0 ? {} : { problems }),
+        })
       },
     )
   }
@@ -1951,7 +2038,70 @@ function RulesTab({ payload, face, onRefresh }: {
                 {draft.value.warnings.map((warning, index) => <li key={`${warning}-${String(index)}`}>{warning}</li>)}
               </ul>
             )}
-            <p className="shp-hint">草稿不会写入文件，也不会启用；它只是一段可以粘贴的文本。</p>
+            <div className="shp-stack">
+              <p className="shp-card-hint">
+                草稿不会自动生效。确认后会写成
+                {writable
+                  ? <> <code className="shp-mono">{payload.rulesDir}</code> 下的一个文件并立即热重载</>
+                  : ' rules.dir 下的一个文件（当前未配置，只能复制粘贴）'}
+                ；写入前先用 loader 校验，失败不落盘。
+              </p>
+              <Field
+                label="文件名"
+                hint="小写字母/数字/._-，以 .yaml 结尾；同名文件需要再确认一次"
+                value={filename}
+                onChange={(value) => { setFilename(value); setWrite({ status: 'idle' }) }}
+                disabled={write.status === 'saving'}
+                placeholder="operator-my-rule.yaml"
+                spellCheck={false}
+              />
+              <div className="shp-card-actions">
+                {write.status === 'idle' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="shp-btn shp-btn-primary"
+                      onClick={() => { setWrite({ status: 'confirming' }) }}
+                      disabled={!writable}
+                    >
+                      写入并重载
+                    </button>
+                    {writable ? null : <span className="shp-hint">未配置 rules.dir：只能复制粘贴。</span>}
+                  </>
+                ) : null}
+                {write.status === 'confirming' ? (
+                  <>
+                    <span className="shp-hint">确认把这段 YAML 写成 {filename.trim()} 并立即生效？</span>
+                    <button type="button" className="shp-btn shp-btn-primary" onClick={() => { writeRule(false) }}>确认写入</button>
+                    <button type="button" className="shp-btn" onClick={() => { setWrite({ status: 'idle' }) }}>取消</button>
+                  </>
+                ) : null}
+                {write.status === 'saving' ? <span className="shp-hint">写入中…</span> : null}
+                {write.status === 'exists' ? (
+                  <>
+                    <span className="shp-line-error" role="alert">同名文件已存在。</span>
+                    <button type="button" className="shp-btn" onClick={() => { writeRule(true) }}>覆盖并重载</button>
+                    <button type="button" className="shp-btn" onClick={() => { setWrite({ status: 'idle' }) }}>取消</button>
+                  </>
+                ) : null}
+              </div>
+              {write.status === 'done' ? (
+                <p className="shp-line-ok" role="status">
+                  已{write.value.reloaded ? '写入并重载' : '写入（热重载失败，保留旧规则集）'}：{write.value.filename}
+                  {' · '}{write.value.bytes} B{' · '}{write.value.rules} 条规则 / {write.value.chains} 条链{' · '}{write.value.hash}…
+                </p>
+              ) : null}
+              {write.status === 'error' ? (
+                <div className="shp-stack">
+                  <span className="shp-line-error" role="alert">{actionError(write.code, write.detail)}</span>
+                  {write.problems === undefined || write.problems.length === 0 ? null : (
+                    <ul className="shp-warn-list">
+                      {write.problems.map((problem, index) => <li key={`${problem}-${String(index)}`}>{problem}</li>)}
+                    </ul>
+                  )}
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </Card>
@@ -2684,14 +2834,14 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
 /** The tab body. */
 export function SafeHarnessPanel(props: SafeHarnessPanelProps): ReactNode {
   const {
-    load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings,
+    load, patrol, draft, schedule, reloadRules, writeRule, loadSettings, saveSettings,
     addProvider, deleteProvider, probeJudge, exportLedger,
   } = props
   const face = useMemo<PanelFace>(() => ({
-    load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings,
+    load, patrol, draft, schedule, reloadRules, writeRule, loadSettings, saveSettings,
     addProvider, deleteProvider, probeJudge, exportLedger,
   }), [
-    load, patrol, draft, schedule, reloadRules, loadSettings, saveSettings,
+    load, patrol, draft, schedule, reloadRules, writeRule, loadSettings, saveSettings,
     addProvider, deleteProvider, probeJudge, exportLedger,
   ])
 

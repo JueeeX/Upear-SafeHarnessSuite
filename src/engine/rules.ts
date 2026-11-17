@@ -119,7 +119,30 @@ export function loadRuleSet(opts: LoadRuleSetOptions): RuleSet {
   const local =
     extraDir === '' ? emptyBatch() : collectFromDirectory(extraDir, 'dir', problems)
   const inline = opts.inline === undefined ? emptyBatch() : collectFromInline(opts.inline, problems)
+  return assembleRuleSet(packaged, local, inline, problems)
+}
 
+/**
+ * Merge the three precedence levels, enforce the name rules and compile.
+ *
+ * Shared by {@link loadRuleSet} and {@link validateRuleCandidate} so "what would
+ * load after this write" and "what loads from disk" can never drift apart — the
+ * panel's write gate is only trustworthy if it runs this exact code.
+ *
+ * @param packaged - packaged layer (required, non-empty).
+ * @param local - operator `rules.dir` layer, already collected.
+ * @param inline - `rules.inline` layer, already collected.
+ * @param problems - problems collected so far; duplicates and the inert-set check
+ *   are appended here, and any entry makes the whole load fail.
+ * @returns the compiled, hashed rule set.
+ * @throws RuleLoadError listing every accumulated problem.
+ */
+function assembleRuleSet(
+  packaged: RuleBatch,
+  local: RuleBatch,
+  inline: RuleBatch,
+  problems: string[],
+): RuleSet {
   // Duplicates are only an error *within* one level; across levels the higher
   // level intentionally shadows the lower one (that is what "inline > dir >
   // packaged" means for the operator).
@@ -162,6 +185,67 @@ export function tryLoadRuleSet(opts: LoadRuleSetOptions): RuleSetLoadResult {
       ok: false,
       error: new RuleLoadError([`unexpected rule loading failure: ${errorMessage(cause)}`]),
     }
+  }
+}
+
+/**
+ * Options for {@link validateRuleCandidate}: one proposed operator file.
+ */
+export interface RuleCandidateOptions extends LoadRuleSetOptions {
+  /** File name the candidate would be written as, inside `dir` (no path separators). */
+  readonly filename: string
+  /** The complete YAML body of that file. */
+  readonly yaml: string
+}
+
+/** What a candidate file would do to the rule set. */
+export type RuleCandidateResult =
+  | { readonly ok: true; readonly ruleset: RuleSet }
+  | { readonly ok: false; readonly problems: readonly string[] }
+
+/**
+ * Compile one proposed operator rule file against the current sources, without
+ * touching the disk.
+ *
+ * This is the panel's write gate (D62): a draft is only allowed to land if the rule
+ * set that would result from writing it still loads. Three things are modelled
+ * exactly — the target file replaces itself (an overwrite must not be reported as a
+ * duplicate of its own old rules), it lands in the `dir` level (so it must not
+ * collide with another operator file), and it goes through the same
+ * {@link assembleRuleSet} the real loader uses.
+ *
+ * @param opts - the packaged directory, the operator directory, the inline rules,
+ *   and the candidate file name + YAML body.
+ * @returns the rule set as it would load, or every problem that stops it.
+ */
+export function validateRuleCandidate(opts: RuleCandidateOptions): RuleCandidateResult {
+  const problems: string[] = []
+  const packaged = collectFromDirectory(opts.packagedRulesDir, 'packaged', problems)
+  const extraDir = opts.dir === undefined ? '' : opts.dir.trim()
+  const origin = `dir/${opts.filename}`
+  // The candidate replaces the whole target file, so that file is not read at all:
+  // its rules are gone either way, and its old problems must not block a repair.
+  const local = extraDir === ''
+    ? emptyBatch()
+    : collectFromDirectory(extraDir, 'dir', problems, opts.filename)
+  const contributedBefore = local.rules.length + local.chains.length
+  let documents: unknown[] = []
+  try {
+    documents = parseYamlDocuments(opts.yaml, origin)
+  } catch (cause) {
+    // The parser already prefixes `origin:line`; keep it as one self-describing problem.
+    problems.push(errorMessage(cause))
+  }
+  for (const document of documents) collectDocument(document, origin, local, problems)
+  if (problems.length === 0 && local.rules.length + local.chains.length === contributedBefore) {
+    problems.push(`${origin}: contains no rules or chain rules`)
+  }
+  const inline = opts.inline === undefined ? emptyBatch() : collectFromInline(opts.inline, problems)
+  try {
+    return { ok: true, ruleset: assembleRuleSet(packaged, local, inline, problems) }
+  } catch (cause) {
+    if (cause instanceof RuleLoadError) return { ok: false, problems: cause.problems }
+    return { ok: false, problems: [errorMessage(cause)] }
   }
 }
 
@@ -289,13 +373,25 @@ function emptyBatch(): RuleBatch {
  *
  * A missing `dir` (operator option) is normal and contributes nothing; a missing or
  * empty *packaged* directory is a broken install and always reported.
+ *
+ * @param directory - absolute directory to list.
+ * @param level - precedence level, used for the `origin` label and error text.
+ * @param problems - collected problems (appended to).
+ * @param skipFile - one file to ignore entirely. The candidate validator uses it for
+ *   the file an overwrite replaces: its rules are gone either way, and its old
+ *   problems must not block the repair.
  */
-function collectFromDirectory(directory: string, level: RuleLevel, problems: string[]): RuleBatch {
+function collectFromDirectory(
+  directory: string,
+  level: RuleLevel,
+  problems: string[],
+  skipFile?: string,
+): RuleBatch {
   const batch = emptyBatch()
   let fileNames: string[]
   try {
     fileNames = readdirSync(directory, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && RULE_FILE_SUFFIX.test(entry.name))
+      .filter((entry) => entry.isFile() && RULE_FILE_SUFFIX.test(entry.name) && entry.name !== skipFile)
       .map((entry) => entry.name)
       .sort(compareFileNames)
   } catch (cause) {
