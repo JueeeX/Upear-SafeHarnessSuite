@@ -116,7 +116,7 @@ type DraftState =
   | { readonly status: 'idle' }
   | { readonly status: 'running' }
   | { readonly status: 'done'; readonly value: PanelDraftValue }
-  | { readonly status: 'error'; readonly code: string }
+  | { readonly status: 'error'; readonly code: string; readonly detail?: string }
 
 /** Settings form (the judge half); numbers stay strings while being edited. */
 interface JudgeForm {
@@ -903,6 +903,12 @@ function codeOf(error: unknown): string {
   return error instanceof Error && error.message.length > 0 ? error.message : 'unknown_error'
 }
 
+/** Coarse server-side reason attached to a rejected face call, when present. */
+function detailOf(error: unknown): string | undefined {
+  const detail = (error as { readonly detail?: unknown } | null)?.detail
+  return typeof detail === 'string' && detail.length > 0 ? detail : undefined
+}
+
 /** Best-effort clipboard copy; the text stays visible on failure. */
 function copyText(text: string): void {
   try {
@@ -913,23 +919,30 @@ function copyText(text: string): void {
 }
 
 /** Error copy for one failed panel action. */
-function actionError(code: string): string {
-  switch (code) {
-    case 'invalid_body': return '请求内容不合法。'
-    case 'draft_disabled': return 'AI 起草已关闭（config `draft.enabled: false`）。'
-    case 'draft_unavailable': return '起草路由不可用。'
-    case 'draft_in_progress': return '已有一个起草请求在运行。'
-    case 'draft_failed': return '起草失败（看宿主日志）。'
-    case 'schedule_unavailable': return '本 profile 没有接定时巡检。'
-    case 'reload_unavailable': return '本 profile 不支持在线重新加载。'
-    case 'reload_failed': return '重新加载失败，已保留旧规则集（看日志）。'
-    case 'patrol_cooldown': return '刚运行过巡检，请几秒后再试。'
-    case 'patrol_in_progress': return '已经有一次巡检在运行。'
-    case 'patrol_unavailable': return '本 profile 没有接巡检。'
-    case 'method_not_allowed': return '该操作只接受 POST。'
-    case 'unknown_endpoint': return '当前服务端没有这个接口。'
-    default: return '操作失败。'
-  }
+function actionError(code: string, detail?: string): string {
+  const text = (() => {
+    switch (code) {
+      case 'invalid_body': return '请求内容不合法。'
+      case 'draft_disabled': return 'AI 起草已关闭（config `draft.enabled: false`）。'
+      case 'draft_unavailable': return '起草路由不可用（profile 没有 llm 服务，或 draft 路由为空）。'
+      case 'draft_timeout': return '起草超时：模型没有在限定时间内返回。'
+      case 'draft_empty': return '起草失败：模型没有返回文本（可能是输出 token 上限太小）。'
+      case 'draft_bad_json': return '起草失败：模型返回的不是 JSON。'
+      case 'draft_invalid': return '起草失败：生成的规则未通过校验。'
+      case 'draft_failed': return '起草失败：模型调用出错。'
+      case 'draft_in_progress': return '已有一个起草请求在运行。'
+      case 'schedule_unavailable': return '本 profile 没有接定时巡检。'
+      case 'reload_unavailable': return '本 profile 不支持在线重新加载。'
+      case 'reload_failed': return '重新加载失败，已保留旧规则集（看日志）。'
+      case 'patrol_cooldown': return '刚运行过巡检，请几秒后再试。'
+      case 'patrol_in_progress': return '已经有一次巡检在运行。'
+      case 'patrol_unavailable': return '本 profile 没有接巡检。'
+      case 'method_not_allowed': return '该操作只接受 POST。'
+      case 'unknown_endpoint': return '当前服务端没有这个接口。'
+      default: return '操作失败。'
+    }
+  })()
+  return detail === undefined ? text : `${text}（${detail}）`
 }
 
 /** Error copy for one settings/probe failure code. */
@@ -1796,7 +1809,10 @@ function RulesTab({ payload, face, onRefresh }: {
     setDraft({ status: 'running' })
     void face.draft({ description: description.trim(), kind }).then(
       value => { setDraft({ status: 'done', value }) },
-      (error: unknown) => { setDraft({ status: 'error', code: codeOf(error) }) },
+      (error: unknown) => {
+        const detail = detailOf(error)
+        setDraft({ status: 'error', code: codeOf(error), ...(detail === undefined ? {} : { detail }) })
+      },
     )
   }
 
@@ -1917,7 +1933,7 @@ function RulesTab({ payload, face, onRefresh }: {
             {draft.status === 'running' ? '起草中…' : '起草'}
           </button>
           <span className="shp-hint shp-num">{description.length} / {maxChars}</span>
-          {draft.status === 'error' ? <span className="shp-line-error" role="alert">{actionError(draft.code)}</span> : null}
+          {draft.status === 'error' ? <span className="shp-line-error" role="alert">{actionError(draft.code, draft.detail)}</span> : null}
         </div>
         {draft.status === 'done' ? (
           <div className="shp-stack">

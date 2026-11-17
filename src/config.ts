@@ -554,7 +554,7 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
   // Drafting is opt-in per invocation (a tool call or `/safeharness draft`), so it can
   // stay enabled by default without spending anything at load time. The route falls
   // back to the judge's provider/model when left empty.
-  draft: { enabled: true, provider: '', model: '', maxChars: 500, timeoutMs: 20000, maxTokens: 400 },
+  draft: { enabled: true, provider: '', model: '', maxChars: 500, timeoutMs: 60000, maxTokens: 2048 },
 }
 
 /** Recursively-partial helper for the override tables. */
