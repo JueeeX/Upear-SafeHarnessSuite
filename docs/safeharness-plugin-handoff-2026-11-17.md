@@ -666,6 +666,12 @@ const ws = new WebSocket(page.webSocketDebuggerUrl)
     - 根因：插件是**手改 `profiles/desktop/package.json` 的 dependencies + `cordis.patch.yml`** 装进去的；而桌面 profile 由 Electron 独占管理（`dsh plugin --profile desktop …` 与 `--dump-config` 都被拒：*profile is managed exclusively by the Electron application*），其 `dsh.profile.bundles` 只有 6 个官方 bundle。按宿主文档（ui-settings-plugins）：第三方配置页要么挂在 `plugins.item`（官方）、要么按 `plugins.bundle.config`（以 bundle 包名为键）渲染，「没有组合包 patch 的依赖不是插件，除非 profile 选中了它才会带异常标签列出」——我们不属于任何一种，于是宿主根本没有可挂 `settings.plugins.tab` 的条目页。
     - 影响：**HTTP 面板端全通、写入链路照常工作**，但用户在桌面 GUI 里没有入口点开它；历史上所有面板截图都来自 `dsh web` 起的 dev/web profile，桌面装机验证一直只用 `safeharness_status` / curl。
     - 待办（需产品决策）：把插件改成「profile 选中」的条目（GUI「添加插件」流程，或手工在 `dsh.profile.bundles` 加 `@upear/dsh-safeharness`）后重启，再看是否出现条目页与标签；或维持现状，把面板定位成 dev/web profile 的能力。
+    - **2026-11-17 17:45–17:52 试过 GUI「添加插件」两次，都失败**（用真实 cookie 驱动 headless Edge 点完整个流程）：
+      ① 直接装 `file:…upear-dsh-safeharness-1.9.1.tgz` → pnpm 输出 `Already up to date`（依赖里本来就有一模一样的 spec/版本），宿主报 *无法从依赖变更中确定安装了哪一个包*；
+      ② 先把 profile `package.json` 的依赖删掉再装 → pnpm 确实 `+ @upear/dsh-safeharness file:…1.9.1.tgz`，宿主仍判失败并把清单回滚成 `{}`。
+      结论：**不是流程问题，是打包缺件**——宿主文档明确：*"A bundle is a package whose `package.json` declares `dsh.bundle.patch`"*（官方包写法：`"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`）。我们的包只有 `dsh.client`，永远进不了 bundle 清单。
+      现场已恢复：`package.json` 从 `.bak-sh191b` 还原（依赖指向 1.9.1 tarball）、`node_modules` 仍是 1.9.1、lockfile 完好；`safeharness_status` = 1.9.1 / 20 规则 / 8/8 接缝 / 0 失败。备份文件保留：`profiles/desktop/{package.json,cordis.patch.yml,pnpm-lock.yaml,pnpm-workspace.yaml}.bak-sh191b`。
+    - **1.9.2 计划（拿到面板截图的唯一正路）**：① 包内加 `cordis.patch.yml`（insert 本插件条目，等价于当前 profile 里那几条手工 patch）；② `package.json` 加 `dsh.bundle.patch`；③ 重新打包（版本 1.9.2）；④ GUI「添加插件」装 1.9.2 → 清单出现 SafeHarness 条目；⑤ 删掉 profile `cordis.patch.yml` 里的手工 insert（只留按 id 的 config 覆盖），避免双份加载；⑥ 重启 → 插件页出现条目页与五标签 → 用同一套 headless Edge 截图。
 
 ---
 
