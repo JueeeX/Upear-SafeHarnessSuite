@@ -36,7 +36,7 @@
 | 桌面端插件 | **已装 1.9.0**（`C:\Users\xiaojue\.dsh\profiles\desktop\node_modules\@upear\dsh-safeharness`，来自 1.9.0 tarball） |
 | 桌面 profile 依赖 | `file:C:/Users/xiaojue/.dsh/plugin-tarballs/upear-dsh-safeharness-1.9.0.tgz` |
 | 桌面安装脚本 | `C:\Users\xiaojue\.dsh\plugin-tarballs\install-safeharness-desktop.cmd`（**`TGZ=` 已指向 1.9.1**，tarball 已复制，**尚未执行**；执行前必须完全退出 DSH，含托盘） |
-| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`57efcc9`**，tag **`v1.8.3`**（tag 对象 `3d567a7…`） |
+| 公开仓库 | `https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh`（remote 名 **`dsh`**），`main` = **`57efcc9`**，tag **`v1.8.3`**（tag 对象 `3d567a7…`）；**1.9.1 已预演待推**（worktree `sh-public-191`，leaks 0，41 / 726+3），2026-11-17 16:20 GitHub 不可达 |
 | 本地仓库 | `F:\AgentSecurity\Upear`，`main` = **1.9.1**（`git log -1`；前序 `e22e404` 1.9.0 / `9c0b717` 1.9.0 文档 / `d5c3487` 1.8.4 / `b60c7e1` 1.8.3 文档）；`github` 备份远端 main = `99a9956`，`v1.8.3` 标签已同步 |
 | 测试 | 1.9.1 本机 **44 文件 / 747 用例**；公开树与 CI 口径在发布时重算（1.8.3 为 38 / 691 与 37 / 683） |
 | tarball | 已发布 `dist/upear-dsh-safeharness-1.8.3.tgz`；桌面已装 `1.9.0`；本地 **`dist/upear-dsh-safeharness-1.9.1.tgz`，337,700 B，sha256 `D9CF4A5DCA334C675B54E3E3EE98A8CBE40F0FB6A6DFF1945B8EC2F8DD0DEA6E`**（未发布/未安装） |
@@ -551,6 +551,15 @@ git worktree remove <worktree> --force
 - 本机 `api.github.com` 超时，CI runs 状态需要在网页确认。
 - GitHub push 偶发 `Connection was reset` / timeout：加 `-c http.version=HTTP/1.1` 重试通常能过。
 - **已发布的 tag 不要重写**；修复只发新版本。
+
+**2026-11-17 1.9.1 发布预演（已做到推之前一步）**：`git fetch dsh main` 当时**连不上 github.com:443**（`Failed to connect … after 22328 ms`），所以 `dsh/main` 仍是缓存的 `57efcc9`。公开树已按 §8.2 在 `C:\Users\xiaojue\.codex\worktrees\sh-public-191`（分支 `release/1.9.1`）预演完成：
+
+- `publish-public.mjs --target <worktree>` → 116 文件、跳过 8 个内部资产；
+- junction `node_modules` → 主仓；`tsc -p tsconfig.json --noEmit` = 0；`build-client.mjs` 成功；
+- `vitest run` = **41 文件 / 726 passed + 3 skipped**；
+- 删 `lib/` 后 `--check` → **leaks: 0**；worktree 内 `package.json` = 1.9.1、无 `evidence/`。
+
+网络恢复后**只差**：`cd` 进该 worktree → `git add -A` → commit → `git push dsh HEAD:main` → `git tag -a v1.9.1 -m "dsh-safeharness 1.9.1"` → `git push dsh v1.9.1`（失败可加 `-c http.version=HTTP/1.1`）→ 主仓 `git push github main` / `git push github v1.9.1`。
 
 ---
 
