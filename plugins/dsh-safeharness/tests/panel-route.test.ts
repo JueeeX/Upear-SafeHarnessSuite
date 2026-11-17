@@ -203,6 +203,23 @@ describe('createPanelHandler', () => {
     expect(out.status).toBe(405)
   })
 
+  it('is entirely POST-only, including the read-only status endpoint', async () => {
+    for (const url of ['/safeharness/status', '/safeharness/patrol', '/safeharness/settings']) {
+      const out = response()
+      await createPanelHandler(options)(request({ host: '127.0.0.1:61112' }, { method: 'GET', url }), out.res)
+      expect(out.status, url).toBe(405)
+      expect(out.headers['allow'], url).toBe('POST')
+      expect(out.body, url).toBe('')
+    }
+  })
+
+  it('fences an untrusted host before it can learn the method rules', async () => {
+    const out = response()
+    await createPanelHandler(options)(request({ host: 'evil.example' }, { method: 'GET', url: '/safeharness/status' }), out.res)
+    expect(out.status).toBe(403)
+    expect(out.body).toBe('forbidden')
+  })
+
   it('answers unknown endpoints with a coded envelope', async () => {
     const out = response()
     await createPanelHandler(options)(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/other' }), out.res)
@@ -243,7 +260,9 @@ describe('patrol endpoint', () => {
     const out = response()
     await handler(request({ host: '127.0.0.1:61112' }, { method: 'GET', url: '/safeharness/patrol' }), out.res)
     expect(calls).toBe(0)
-    expect(JSON.parse(out.body)).toEqual({ ok: false, error: { code: 'method_not_allowed', message: 'patrol requires POST' } })
+    expect(out.status).toBe(405)
+    expect(out.headers['allow']).toBe('POST')
+    expect(out.body).toBe('')
   })
 
   it('enforces the cooldown window between operator-triggered runs', async () => {
@@ -594,7 +613,9 @@ describe('export endpoint', () => {
 
     const get = response()
     await handler(request({ host: '127.0.0.1:61112' }, { url: '/safeharness/export', method: 'GET' }), get.res)
-    expect(JSON.parse(get.body)).toMatchObject({ ok: false, error: { code: 'method_not_allowed' } })
+    expect(get.status).toBe(405)
+    expect(get.headers['allow']).toBe('POST')
+    expect(get.body).toBe('')
   })
 })
 

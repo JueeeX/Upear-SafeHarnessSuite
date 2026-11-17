@@ -572,6 +572,24 @@ describe('scanToolResult: credential leaks', () => {
     expect(scanToolResult(ruleset(), resultsConfig(), resultView(url))).toEqual([])
   })
 
+  it('ignores Subresource-Integrity digests from a lockfile (R50 follow-up)', () => {
+    // `pnpm-lock.yaml` carries a `sha512-<base64>` for every package. The base64
+    // part clears 40 chars / 3.5 bits and mixes cases, so only the `sha<alg>-`
+    // prefix tells an integrity check apart from an encoded secret — reading a
+    // lockfile used to be blocked wholesale under `results.mode: enforce`.
+    // Split so this *source* never carries a 40+ character token itself: the guard
+    // under test scans tool results, including this file when a later session reads it.
+    const body = ['Ab3dEf6hIj9kLm2n', 'Op5qRs8tUv1wXy4z', 'Ab7Cd0Ef3Gh6Ij9'].join('')
+    for (const algorithm of ['sha1', 'sha256', 'sha384', 'sha512']) {
+      const digest = `${algorithm}-${body}`
+      expect(digest.length).toBeGreaterThan(40)
+      expect(scanToolResult(ruleset(), resultsConfig(), resultView(`integrity ${digest}`)), digest).toEqual([])
+    }
+    // The exemption is the prefix, not the payload: the same token without it is
+    // still an anonymous high-entropy blob and must keep firing.
+    expect(scanToolResult(ruleset(), resultsConfig(), resultView(`blob ${body}`)).length).toBe(1)
+  })
+
   it('scans valueText as well as text', () => {
     const findings = scanToolResult(ruleset(), resultsConfig(), resultView('', `key ${SK_SENTINEL}`))
     expect(findings[0]?.category).toBe('credential_leak')

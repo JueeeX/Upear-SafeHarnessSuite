@@ -75,11 +75,13 @@ export type PanelSettingsErrorCode =
   | 'settings_readonly'
   | 'settings_invalid'
   | 'settings_write_failed'
+  | 'settings_conflict'
   | 'probe_unavailable'
   | 'provider_unavailable'
   | 'provider_exists'
   | 'provider_in_use'
   | 'provider_not_found'
+  | 'provider_index_failed'
 
 /** A typed failure the route turns into `{ ok: false, error }`. */
 export class PanelSettingsError extends Error {
@@ -169,6 +171,60 @@ function routeField(value: unknown, name: string): string {
   return trimmed
 }
 
+/**
+ * Log-safe description of a host failure.
+ *
+ * The plugin's zero-echo rule (README §6) covers logs too: a host error message can
+ * quote a profile path, a config value or a fragment of the document it refused, so
+ * only the error name, a machine code (when short) and the message *length* are
+ * logged. The ledger records the same coarse facts; an operator who needs the text
+ * reads the host's own log.
+ *
+ * @param error - whatever a host call threw.
+ * @returns a short, content-free description.
+ */
+function describeFailure(error: unknown): string {
+  if (!(error instanceof Error)) return `non-error/${String(error).length} chars`
+  const code = (error as { code?: unknown }).code
+  const parts = [
+    error.name.length > 0 ? error.name : 'Error',
+    typeof code === 'string' && code.length > 0 && code.length <= 64 ? code : '',
+    `${error.message.length} chars`,
+  ]
+  return parts.filter(part => part.length > 0).join(', ')
+}
+
+/**
+ * Whether a host settings write was refused as stale.
+ *
+ * Recognised structurally because the class belongs to the host: `SettingsConflictError`
+ * carries the stable machine code `SETTINGS_CONFLICT` and never reaches a browser, so
+ * this plugin maps it to its own coarser `settings_conflict`.
+ */
+function isSettingsConflict(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === 'SETTINGS_CONFLICT'
+}
+
+/**
+ * Revision of one profile entry's raw config, as `describe()` reports it.
+ *
+ * Sent back as `expectedRevision` so a stale editor is refused instead of silently
+ * overwriting a concurrent change. `undefined` when the host exposes no revision
+ * (older builds, a stub in tests): the write then proceeds exactly as before.
+ */
+function revisionOf(settings: SettingsServiceLike, ns: string): number | undefined {
+  try {
+    const described = settings.describe?.() as Array<{ ns?: unknown; revision?: unknown }> | undefined
+    for (const descriptor of described ?? []) {
+      if (descriptor.ns !== ns) continue
+      if (typeof descriptor.revision === 'number' && Number.isSafeInteger(descriptor.revision)) return descriptor.revision
+    }
+  } catch {
+    // A host that cannot describe its entries simply has no revision to offer.
+  }
+  return undefined
+}
+
 /** Build the judge/probe surface the panel route calls. */
 export interface PanelSettingsHost {
   /** Current judge facts (also used by the overview payload). */
@@ -240,23 +296,37 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     return customProviders
   }
 
-  /** Persist the provider index atomically. */
-  const writeCustomProviders = (rows: readonly CustomProviderRecord[]): void => {
-    customProviders = [...rows]
+  /**
+   * Persist the provider index atomically.
+   *
+   * Throws on failure instead of warning: this index and the host config are two
+   * stores that must agree, and a swallowed failure leaves a route that exists in
+   * the profile but can never be listed or deleted from the panel. The in-memory
+   * cache is updated only after the rename succeeded, so a failed write cannot make
+   * this process believe something the next restart will not.
+   *
+   * @param rows - the complete provider list to persist.
+   * @throws whatever the filesystem threw.
+   */
+  const persistCustomProviders = (rows: readonly CustomProviderRecord[]): void => {
     const file = resolveProviderIndexPath()
-    try {
-      mkdirSync(dirname(file), { recursive: true })
-      const body = `${JSON.stringify({ version: PROVIDER_INDEX_VERSION, savedAt: Date.now(), providers: rows }, null, 0)}\n`
-      const temporary = `${file}.tmp`
-      writeFileSync(temporary, body, { encoding: 'utf8', mode: 0o600 })
-      renameSync(temporary, file)
-    } catch (error) {
-      logger.warn(`safeharness: could not write the provider index (${error instanceof Error ? error.message : String(error)})`)
-    }
+    mkdirSync(dirname(file), { recursive: true })
+    const body = `${JSON.stringify({ version: PROVIDER_INDEX_VERSION, savedAt: Date.now(), providers: rows }, null, 0)}\n`
+    const temporary = `${file}.tmp`
+    writeFileSync(temporary, body, { encoding: 'utf8', mode: 0o600 })
+    renameSync(temporary, file)
+    customProviders = [...rows]
   }
 
-  /** Resolve the profile entry id of the pi-ai provider plugin. */
-  const resolveProviderNamespace = (editor: ConfigEditorLike | undefined): string | undefined => {
+  /**
+   * Resolve the profile entry id of the pi-ai provider plugin.
+   *
+   * Two independent sources, because the entry scan and the settings service can be
+   * composed separately: the loader's entry list (authoritative when present), then
+   * the conventional entry id in `describe()`. Without the second the panel could
+   * read a configurable profile and still refuse every provider action.
+   */
+  const resolveProviderNamespace = (editor: ConfigEditorLike | undefined, settings?: SettingsServiceLike): string | undefined => {
     try {
       const entries = editor?.entries?.() ?? []
       for (const entry of entries) {
@@ -268,7 +338,15 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       }
       if (entries.some(entry => entry.options?.id === 'llm-pi-ai')) return 'llm-pi-ai'
     } catch {
-      // Fall through: the caller reports read-only.
+      // Fall through to the descriptor scan.
+    }
+    try {
+      const described = settings?.describe?.() as Array<{ ns?: unknown }> | undefined
+      for (const descriptor of described ?? []) {
+        if (typeof descriptor.ns === 'string' && /(?:^|\/)llm-pi-ai$/u.test(descriptor.ns)) return descriptor.ns
+      }
+    } catch {
+      // No editable entry: the caller reports read-only.
     }
     return undefined
   }
@@ -353,7 +431,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         providers.push({ id, name, models })
       }
     } catch (error) {
-      logger.warn(`safeharness: model catalog unavailable (${error instanceof Error ? error.message : String(error)})`)
+      logger.warn(`safeharness: model catalog unavailable (${describeFailure(error)})`)
     }
     catalog = { at: Date.now(), providers }
     return providers
@@ -364,8 +442,15 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     const cfg = runtime.config
     const ns = settings === undefined ? undefined : resolveNamespace(ctx, settings, editor)
     const configurable = settings !== undefined && typeof settings.update === 'function' && ns !== undefined
-    const piNs = resolveProviderNamespace(editor)
-    const providerConfigurable = settings !== undefined && typeof settings.update === 'function' && piNs !== undefined
+    const piNs = resolveProviderNamespace(editor, settings)
+    // The delete path goes through `mutate` (it must not restate the secret fields
+    // it never received), so a profile that exposes only `update` is not actually
+    // configurable for providers — the flag has to describe both write paths or the
+    // panel offers an action that will always fail.
+    const providerConfigurable = settings !== undefined
+      && typeof settings.update === 'function'
+      && typeof settings.mutate === 'function'
+      && piNs !== undefined
     const judge: PanelJudgeSettings = {
       enabled: cfg.output.judge.enabled,
       scope: cfg.output.judge.scope,
@@ -389,6 +474,10 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       providers: await loadCatalog(llm),
       customProviders: custom,
       providerConfigurable,
+      // The revision the browser saw, echoed back on the next save so a concurrent
+      // writer is refused instead of silently overwritten. Null when the host
+      // exposes none (older builds) or this entry is not editable here.
+      revision: settings === undefined || ns === undefined ? null : revisionOf(settings, ns) ?? null,
       configPath: configurable
         ? (settings?.documentPath ?? editor?.documentPath ?? null)
         : null,
@@ -445,11 +534,23 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
 
     if (Object.keys(update).length === 0) throw new PanelSettingsError('settings_invalid', 'no supported field was supplied')
 
+    // The browser echoes the revision it read. An internal caller (the provider
+    // flow pointing the judge at a new route) sends none, and then the current
+    // revision is read here: that still closes the read-modify-write window inside
+    // this process, it just cannot catch a form that was loaded before a change.
+    const expected = typeof patch.expectedRevision === 'number' && Number.isSafeInteger(patch.expectedRevision)
+      ? patch.expectedRevision
+      : revisionOf(settings, ns)
     try {
-      await settings.update(ns, update)
+      // Omitted (not `undefined`) when the host exposes no revision, so a stub or an
+      // older host sees exactly the two-argument call it always supported.
+      if (expected === undefined) await settings.update(ns, update)
+      else await settings.update(ns, update, expected)
     } catch (error) {
-      logger.warn(`safeharness: settings write failed (${error instanceof Error ? error.message : String(error)})`)
-      throw new PanelSettingsError('settings_write_failed', 'the host rejected the configuration write')
+      logger.warn(`safeharness: settings write failed (${describeFailure(error)})`)
+      throw isSettingsConflict(error)
+        ? new PanelSettingsError('settings_conflict', 'the profile configuration changed since it was read; reload and retry')
+        : new PanelSettingsError('settings_write_failed', 'the host rejected the configuration write')
     }
 
     runtime.audit('invariant_probe', {
@@ -509,7 +610,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     if (settings === undefined || typeof settings.update !== 'function' || typeof settings.describe !== 'function') {
       throw new PanelSettingsError('settings_unavailable', 'this profile composes no settings service')
     }
-    const piNs = resolveProviderNamespace(editor)
+    const piNs = resolveProviderNamespace(editor, settings)
     if (piNs === undefined) throw new PanelSettingsError('provider_unavailable', 'no editable pi-ai provider entry was found')
     if (liveProviderIds(settings, piNs).has(value.id) || loadCustomProviders().some(row => row.id === value.id)) {
       throw new PanelSettingsError('provider_exists', 'a provider route with that id already exists')
@@ -521,7 +622,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     try {
       await credentials.set(credentialRef, value.apiKey)
     } catch (error) {
-      logger.warn(`safeharness: could not store the provider credential (${error instanceof Error ? error.message : String(error)})`)
+      logger.warn(`safeharness: could not store the provider credential (${describeFailure(error)})`)
       throw new PanelSettingsError('provider_unavailable', 'the host credential store rejected the key')
     }
     const profile = {
@@ -533,15 +634,19 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       defaultInput: ['text'],
     }
     try {
-      await settings.update(piNs, { providers: { [value.id]: profile } })
+      const expected = revisionOf(settings, piNs)
+      if (expected === undefined) await settings.update(piNs, { providers: { [value.id]: profile } })
+      else await settings.update(piNs, { providers: { [value.id]: profile } }, expected)
     } catch (error) {
-      logger.warn(`safeharness: could not add the provider route (${error instanceof Error ? error.message : String(error)})`)
+      logger.warn(`safeharness: could not add the provider route (${describeFailure(error)})`)
       try {
         await credentials.unset?.(credentialRef)
       } catch {
         // The orphan credential is harmless; the route was never written.
       }
-      throw new PanelSettingsError('settings_write_failed', 'the host rejected the provider configuration')
+      throw isSettingsConflict(error)
+        ? new PanelSettingsError('settings_conflict', 'the profile configuration changed since it was read; reload and retry')
+        : new PanelSettingsError('settings_write_failed', 'the host rejected the provider configuration')
     }
     const record: CustomProviderRecord = {
       id: value.id,
@@ -552,7 +657,36 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       addedAt: Date.now(),
       credentialRef,
     }
-    writeCustomProviders([...loadCustomProviders(), record])
+    try {
+      persistCustomProviders([...loadCustomProviders(), record])
+    } catch (error) {
+      // Two stores, one commit: if the panel's own index cannot be written, undo the
+      // route and the credential too. Without this the profile carries a route that
+      // the panel can never list or delete — the divergence 1.8.2 shipped with.
+      logger.warn(`safeharness: provider index write failed (${describeFailure(error)}); rolling the route back`)
+      const canRollBack = typeof settings.mutate === 'function'
+      if (canRollBack) {
+        try {
+          await settings.mutate?.(piNs, [{ op: 'unset', path: ['providers', value.id] }])
+        } catch (rollbackError) {
+          // The route now exists in the profile but not in the index; a later delete
+          // can still heal it, and the operator has the failure below either way.
+          logger.warn(`safeharness: provider route rollback failed (${describeFailure(rollbackError)})`)
+        }
+      }
+      try {
+        await credentials.unset?.(credentialRef)
+      } catch {
+        // Same as above: an orphan key is inert without a route.
+      }
+      // Only claim a rollback when this profile actually gave us `mutate` to do it.
+      throw new PanelSettingsError(
+        'provider_index_failed',
+        canRollBack
+          ? 'the provider route could not be recorded; it was rolled back'
+          : 'the provider route could not be recorded; remove it from the profile manually',
+      )
+    }
     catalog = undefined
     runtime.audit('invariant_probe', {
       decision: 'info',
@@ -565,10 +699,50 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         await save({ judge: { enabled: true, provider: value.id, model: value.model } })
         judgeRouteApplied = true
       } catch (error) {
-        logger.warn(`safeharness: provider added but the judge route was not applied (${error instanceof Error ? error.message : String(error)})`)
+        logger.warn(`safeharness: provider added but the judge route was not applied (${describeFailure(error)})`)
       }
     }
     return { provider: publicProvider(record), settings: await read(), judgeRouteApplied }
+  }
+
+  /**
+   * Collect the paths inside one described value that still name `routeId`.
+   *
+   * The route's own definition (`providers.<routeId>`) is skipped: that is what the
+   * delete removes, not a reference to it. A dotted field path is configuration
+   * vocabulary (allowed by the zero-echo rule), never a value.
+   */
+  function collectRouteReferences(value: unknown, routeId: string, path: readonly string[], found: string[], depth = 0): void {
+    if (depth > 8) return
+    if (typeof value === 'string') {
+      if (value === routeId || value.startsWith(`${routeId}/`)) found.push(path.length === 0 ? '(root)' : path.join('.'))
+      return
+    }
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => collectRouteReferences(entry, routeId, [...path, String(index)], found, depth + 1))
+      return
+    }
+    if (value === null || typeof value !== 'object') return
+    const insideProviders = path.length > 0 && path[path.length - 1] === 'providers'
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (insideProviders && key === routeId) continue
+      collectRouteReferences(child, routeId, [...path, key], found, depth + 1)
+    }
+  }
+
+  /** Every field in the live pi-ai config that still points at `routeId`. */
+  const providerReferences = (settings: SettingsServiceLike, piNs: string, routeId: string): string[] => {
+    const found: string[] = []
+    try {
+      const described = settings.describe?.() as Array<{ ns?: unknown; value?: unknown }> | undefined
+      for (const descriptor of described ?? []) {
+        if (descriptor.ns !== piNs) continue
+        collectRouteReferences(descriptor.value, routeId, [], found)
+      }
+    } catch {
+      // A descriptor that cannot be read leaves the decision to the own-route checks.
+    }
+    return [...new Set(found)].sort()
   }
 
   /** Remove one route this panel added, and its credential. */
@@ -576,27 +750,49 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     const routeId = typeof id === 'string' ? id.trim() : ''
     const record = loadCustomProviders().find(row => row.id === routeId)
     if (record === undefined) throw new PanelSettingsError('provider_not_found', 'that route was not added by this panel')
-    if (runtime.config.output.judge.provider === routeId || runtime.config.draft.provider === routeId) {
-      throw new PanelSettingsError('provider_in_use', 'the route is still selected by the judge or the drafting route')
+    const ownUses: string[] = [
+      ...(runtime.config.output.judge.provider === routeId ? ['the judge route'] : []),
+      ...(runtime.config.draft.provider === routeId ? ['the drafting route'] : []),
+    ]
+    if (ownUses.length > 0) {
+      throw new PanelSettingsError('provider_in_use', `the route is still selected by ${ownUses.join(' and ')}`)
     }
     const { settings, editor, credentials } = services()
     if (settings === undefined || typeof settings.mutate !== 'function') {
       throw new PanelSettingsError('settings_unavailable', 'this profile composes no settings service')
     }
-    const piNs = resolveProviderNamespace(editor)
+    const piNs = resolveProviderNamespace(editor, settings)
     if (piNs === undefined) throw new PanelSettingsError('provider_unavailable', 'no editable pi-ai provider entry was found')
+    // Other references in the pi-ai section (`defaultProvider`, a default model route,
+    // …) break the moment the route disappears; the judge/draft check alone missed them.
+    const references = providerReferences(settings, piNs, routeId)
+    if (references.length > 0) {
+      throw new PanelSettingsError('provider_in_use', `the route is still referenced by ${references.join(', ')}`)
+    }
     try {
-      await settings.mutate(piNs, [{ op: 'unset', path: ['providers', routeId] }])
+      const ops = [{ op: 'unset' as const, path: ['providers', routeId] }]
+      const expected = revisionOf(settings, piNs)
+      if (expected === undefined) await settings.mutate(piNs, ops)
+      else await settings.mutate(piNs, ops, expected)
     } catch (error) {
-      logger.warn(`safeharness: could not remove the provider route (${error instanceof Error ? error.message : String(error)})`)
-      throw new PanelSettingsError('settings_write_failed', 'the host rejected the provider removal')
+      logger.warn(`safeharness: could not remove the provider route (${describeFailure(error)})`)
+      throw isSettingsConflict(error)
+        ? new PanelSettingsError('settings_conflict', 'the profile configuration changed since it was read; reload and retry')
+        : new PanelSettingsError('settings_write_failed', 'the host rejected the provider removal')
+    }
+    try {
+      persistCustomProviders(loadCustomProviders().filter(row => row.id !== routeId))
+    } catch (error) {
+      // The route is gone from the profile, so a retry can finish the job: the index
+      // row (and therefore the credential reference) is still there to delete.
+      logger.warn(`safeharness: provider index write failed (${describeFailure(error)}); the removal needs a retry`)
+      throw new PanelSettingsError('provider_index_failed', 'the route was removed but the panel index was not; retry the delete')
     }
     try {
       await credentials?.unset?.(record.credentialRef)
     } catch {
       // Removing the route is the security-relevant half; an orphan key is inert.
     }
-    writeCustomProviders(loadCustomProviders().filter(row => row.id !== routeId))
     catalog = undefined
     runtime.audit('invariant_probe', {
       decision: 'info',

@@ -1,6 +1,17 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+## 1.8.4 — 2026-11-17
+
+面板与结果扫描的加固：**收紧面板方法面、补齐自定义路由的两处一致性缺口、设置写入加 CAS、SRI 摘要不再当凭据**。没有新增能力，也没有新增磁盘写路径；「写入并重载规则」仍是 1.9.0 的待定项。
+
+- **面板方法面（安全）**：所有端点（含只读 `status`）改为 **POST-only**，其他方法返回真正的 `405` + `Allow: POST`。此前 `status` 接受 GET，写端点用 GET 会拿到 200 信封 `method_not_allowed`——代理、测试脚本或 devtools 都可能把拒绝当载荷解析；GET 也是导航 / `<img>` / 预取能触发的请求。栅栏（Host loopback + 同源 Origin）现在先于方法判断执行，未受信 Host 连“方法规则”都问不到。
+- **自定义路由双写回滚（一致性问题）**：`addProvider` 先写 profile、再写面板索引 `providers.json`；索引写失败时**回滚刚写的路由与凭据**并返回 `provider_index_failed`。此前索引写失败只告警，留下“配置里有、面板删不掉”的孤儿路由（1.8.0 起的 P1）。
+- **删除守卫扩展（安全问题）**：删除自定义路由时，除评审/起草路由外，还扫描 `llm-pi-ai` 里**所有**指向该 id 的字段（如 `defaultProvider`），命中即 `provider_in_use`；`providerConfigurable` 改为 `update` 与 `mutate` 都存在才为真（删除走 `mutate`，此前会给出一个必然失败的按钮）。
+- **设置写入 CAS**：面板把读到的 `revision` 作为 `expectedRevision` 回传，`settings.update` / `mutate` 在配置已被别处改过时拒绝，映射为 `settings_conflict`（不再 last-writer-wins）。宿主 `describe()` 不暴露 revision 时行为不变。
+- **日志零回显**：面板 settings 日志不再打印宿主异常 message（可能含 profile 路径或配置值），只记错误名 + 机器码 + 消息长度。
+- **SRI 豁免（结果面误报）**：高熵启发式对 `sha1-` / `sha256-` / `sha384-` / `sha512-` 前缀的完整性摘要直接放行，读 `pnpm-lock.yaml` 不再被 `results.mode: enforce` 整条替换；长度/熵阈值不变，无前缀的同类令牌仍会命中。
+- **测试**：41 文件 / 717 用例（新增 revision CAS、冲突映射、索引回滚、引用守卫、只读判定、405 方法面、SRI 共 8 条）。
 ## 1.8.3 — 2026-11-17
 
 起草诊断与超时修复：**“起草路由不可用”不再吞掉真实原因**。

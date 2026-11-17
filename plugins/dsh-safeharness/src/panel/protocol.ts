@@ -238,12 +238,23 @@ export interface PanelSettingsValue {
   readonly customProviders: readonly PanelCustomProvider[]
   /** True when the pi-ai provider entry is editable here (add/delete routes). */
   readonly providerConfigurable: boolean
+  /**
+   * Revision of this plugin entry's raw config when the value was read, or null when
+   * the host exposes none. Echoed back as {@link PanelSettingsPatch.expectedRevision}
+   * so a stale form is refused instead of silently overwriting a concurrent change.
+   */
+  readonly revision: number | null
   /** Absolute profile patch path, or null when the host cannot edit config. */
   readonly configPath: string | null
 }
 
 /** Fields one save may change; omitted fields keep their current value. */
 export interface PanelSettingsPatch {
+  /**
+   * The revision the form was rendered at (from {@link PanelSettingsValue.revision}).
+   * Omitted by internal callers: the Host then reads the current revision itself.
+   */
+  readonly expectedRevision?: number
   readonly judge?: {
     readonly enabled?: boolean
     readonly scope?: 'flagged' | 'always'

@@ -18,8 +18,10 @@
  * header must name a loopback authority, a cross-site marker is refused, and when
  * an Origin is present it must be exactly this authority.
  *
- * Every state-changing call is POST-only and body-gated: a navigation or an
- * `<img>` cannot reach it, and request bodies are bounded before parsing.
+ * Every call is POST-only and body-gated: a navigation or an `<img>` cannot reach
+ * it, request bodies are bounded before parsing, and a request that uses the wrong
+ * method is answered with a real `405` (never a 200 envelope) so a proxy, a test
+ * client or a browser devtools session cannot mistake a refusal for a payload.
  * @module
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -84,9 +86,6 @@ export const PANEL_DRAFT_MAX_DESCRIPTION = 2_000
 
 /** Hard cap on one exported ledger slice. */
 export const PANEL_EXPORT_MAX_RECORDS = 500
-
-/** Endpoint names in one place, for the method gate and tests. */
-const WRITE_ENDPOINTS = new Set<string>([PANEL_PATROL_ENDPOINT, PANEL_DRAFT_ENDPOINT, PANEL_SCHEDULE_ENDPOINT, PANEL_RELOAD_ENDPOINT, PANEL_SETTINGS_ENDPOINT, PANEL_EXPORT_ENDPOINT])
 
 /**
  * Whether one request may reach the panel.
@@ -413,25 +412,25 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
   }
 
   return async (req, res) => {
-    if (req.method !== 'POST' && req.method !== 'GET') {
-      res.writeHead(405, { allow: 'POST' })
-      res.end()
-      return
-    }
+    // The fence runs before the method gate: an untrusted Host gets `403` and learns
+    // nothing about which endpoints exist or how they are called.
     if (!isTrustedPanelRequest(req)) {
       res.writeHead(403)
       res.end('forbidden')
       return
     }
-    const pathname = new URL(req.url ?? '/', 'http://x').pathname
-    const endpoint = pathname.slice(PANEL_CHANNEL.length).replace(/^\//u, '')
-    const isWrite = WRITE_ENDPOINTS.has(endpoint)
-    if (isWrite && req.method !== 'POST') {
-      // A state-changing call must not be reachable by a bare GET (a navigation
-      // or an <img> src cannot run it).
-      send(res, { ok: false, error: { code: 'method_not_allowed', message: `${endpoint} requires POST` } })
+    // Every endpoint — including the read-only `status` — is POST-only. A GET is how
+    // a navigation, an `<img>`, a prefetch or a CSRF form reaches a URL, so allowing
+    // it even on a supposedly-read endpoint keeps a whole class of same-origin-
+    // triggered requests alive for no benefit; the browser half only ever POSTs.
+    // The refusal is a real 405 so callers cannot parse it as payload.
+    if (req.method !== 'POST') {
+      res.writeHead(405, { allow: 'POST' })
+      res.end()
       return
     }
+    const pathname = new URL(req.url ?? '/', 'http://x').pathname
+    const endpoint = pathname.slice(PANEL_CHANNEL.length).replace(/^\//u, '')
 
     let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult | PanelSettingsResult | PanelProbeResult | PanelProviderResult | PanelExportResult
     if (endpoint === PANEL_PATROL_ENDPOINT) {

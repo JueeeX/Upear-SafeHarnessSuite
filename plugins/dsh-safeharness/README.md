@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.8.3` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.8.4` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -122,11 +122,11 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # 709 个用例（41 个文件）
+pnpm test             # 717 个用例（41 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.8.3.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.8.4.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -140,7 +140,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.8.3.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.8.4.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -489,7 +489,7 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 
 ### 4.7 桌面端面板（1.3.0 起；1.8.0 五标签 + 自定义模型）
 
-设置 → **内置插件** → `SafeHarness` 标签页。1.8.0 起是五个标签的工作台：**概览 / 事件 / 规则 / 巡检 / 设置**。它是只读视图 + 受限动作（巡检、定时、起草、重新加载规则、保存评审/起草路由、添加/删除自定义模型、导出账本片段），每个动作都有宿主侧闸门（POST-only、单飞/冷却、body 上限、字段校验）。面板跟随宿主主题（读 `documentElement` 的 `color-scheme` / `data-theme`），不再只靠 `prefers-color-scheme`。
+设置 → **内置插件** → `SafeHarness` 标签页。1.8.0 起是五个标签的工作台：**概览 / 事件 / 规则 / 巡检 / 设置**。它是只读视图 + 受限动作（巡检、定时、起草、重新加载规则、保存评审/起草路由、添加/删除自定义模型、导出账本片段），每个动作都有宿主侧闸门（**全部端点 POST-only，方法不对返回 405**、单飞/冷却、body 上限、字段校验、写入带 revision CAS）。面板跟随宿主主题（读 `documentElement` 的 `color-scheme` / `data-theme`），不再只靠 `prefers-color-scheme`。
 
 **概览**：本进程的拦截/告警/审批/放行计数、五个防护面的彩色胶囊（强制/仅告警/透传/关闭）、语义评审状态（启用/范围/路由）、会话列表（标题 + 短 id + 项目 + 创建/最近 + 各计数，**历史**标注，点一行跳到事件并按该会话过滤）、规则与账本（hash、记录数、绝对路径、引擎、规则目录）、最近 3 条需要关注的事件。
 
@@ -503,12 +503,12 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 
 **设置**（`POST /safeharness/settings`，`op: read | save | probe | add-provider | delete-provider`）：
 
-- **自定义模型**：路由名、显示名、协议（`openai-completions` / `openai-responses` / `anthropic-messages`）、Base URL、API Key、模型 ID/显示名；可选“添加后设为评审模型”。Key 只经 loopback 提交一次，写入宿主凭据服务（`.credentials.yaml`），**不写进 profile YAML、不回显、不进账本**；路由写进 `llm-pi-ai` 的 `providers.<id>`（整段 `providers` 是 volatile 字段），宿主热更新后出现在供应方/模型下拉里。列表只显示本面板添加的路由（`$DSH_HOME/safeharness/providers.json`，只含 id/协议/URL/模型/凭据引用名），删除时若仍被评审/起草路由使用会拒绝（`provider_in_use`）。pi-ai 的手写路由只支持上述三种协议；Bedrock / Vertex / Azure / Codex OAuth 需要各自的环境与签名，不能用一个 URL + Key 表达。
+- **自定义模型**：路由名、显示名、协议（`openai-completions` / `openai-responses` / `anthropic-messages`）、Base URL、API Key、模型 ID/显示名；可选“添加后设为评审模型”。Key 只经 loopback 提交一次，写入宿主凭据服务（`.credentials.yaml`），**不写进 profile YAML、不回显、不进账本**；路由写进 `llm-pi-ai` 的 `providers.<id>`（整段 `providers` 是 volatile 字段），宿主热更新后出现在供应方/模型下拉里。列表只显示本面板添加的路由（`$DSH_HOME/safeharness/providers.json`，只含 id/协议/URL/模型/凭据引用名）。**1.8.4 起**：添加是“两条存储一次提交”——profile 写入成功但面板索引写失败时，会回滚刚写的路由与凭据（`provider_index_failed`），不再留下“配置里有、面板删不掉”的孤儿路由；删除会检查 `llm-pi-ai` 里**所有**指向该路由的引用（`defaultProvider` 等），不只评审/起草路由；`providerConfigurable` 与实际写路径统一（`update` 与 `mutate` 都在才可写）。pi-ai 的手写路由只支持上述三种协议；Bedrock / Vertex / Azure / Codex OAuth 需要各自的环境与签名，不能用一个 URL + Key 表达。
 - **导出账本片段**：概览的账本卡片可导出最近 200 条（`POST /safeharness/export`，上限 500）的 NDJSON，内容就是账本已有的脱敏记录（哈希/长度/代码），由浏览器保存为文件，宿主不落盘、不新增字段。
 - **语义评审**：启用开关、评审范围（只评审已标记输出 / 全部输出）、供应方、模型、送入评审的最大字符数、超时。供应方/模型下拉来自宿主 `llm` 服务的真实目录（`listProviders` + `listModels`，缓存 30s，上限 24 个 provider / 600 个 model）；留空表示使用宿主默认路由。
 - **规则起草路由**：起草供应方/模型（留空跟随评审路由）。`draft.enabled` 由 profile 配置控制，面板可以显式改写这一项（写入后立即生效）。
 - **测试连接**：`op: probe` 发一次最小结构化请求，只回 `status / verdict / 耗时`，**不回模型回复文本**。
-- **写入路径**：`settings.update(entryId, patch)` → 宿主写 `cordis.patch.yml` → loader 热更新 → 本插件 `applyHotConfig`。只改 **volatile** 字段；字段校验（`maxChars` 500–200000、`timeoutMs` 500–60000、启用时 provider/model 必填）在写之前完成；失败只回 `settings_invalid` / `settings_write_failed` 等粗粒度码，不转发宿主原文。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
+- **写入路径**：`settings.update(entryId, patch)` → 宿主写 `cordis.patch.yml` → loader 热更新 → 本插件 `applyHotConfig`。只改 **volatile** 字段；字段校验（`maxChars` 500–200000、`timeoutMs` 500–60000、启用时 provider/model 必填）在写之前完成；**1.8.4 起带 revision CAS**：面板把读到时的 `revision` 作为 `expectedRevision` 回传，宿主发现配置已被别处改过就拒绝（`settings_conflict`），不再 last-writer-wins 覆盖。失败只回 `settings_invalid` / `settings_write_failed` / `settings_conflict` 等粗粒度码，不转发宿主原文；宿主异常的日志只记 **错误名 + 机器码 + 消息长度**（零回显）。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
 - **只读原因**：profile 没有 `settings` 服务、或找不到本插件的可编辑 entry 时，页面照常显示并说明“只读”，不假装能保存。
 
 数据通路（两段）：
@@ -520,7 +520,7 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 
 - 所有端点只接受 **loopback Host + 同源 Origin**（带跨站标记直接拒），与宿主 `/api` 的浏览器栅栏同义；插件不读 `trustedHosts`，因此**不会**从 LAN 暴露。
 - 响应是固定投影：事件（`ts`/`kind`/`decision`/`reason_code`/`tool`/`severity`/`category`/规则 id/参数 hash 前缀/短会话 id/项目/标题）、会话摘要、规则清单（操作者自己写的模式）、定时状态、评审/起草路由与模型目录。不含 prompt、工具参数原文、模型输出、webhook 或凭据；内部异常只返回 `panel_failed` / `draft_failed` / `schedule_*` / `reload_failed` / `settings_*`，不回显堆栈或消息。
-- 所有动作 POST-only 且 body ≤ 16 KiB；起草描述 ≤ 2000 字；定时间隔必须是 5–1440 的整数；起草单飞；巡检单飞 + 手动冷却；设置字段有独立取值范围；账本导出的 `limit` 为 1–500。
+- **所有端点（含只读的 `status`）只接受 POST**，其他方法一律 `405` + `Allow: POST`（1.8.4 起；此前 `status` 还接受 GET，写端点用 GET 会得到 200 信封）；body ≤ 16 KiB；起草描述 ≤ 2000 字；定时间隔必须是 5–1440 的整数；起草单飞；巡检单飞 + 手动冷却；设置字段有独立取值范围且带 revision CAS；账本导出的 `limit` 为 1–500。
 - 自定义模型的 API Key 只经 loopback 提交一次，写入宿主凭据服务；它不写 profile、不回显、不进账本/日志/错误消息。路由配置只含 `apiKeyEnv` 引用名。账本导出返回的 `content` 就是账本已有的脱敏记录，不新增字段。
 - 面板不可用（headless profile 没有 `webServer`，或浏览器半未构建）时插件照常加载，不抛错。
 
@@ -750,7 +750,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。
 11. **桌面端命令面**：`/safeharness status` 与 `/safeharness judge probe` 已在桌面端输入框实测（2026-11-11，真实 judge 路由 `liao/gpt-6-luna`，`status=ok verdict=allow duration_ms=4347`）；`/safeharness patrol` 的 UI 触发仍只有处理器单测（`safeharness_patrol` 工具已在真实 host 跑通）。
 12. **通知通道**：飞书 / 钉钉 / 企业微信 / OneBot / 通用五种信封已实现，每种都有 payload 单测，并有一次本地真实 HTTP 五通道联调（`tests/notify.test.ts`）；飞书的完整投递路径另有真实 HTTP 验证（本地 sink，内部证据未随仓库分发）。**真实飞书 / 钉钉 / 企业微信机器人投递：待验证**（需要真实 webhook URL / access_token；信封与加签已按官方格式单测，并有本地真实 HTTP 五通道联调）。配好任意一个真实通道后，制造一次 FAIL 巡检即可确认。
-13. **高熵令牌启发式（1.8.1 已收紧）**：现在只有同时含**小写、大写和数字**、**不是纯 hex**、且**不是 Windows 路径**（`C:/...` / `file:///C:/...`）的 ≥40 字符令牌才参与熵计算。纯十六进制摘要（`safeharness_status` 的 64 位 ruleset 哈希、`safeharness_audit_query` 的 sha256 链哈希、`git log` 的 40 位 commit id）、全小写路径片段（如 `@scope/pkg/lib/entry`）与 Node 报错里的 `file:///C:/.../x.mjs` 不再误报 `credential_high_entropy`；`results.mode: enforce` 因此不会再拦掉插件自己的诊断结果。代价：全小写、无前缀的随机串不再由熵启发式兜底（仍可由 `credential_assignment` 等形态规则命中）。旧行为见 §12 R35，新决策见 R50。
+13. **高熵令牌启发式（1.8.1 收紧，1.8.4 加 SRI 豁免）**：只有同时含**小写、大写和数字**、**不是纯 hex**、**不是 Windows 路径**（`C:/...` / `file:///C:/...`）、且**不是 `sha1-` / `sha256-` / `sha384-` / `sha512-` 前缀的 SRI 摘要**的 ≥40 字符令牌才参与熵计算。纯十六进制摘要（`safeharness_status` 的 64 位 ruleset 哈希、`safeharness_audit_query` 的 sha256 链哈希、`git log` 的 40 位 commit id）、全小写路径片段（如 `@scope/pkg/lib/entry`）、Node 报错里的 `file:///C:/.../x.mjs`，以及 `pnpm-lock.yaml` 里的 `sha512-<base64>` 完整性摘要都不再误报 `credential_high_entropy`；`results.mode: enforce` 因此不会再拦掉插件自己的诊断结果、也不会把读 lockfile 整条替换。代价：全小写、无前缀的随机串不再由熵启发式兜底（仍可由 `credential_assignment` 等形态规则命中）。旧行为见 §12 R35，新决策见 R50。
 14. **输出面目前只覆盖回答**：不覆盖 compaction / session-title 等内部 LLM 调用（judge 请求本身有递归防护，但内部调用不送审）。
 15. **judge 的 URL/Key 属于宿主配置，不属于插件配置**：插件只携带 `provider`/`model` 路由，Key 由 DSH 凭据层按 `apiKeyEnv` 引用解析，插件既不读也不打印。换端点 = 改 profile 的 `llm-pi-ai.providers`，不需要改插件。
 16. **真实模型冒烟只做过一次最小会话**：用真实 OpenAI 兼容端点（`gpt-6-luna`）跑通一轮 observe：`usage_input=29280 / usage_output=26`、judge `status=ok`（`judge_ms=7319`）。不同供应商在工具调用形态、流式分片、usage 上报上的差异仍需各自冒烟；`/safeharness judge probe` 就是为此准备的自检入口。

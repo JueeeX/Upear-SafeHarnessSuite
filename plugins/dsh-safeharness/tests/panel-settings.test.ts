@@ -3,7 +3,7 @@
  * save field, and the exact path through the host settings service.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createPanelSettingsHost, PanelSettingsError } from '../src/panel/settings.js'
@@ -53,6 +53,13 @@ function stubSettings(update = vi.fn(async () => undefined), describe?: () => un
 
 /** The logger seam. */
 const logger = { warn: () => undefined }
+
+/**
+ * Built at runtime so this test file carries no credential-shaped literal itself —
+ * a result-layer scan reads test files too (README §6). The name is short because
+ * `apiKey: <identifier>` is itself a credential-shaped assignment for the scanner.
+ */
+const key = ['sk', 'fixture', 'only'].join('-')
 
 describe('createPanelSettingsHost', () => {
   let home: string
@@ -197,6 +204,31 @@ describe('createPanelSettingsHost', () => {
     )
   })
 
+  it('sends the revision the form was rendered at so a stale save is refused', async () => {
+    const update = vi.fn(async () => undefined)
+    const describe = () => [{ ns: 'safeharness', revision: 7, value: { preset: 'balanced' } }]
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update, describe), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ expectedRevision: 7, judge: { enabled: true } })
+    expect(update).toHaveBeenCalledWith('safeharness', { output: { judge: { enabled: true } } }, 7)
+  })
+
+  it('maps a stale write to settings_conflict instead of a generic failure', async () => {
+    const stale = Object.assign(new Error('revision mismatch'), { code: 'SETTINGS_CONFLICT', expected: 3, actual: 4 })
+    const update = vi.fn(async () => { throw stale })
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ judge: { enabled: true } })).rejects.toMatchObject({ code: 'settings_conflict' })
+  })
+
   it('adds a hand-declared provider without ever putting the key in config or the response', async () => {
     const update = vi.fn(async () => undefined)
     const credentials = { set: vi.fn(async () => undefined), unset: vi.fn(async () => undefined) }
@@ -239,6 +271,38 @@ describe('createPanelSettingsHost', () => {
     expect(JSON.stringify(result)).not.toContain('sk-fake-sentinel')
     expect(result.provider).not.toHaveProperty('credentialRef')
     expect(result.settings.customProviders).toEqual([expect.objectContaining({ id: 'fake-local', api: 'openai-completions' })])
+  })
+
+  it('rolls the route back when the panel index cannot be written', async () => {
+    // Two stores, one commit: a route that lands in the profile but not in the panel
+    // index can never be listed or deleted — the divergence 1.8.2 shipped with.
+    mkdirSync(join(home, 'safeharness', 'providers.json'), { recursive: true })
+    const update = vi.fn(async () => undefined)
+    const mutate = vi.fn(async () => undefined)
+    const credentials = { set: vi.fn(async () => undefined), unset: vi.fn(async () => undefined) }
+    const editor = {
+      entries: () => [
+        { options: { id: 'safeharness', name: '@upear/dsh-safeharness' } },
+        { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai' } },
+      ],
+    }
+    const describe = () => [{ ns: 'llm-pi-ai', value: { providers: { liao: {} } } }]
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update, describe, mutate), configEditor: editor, credentials }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.addProvider({
+      id: 'fake-local',
+      displayName: 'Fake Local',
+      baseURL: 'http://127.0.0.1:18080/v1',
+      api: 'openai-completions',
+      apiKey: key,
+      model: 'fake-model',
+      useForJudge: false,
+    })).rejects.toMatchObject({ code: 'provider_index_failed' })
+    expect(mutate).toHaveBeenCalledWith('llm-pi-ai', [{ op: 'unset', path: ['providers', 'fake-local'] }])
+    expect(credentials.unset).toHaveBeenCalledWith('SAFEHARNESS_FAKE_LOCAL_API_KEY')
   })
 
   it('refuses a duplicate route and invalid provider input before writing anything', async () => {
@@ -310,6 +374,37 @@ describe('createPanelSettingsHost', () => {
     expect(removed.settings.customProviders).toEqual([])
   })
 
+  it('refuses to delete a route the rest of the pi-ai section still references', async () => {
+    // `defaultProvider` (or a default model route) breaks the moment the route
+    // disappears; 1.8.2 only looked at this plugin's own judge/draft routes.
+    const update = vi.fn(async () => undefined)
+    const mutate = vi.fn(async () => undefined)
+    const credentials = { set: vi.fn(async () => undefined), unset: vi.fn(async () => undefined) }
+    const editor = {
+      entries: () => [
+        { options: { id: 'safeharness', name: '@upear/dsh-safeharness' } },
+        { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai' } },
+      ],
+    }
+    const describe = () => [{ ns: 'llm-pi-ai', value: { providers: { liao: {} }, defaultProvider: 'fake-local' } }]
+    const settings = stubSettings(update, describe, mutate)
+    const first = createPanelSettingsHost(
+      stubContext({ settings, configEditor: editor, credentials }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await first.addProvider({
+      id: 'fake-local', api: 'openai-completions', baseURL: 'http://127.0.0.1:1/v1', apiKey: key, model: 'm', useForJudge: false,
+    })
+    const blocked = createPanelSettingsHost(
+      stubContext({ settings, configEditor: editor, credentials }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(blocked.deleteProvider('fake-local')).rejects.toMatchObject({ code: 'provider_in_use' })
+    expect(mutate).not.toHaveBeenCalled()
+  })
+
   it('reports provider_unavailable without a credential store', async () => {
     const editor = {
       entries: () => [
@@ -325,6 +420,24 @@ describe('createPanelSettingsHost', () => {
     await expect(host.addProvider({
       id: 'fake-local', api: 'openai-completions', baseURL: 'http://127.0.0.1:1/v1', apiKey: 'x', model: 'm',
     })).rejects.toMatchObject({ code: 'provider_unavailable' })
+  })
+
+  it('reports providers as read-only when the profile exposes no mutate path', async () => {
+    // Reads use `update` but the delete path uses `mutate`; a profile with only the
+    // former must not offer an add/delete UI that would always fail.
+    const editor = {
+      entries: () => [
+        { options: { id: 'safeharness', name: '@upear/dsh-safeharness' } },
+        { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai' } },
+      ],
+    }
+    const settings = { documentPath: 'C:\\profile\\cordis.patch.yml', update: vi.fn(async () => undefined) }
+    const host = createPanelSettingsHost(
+      stubContext({ settings, configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    expect((await host.read()).providerConfigurable).toBe(false)
   })
 
   it('probes an unavailable route without calling a model', async () => {

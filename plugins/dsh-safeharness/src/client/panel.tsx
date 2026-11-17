@@ -952,6 +952,7 @@ function settingsErrorMessage(code: string): string {
     case 'settings_readonly': return '配置是只读的，宿主机不允许写入（settings_readonly）。'
     case 'settings_invalid': return '要保存的取值不合法（settings_invalid），请检查字符数与超时。'
     case 'settings_write_failed': return '写入 profile 配置失败（settings_write_failed），看宿主日志。'
+    case 'settings_conflict': return '配置在读取之后被别处改过（settings_conflict）：刷新面板再保存。'
     case 'probe_unavailable': return '本 profile 不能探测评审路由（probe_unavailable）。'
     case 'judge_unavailable': return '本 profile 没有可用的 llm 服务（judge_unavailable）。'
     case 'unknown_endpoint': return '当前服务端还没有 /settings 接口（unknown_endpoint）。'
@@ -978,6 +979,8 @@ function providerErrorMessage(code: string): string {
     case 'provider_unavailable': return '本 profile 没有可写的 pi-ai 供应商条目或凭据服务。'
     case 'settings_invalid': return '输入不合法：检查路由 id、base URL、API key 与模型 id。'
     case 'settings_write_failed': return '宿主拒绝写入配置（settings_write_failed），看宿主日志。'
+    case 'settings_conflict': return '配置在读取之后被别处改过（settings_conflict）：刷新面板再试。'
+    case 'provider_index_failed': return '路由与面板索引未能同时写入（provider_index_failed）：重试一次，或看日志。'
     case 'unknown_endpoint': return '当前服务端还没有这个接口（unknown_endpoint）。'
     case 'panel_http_404': return '当前服务端没有这个接口（HTTP 404）。'
     default: return `操作失败（${code}）。`
@@ -1056,6 +1059,10 @@ function buildPatch(value: PanelSettingsValue, judge: JudgeForm, draft: DraftFor
   if (!hasJudge && !hasDraft) return { patch: undefined, invalid: null }
   return {
     patch: {
+      // Echo the revision this form was rendered at: the next save is refused as stale
+      // instead of overwriting a change another window (or the native settings page)
+      // made in the meantime. Null means the host exposes no revision.
+      ...(value.revision === null ? {} : { expectedRevision: value.revision }),
       ...(hasJudge ? { judge: judgePatch } : {}),
       ...(hasDraft ? { draft: draftPatch } : {}),
     },

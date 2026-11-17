@@ -1306,6 +1306,29 @@ New-Item -ItemType Directory -Force evidence | Out-Null
 
 ---
 
+### 12.23 1.8.4 面板方法面、路由一致性与 CAS（2026-11-17）
+
+1.8.3 上线桌面后的只读复核（读代码 + 全量测试基线）确认交接文档 §12.1 的批 0 四项都能在当前代码里定位，且宿主 `dsh-settings@0.2.2-rc.1` 的类型面**本来就支持** `describe().revision` 与 `update/mutate(…, expectedRevision)`，即 CAS 不是宿主缺能力，而是插件没传：
+
+| # | 事实 | 结论 |
+|---|---|---|
+| V27 | `panel/route.ts` 允许 GET/POST；写端点用 GET 返回 **200 信封** `method_not_allowed` | GET 是导航/预取/`<img>` 能触发的请求；200 会让代理或测试把拒绝当载荷。改为全端点 POST-only、405 + `Allow: POST`，且栅栏先于方法判断（D58） |
+| V28 | `addProvider` 先 `settings.update` 再写 `providers.json`，索引写失败只 warn | 留下“配置里有、面板删不掉”的孤儿路由。改为两存储一次提交：索引失败回滚路由与凭据，返回 `provider_index_failed`（D59） |
+| V29 | 删除守卫只看 judge/draft 的 provider；`providerConfigurable` 用 `update` 判定而删除走 `mutate` | 漏掉 `defaultProvider` 等引用；给出必然失败的按钮。改为扫描整段 pi-ai 配置的所有引用、两个写路径都在才可写（D59） |
+| V30 | `settings.update(ns, patch)` 不传 `expectedRevision` | 并发保存 last-writer-wins。面板回传 `revision`，冲突映射 `settings_conflict`；宿主不暴露时不传第三参（D60） |
+| V31 | 面板 settings 日志打印宿主异常 message | 零回显缺口（可能含 profile 路径/配置值）。改为错误名 + 机器码 + 消息长度（D60） |
+| V32 | 高熵启发式把 `sha512-<base64>` 当凭据 | `results.mode: enforce` 下读 `pnpm-lock.yaml` 被整条替换。加 SRI 前缀豁免，阈值不变（D61） |
+
+**验收**：本机 41 文件 / **717 用例**全绿（+8）；`tsc` host/client 0 错；客户端 bundle 重建后 `client-bundle` / `panel` / `panel-route` 全绿。桌面仍为 1.8.3，1.8.4 **未发布、未安装**。证据：`plugins/dsh-safeharness/evidence/1.8.4-hardening.md`；tarball 327,369 B。
+
+**仍未做（本轮不在范围）**：
+1. 面板「写入并重载规则」（D57 仍按“需用户确认”挂起；前置是 `rules.dir` 默认化）；
+2. `rules.dir` 热改后 watcher 与面板重载仍用加载期目录（读代码发现：`installRuleWatch` 只在 `apply()` 安装，`reloadRulesForPanel` 用加载期 `rulesOptions`，而 `applyHotConfig` 用 `next.rules.dir`）——与写入功能绑在一起修；
+3. 输出面凭据规则 + `output: enforce`（产品决策，建议先 warn 观察）；
+4. 真实 webhook / 真实人工审批（环境项，需要用户配合）。
+
+---
+
 ## 13. Day-0 接手清单（逐条执行，不要跳）
 
 1. **读**：本文件 §1 / §3 / §5 / §7 / §9。
