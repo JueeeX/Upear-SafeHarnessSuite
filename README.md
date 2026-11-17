@@ -2,7 +2,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.9.1` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.9.2` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -66,7 +66,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 | `approval/request` | 审批桥粗粒度判定：`allowOnce` 一次性授予 → 复用 deny 列表 → 其余 delegate；`delegate` 也写审计对，供巡检对账 | 授予 / 拒绝 / 委托 |
 | 系统提示词 | 在工具引导区（`order: 190`）注入 ≤300 字符的部署约束条款，**不含**规则正文、数量、阈值 | — |
 | 只读工具 / 命令 | 4 个 `safeharness_*` 工具 + `/safeharness` 命令，供模型与操作者自查 | — |
-| Web 面板（1.3.0 起，1.8.0 自定义模型 + 导出） | 设置 → 内置插件 → `SafeHarness` 标签页，五个标签：**概览**（本进程计数、防护面胶囊、评审状态、会话列表、规则/账本/账本片段导出）、**事件**（工作区/对话标题/类别/结论四重筛选 + 搜索 + 20 条分页）、**规则**（规则与链清单、搜索、AI 起草、重新加载规则）、**巡检**（手动两步确认 + 5–1440 分钟定时）、**设置**（语义评审与起草路由、模型目录、自定义模型 URL/Key/协议、连接测试、经宿主 settings 服务写入）。工作区/对话选项跨重启保留（`sessions.json` 元数据索引 + 账本会话并集）；标题来自宿主 `sessionTitle` 服务，只用于显示。全部 POST-only、有单飞/冷却/body 上限；数据走宿主 `webServer` 私有路由（loopback + 同源栅栏）。见 §4.7 / §4.8 | — |
+| Web 面板（1.3.0 起，1.8.0 自定义模型 + 导出） | 插件 → `SafeHarness` 条目页 → 五个标签：**概览**（本进程计数、防护面胶囊、评审状态、会话列表、规则/账本/账本片段导出）、**事件**（工作区/对话标题/类别/结论四重筛选 + 搜索 + 20 条分页）、**规则**（规则与链清单、搜索、AI 起草、重新加载规则）、**巡检**（手动两步确认 + 5–1440 分钟定时）、**设置**（语义评审与起草路由、模型目录、自定义模型 URL/Key/协议、连接测试、经宿主 settings 服务写入）。工作区/对话选项跨重启保留（`sessions.json` 元数据索引 + 账本会话并集）；标题来自宿主 `sessionTitle` 服务，只用于显示。全部 POST-only、有单飞/冷却/body 上限；数据走宿主 `webServer` 私有路由（loopback + 同源栅栏）。见 §4.7 / §4.8 | — |
 | 姿态 / 巡检 | 加载时姿态门禁（可配 `failOn`）、5 项外部巡检与退出码（0/1/2）、可选多通道通知（飞书 / 钉钉 / 企业微信 / OneBot / 通用 webhook） | 拒绝加载 / FAIL |
 | 预算 | 每轮 `input+output` token 累计，越限只记一条 `budget_exceeded`（不拦截） | — |
 
@@ -126,7 +126,7 @@ pnpm test             # 717 个用例（41 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.9.1.tgz（lib + rules + sidecar 脚本 + README + LICENSE）
+# -> dist/upear-dsh-safeharness-1.9.2.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -140,7 +140,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.9.1.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.9.2.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -149,21 +149,29 @@ $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里�
 & $dsh plugin --profile <profile> add 'file:<本仓库绝对路径>'
 ```
 
-### 3.4 启用（patch 层）
+**从 1.9.2 起，这个包装好就是"插件"，装完不需要再写 patch。** 包里带 `cordis.patch.yml` 并在 `package.json` 声明了 `dsh.bundle.patch`，所以它是一个 DSH **组合包（bundle）**：安装动作会把它写进 profile 的 `dsh.profile.bundles`，启动时由它自带的 patch 挂载 `safeharness` 这一行，「插件」页里也会出现它自己的条目页——面板的五个标签就挂在那个条目页下面。
 
-编辑 `$DSH_HOME\profiles\<profile>\cordis.patch.yml`，**追加**（注意 `insert:`——只有 `id:` 的条目是"覆盖已有条目"，不会新增插件）：
+> 1.9.1 及更早的包**只有 `dsh.client`、没有 `dsh.bundle.patch`**，只能靠手写 `insert:` 挂载。那种装法功能照常，但宿主不会把它当成组合包，于是插件页没有条目页、**面板在桌面 app 里点不到**（1.9.1 实测发现，见 CHANGELOG 1.9.2）。
+
+### 3.4 启用与覆盖（可选）
+
+**组合包装好后不需要额外配置**，插件用 schema 默认值启动（`preset: balanced`、`input/tools/results = enforce`、`output = warn`、`approval = delegate`）。
+
+要改配置（评审模型、`rules.dir`、模式等），在 `$DSH_HOME\profiles\<profile>\cordis.patch.yml` 里按 **id 覆盖**——注意这里**不要**再写 `insert:` 和 `name:`，否则同一 id 会出现两行：
 
 ```yaml
-- insert:
-    - id: safeharness
-      name: "@upear/dsh-safeharness"
-      config:
-        preset: balanced          # observe | balanced | hardened
-        audit:
-          dir: ""                 # 空 = $DSH_HOME/safeharness/audit
+- id: safeharness
+  config:
+    preset: balanced          # observe | balanced | hardened
+    audit:
+      dir: ""                 # 空 = $DSH_HOME/safeharness/audit
+    rules:
+      dir: 'C:\Users\<you>\.dsh\safeharness\rules'   # 面板「写入并重载」的目标目录
 ```
 
-推荐的"不变量"配套（评估/加固环境建议启用）：
+> 覆盖是**整体替换**该行的 `config`，不是逐键合并：写几个键，其余键就回到 schema 默认值。所以覆盖时把要保留的键都写全。
+
+推荐的"不变量"配套（评估/加固环境建议启用；这两行仍是 `insert:`，因为它们不是本包的组合包行）：
 
 ```yaml
 - insert:
@@ -190,6 +198,8 @@ Get-Content "$env:DSH_HOME\safeharness\audit\ledger.ndjson" -Encoding UTF8 | Sel
 ```
 
 > `1.2.2` 已在桌面端（DSH 桌面应用，宿主包走 app-bundle `0.2.2-rc.1`）实测：`safeharness_status` 返回 `version: 1.2.2`、八个接缝全 `true`（含 `settings`）、`engine.kind: builtin`；`safeharness_posture` 无 FAIL。`1.3.0`–`1.8.0` 的面板在同一个 0.2.2 Web 壳里实测：设置 → 内置插件出现 `SafeHarness` 标签页；1.5.0 的事件卡片按结论着色；1.6.0 的四标签、标题下拉、规则清单、AI 起草（真实调用 `liao/gpt-6-luna`）与定时巡检；1.7.0 的五标签、跨重启工作区/对话筛选、评审设置保存与真实 judge probe（`status: ok / 3685ms`）；1.8.0 的自定义模型（本地 fake OpenAI：添加 → 评审路由自动切换 → probe `ok/allow/96ms` → 在用删除被拒 → 清空路由后删除成功）与账本导出（200 条 NDJSON、146,838 B）均实测通过；1.4.0 的巡检按钮跑出 5 项检查并回写 `patrol_report`（详见 §4.7 / §4.8）。桌面升级方式见 §3.6 与仓库外脚本 `install-safeharness-desktop.cmd`。
+
+> `1.9.2` 起改为**组合包（bundle）**安装：包里带 `cordis.patch.yml` 且 `package.json` 声明 `dsh.bundle.patch`，安装动作本身就把插件挂上，宿主「插件」页出现 `SafeHarness` 条目页，面板五个标签从那里点开。此前（≤1.9.1）只能靠手写 `insert:` 挂载——功能正常但宿主不认为它是组合包，**桌面 app 里没有面板入口**（1.9.1 用真实登录 cookie + headless 浏览器实测确认，见 CHANGELOG 1.9.2）。
 
 ### 3.6 升级与卸载
 
@@ -489,7 +499,7 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 
 ### 4.7 桌面端面板（1.3.0 起；1.8.0 五标签 + 自定义模型）
 
-设置 → **内置插件** → `SafeHarness` 标签页。1.8.0 起是五个标签的工作台：**概览 / 事件 / 规则 / 巡检 / 设置**。它是只读视图 + 受限动作（巡检、定时、起草、重新加载规则、把草稿写入并重载、保存评审/起草路由、添加/删除自定义模型、导出账本片段），每个动作都有宿主侧闸门（**全部端点 POST-only，方法不对返回 405**、单飞/冷却、body 上限、字段校验、写入带 revision CAS）。面板跟随宿主主题（读 `documentElement` 的 `color-scheme` / `data-theme`），不再只靠 `prefers-color-scheme`。
+插件 → `SafeHarness` 条目页（1.9.2 起；更早的 profile 里是 设置 → 内置插件 → `SafeHarness` 标签页）。1.8.0 起是五个标签的工作台：**概览 / 事件 / 规则 / 巡检 / 设置**。它是只读视图 + 受限动作（巡检、定时、起草、重新加载规则、把草稿写入并重载、保存评审/起草路由、添加/删除自定义模型、导出账本片段），每个动作都有宿主侧闸门（**全部端点 POST-only，方法不对返回 405**、单飞/冷却、body 上限、字段校验、写入带 revision CAS）。面板跟随宿主主题（读 `documentElement` 的 `color-scheme` / `data-theme`），不再只靠 `prefers-color-scheme`。
 
 **概览**：本进程的拦截/告警/审批/放行计数、五个防护面的彩色胶囊（强制/仅告警/透传/关闭）、语义评审状态（启用/范围/路由）、会话列表（标题 + 短 id + 项目 + 创建/最近 + 各计数，**历史**标注，点一行跳到事件并按该会话过滤）、规则与账本（hash、记录数、绝对路径、引擎、规则目录）、最近 3 条需要关注的事件。
 

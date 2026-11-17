@@ -1,6 +1,6 @@
 {
     "name":  "@upear/dsh-safeharness",
-    "version": "1.9.1",
+    "version": "1.9.2",
     "description":  "Agent security suite for DeepSeek Harness: input/tool/output guards, evidence ledger, posture and patrol.",
     "keywords":  [
                      "deepseek-harness",
@@ -39,6 +39,9 @@
                     "./package.json":  "./package.json"
                 },
     "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
                 "client":  {
                                "platform":  "web",
                                "inject":  [
@@ -50,6 +53,7 @@
     "files":  [
                   "lib",
                   "rules",
+                  "cordis.patch.yml",
                   "scripts/safeharness_sidecar.py",
                   "README.md"
               ],

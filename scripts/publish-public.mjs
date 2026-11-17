@@ -41,6 +41,7 @@ export const PUBLISH_TOP = [
   'README.md',
   'CHANGELOG.md',
   'LICENSE',
+  'cordis.patch.yml',
   'tsconfig.json',
   'tsconfig.client.json',
   '.npmrc',

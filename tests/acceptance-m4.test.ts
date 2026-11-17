@@ -108,10 +108,12 @@ describe('M4: published package shape', () => {
     expect(engines['node']).toBe('>=24')
   })
 
-  it('ships only lib, rules, the sidecar script and README', () => {
+  it('ships only lib, rules, the bundle patch, the sidecar script and README', () => {
     // 1.2.0 adds `scripts/safeharness_sidecar.py`: the optional Python engine is
     // spawned from the installed package, so a tarball install must contain it.
-    expect(manifest()['files']).toEqual(['lib', 'rules', 'scripts/safeharness_sidecar.py', 'README.md'])
+    // 1.9.2 adds `cordis.patch.yml`: `dsh.bundle.patch` points at it, and a bundle
+    // whose patch is missing cannot mount its rows at all.
+    expect(manifest()['files']).toEqual(['lib', 'rules', 'cordis.patch.yml', 'scripts/safeharness_sidecar.py', 'README.md'])
   })
 
   it('declares no runtime dependencies', () => {
