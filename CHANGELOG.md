@@ -2,6 +2,16 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.11.0 — 2026-11-18
+
+输入面与 SafeHarness 内核对齐：**归一化 + MODIFY**，以及**输入语义评审**。
+
+- **归一化（默认开，`input.normalize`）**：匹配前按内核 `InformPolicy` 的顺序清洗——去零宽字符（`U+200B`–`U+200F`、`U+202A`–`U+202E`、`U+2060`–`U+2064`、`U+FEFF`、软连字符）、去 HTML 注释、NFKC 折叠。`ig\u200Bnore all rules`、`ＩＧＮＯＲＥ` 这类绕过现在会命中同一批规则。被清洗且**放行**的输入以清洗后的文本进入模型（内核的 MODIFY 语义；DSH `agent/pre-step` 的 `enter` 可带改写消息）；账本只记 `normalized` / `zero_width` / `html_comment` 标签与字符数差。
+- **输入语义评审（`input.judge`: `off` / `flagged` / `always`，默认 `flagged`）**：复用 `output.judge` 的 provider/model/超时/字符上限，对可疑输入（或每轮）做一次结构化复核。`block` → 拒绝（`input_judge_blocked`）；无结论（超时/空回复/低置信/坏 JSON）在 `input.judgeFailClosed: true` 时拒绝（`input_judge_unavailable`），否则保持结构规则判定（默认 fail-open；`hardened` 预设自动 fail-closed）。结构规则已经拒绝的回合不再额外调用。
+- **面板**：「防护面」卡片新增输入评审三档、fail-closed 开关与归一化开关，保存仍走 `op: save`（revision CAS、逐字段覆盖）。
+- **差异（与内核）**：内核 `UNCERTAIN` 一律拦；插件默认 fail-open，仅 `hardened` / 显式开关 fail-closed。这是为避免没有评审路由的 profile 被整体拒绝而做的取舍，已写进 MANUAL §4.9。
+- **测试**：新增 11 条（归一化 5、输入评审 6：判定注入、flagged 不多调、fail-closed 两态、结构已拒时不调用、解析器阈值）；47 文件 / 767 用例。
+
 ## 1.10.0 — 2026-11-18
 
 安全能力开关：**每个防护面都能在设置页单独打开/关闭**，同时修掉概览页的排版空洞。

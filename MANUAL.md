@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.10.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.11.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -78,6 +78,8 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 - 严重度：critical（纯指令覆盖）可 deny；high 只记录。
 - 输入超长（默认 60000 字符）先截断再匹配；截断本身记 WARN，不单独拒绝。
 - 拒绝话术是固定的一句通用说明，不回显命中内容；被拒输入不会进入模型历史。
+- **归一化（1.11.0）**：匹配前先去零宽字符与 HTML 注释、再 NFKC 折叠，所以 `ig\u200Bnore`、全角 `ＩＧＮＯＲＥ` 与明文命中同一批规则；清洗后放行的回合以清洗文本进入模型（详见 §4.9）。
+- **输入语义评审（1.11.0）**：`input.judge: flagged`（默认）时，结构规则命中但未拒绝的回合额外做一次模型复核；`block` 直接拒，无结论按 `input.judgeFailClosed` 处理（详见 §4.9）。
 
 ### 2.2 工具执行面
 
@@ -128,7 +130,7 @@ pnpm test             # 752 个用例（45 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.10.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
+# -> dist/upear-dsh-safeharness-1.11.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -142,7 +144,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.10.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.11.0.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -560,11 +562,25 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 
 | 名称 | 做什么 | 模型 | 何时运行 |
 |---|---|---|---|
-| 语义评审 judge | 审**模型输出**（可选的额外模型调用） | profile 配置 `output.judge.provider/model`；本机桌面为 `liao/gpt-6-luna` | `output.judge.enabled` 且输出有文本；`scope: flagged` 只审结构规则已命中的输出，`always` 审全部 |
+| 语义评审 judge | 审**模型输出**，1.11.0 起也审**用户输入**（可选的额外模型调用） | profile 配置 `output.judge.provider/model`；本机桌面为 `liao/gpt-6-luna` | 输出：`output.judge.enabled` 且有文本（`scope` 决定 flagged/always）；输入：`input.judge = flagged | always` |
 | Python sidecar | 异步**输入**判定（规则集与内置引擎同源） | **不用模型** | `engine.kind: sidecar` 且启用；本机未启用 |
 | 规则起草 | 把一句自然语言描述变成候选 YAML | `draft.provider/model`，留空回落 judge 路由 | 面板/命令触发，单飞 |
 
-面板“设置”页读写的正是第一、三行的路由；它只改配置，不改变“judge 只审输出、sidecar 只审输入”的分工。
+面板“设置”页读写的正是第一、三行的路由；1.11.0 起同一个评审路由也用于输入面（`input.judge`），"judge 只审输出"不再成立，但输入与输出仍是两次独立的调用与两份独立的账本记录。
+
+### 4.9 输入归一化与输入语义评审（1.11.0）
+
+| 字段 | 默认 | 作用 |
+|---|---|---|
+| `input.normalize` | `true` | 匹配前清洗：去零宽字符、去 HTML 注释、NFKC 折叠。命中规则照旧拒绝；**清洗后放行**的回合以清洗文本进入模型（内核 MODIFY 语义），账本记 `normalized` / `zero_width` / `html_comment` 标签与字符数差。 |
+| `input.judge` | `flagged` | `off` 不调用；`flagged` 只在结构规则命中、且结构本身不拒绝时审一次（精度控制）；`always` 每轮都审。 |
+| `input.judgeFailClosed` | `false` | 评审无结论（超时/空回复/低置信/坏 JSON）时是否拒绝。`hardened` 预设自动置 `true`。 |
+
+- 路由复用 `output.judge` 的 `provider` / `model` / `timeoutMs` / `maxChars`；评审请求带 `[safeharness-judge]` 标记，不会被输出面再次评审（递归防护）。
+- 结论：`block` → 拒绝（`input_judge_blocked`）；`safe` → 放行；无结论 → 按 `judgeFailClosed` 决定 `input_judge_unavailable` 或保持结构判定。
+- **与内核的差异**：内核 `UNCERTAIN` 一律拦；插件默认 fail-open，只在 `hardened` 或显式开关时 fail-closed。原因是 DSH profile 可能没有配置评审路由，恒 fail-closed 会让每一次输入都被拒。
+- 结构规则已经拒绝的回合不再调用评审，省一次模型调用。
+- 面板位置：设置 → 防护面卡片（输入语义评审三档 + fail-closed + 归一化开关）。
 
 ---
 ## 5. 预设与失败语义

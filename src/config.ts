@@ -51,6 +51,14 @@ export type ApprovalMode = 'delegate' | 'policy'
 /** When the semantic judge runs: only on structurally flagged output, or always. */
 export type JudgeScope = 'flagged' | 'always'
 /**
+ * When the input semantic judge runs.
+ *
+ * `off` never calls it; `flagged` (default) only when the structural rules already
+ * hit — a precision check that adds one call per suspicious turn; `always` judges
+ * every user turn.
+ */
+export type InputJudgeScope = 'off' | 'flagged' | 'always'
+/**
  * Which tool arguments are inspected for dangerous SQL (R42).
  *
  * `execution` (default since 1.2.2) scans only tools that can execute what they
@@ -113,6 +121,19 @@ export interface SafeHarnessConfig {
     mode?: EnforcementMode
     /** User text longer than this is truncated before matching (and reported). */
     maxChars?: number
+    /**
+     * Normalize before matching: NFKC, zero-width removal, HTML-comment removal.
+     * When the text changed and the step is allowed, the message is rewritten with
+     * the cleaned text (MODIFY), mirroring the Python `InformPolicy`.
+     */
+    normalize?: boolean
+    /**
+     * Input semantic judge: `off`, `flagged` (only when a structural rule already
+     * hit, a precision control) or `always` (every user turn).
+     */
+    judge?: InputJudgeScope
+    /** Treat "no usable verdict" as a denial instead of keeping the structural decision. */
+    judgeFailClosed?: boolean
   }
   tools?: {
     mode?: EnforcementMode
@@ -290,6 +311,12 @@ export const Config = z.object({
   input: z.object({
     mode: z.union(['off', 'warn', 'enforce'] as const).volatile().description('Input guard mode.'),
     maxChars: z.number().min(1).volatile().description('Truncate user text beyond this many characters.'),
+    normalize: z.boolean().volatile()
+      .description('Normalize before matching (NFKC, zero-width, HTML comments) and rewrite changed messages.'),
+    judge: z.union(['off', 'flagged', 'always'] as const).volatile()
+      .description('Input semantic judge: off, only when a structural rule hit, or every user turn.'),
+    judgeFailClosed: z.boolean().volatile()
+      .description('Deny when the input judge returns no usable verdict.'),
   }).description('Input guard (agent/pre-step).'),
 
   tools: z.object({
@@ -397,7 +424,13 @@ export interface ResolvedConfig {
     readonly watch: boolean
     readonly inline: readonly unknown[]
   }
-  readonly input: { readonly mode: EnforcementMode; readonly maxChars: number }
+  readonly input: {
+    readonly mode: EnforcementMode
+    readonly maxChars: number
+    readonly normalize: boolean
+    readonly judge: InputJudgeScope
+    readonly judgeFailClosed: boolean
+  }
   readonly tools: {
     readonly mode: EnforcementMode
     readonly denyTools: readonly string[]
@@ -482,7 +515,11 @@ const PRESET_OVERRIDES: Record<PresetId, DeepPartial<SafeHarnessConfig>> = {
     posture: { failOn: [] },
   },
   hardened: {
-    input: { mode: 'enforce' },
+    // Hardened keeps the default `flagged` scope but treats "no usable verdict" as
+    // a denial for the turns it does judge (the Python core's fail-closed
+    // UNCERTAIN). Forcing `always` here would deny every turn on a profile with no
+    // judge route, so that stays an explicit operator choice.
+    input: { mode: 'enforce', judgeFailClosed: true },
     tools: { mode: 'enforce' },
     results: { mode: 'enforce', blockOn: ['credential_leak', 'injection_marker'] },
     output: { mode: 'warn' },
@@ -518,7 +555,7 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
   // explicit operator choice that adds a Python dependency.
   engine: { kind: 'builtin', command: '', args: [], cwd: '', timeoutMs: 1500, startTimeoutMs: 10000 },
   rules: { dir: '', watch: true, inline: [] },
-  input: { mode: 'enforce', maxChars: 60000 },
+  input: { mode: 'enforce', maxChars: 60000, normalize: true, judge: 'flagged', judgeFailClosed: false },
   tools: {
     mode: 'enforce',
     denyTools: [],
@@ -748,6 +785,9 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     input: {
       mode: oneOf(input.mode, ['off', 'warn', 'enforce'] as const, 'input.mode', problems),
       maxChars: positive(input.maxChars, 'input.maxChars', problems, 60000),
+      normalize: typeof input.normalize === 'boolean' ? input.normalize : true,
+      judge: oneOf(input.judge ?? 'flagged', ['off', 'flagged', 'always'] as const, 'input.judge', problems),
+      judgeFailClosed: typeof input.judgeFailClosed === 'boolean' ? input.judgeFailClosed : false,
     },
     tools: {
       mode: oneOf(tools.mode, ['off', 'warn', 'enforce'] as const, 'tools.mode', problems),
