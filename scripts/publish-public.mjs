@@ -39,6 +39,7 @@ export const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url))
 export const PUBLISH_TOP = [
   'package.json',
   'README.md',
+  'MANUAL.md',
   'CHANGELOG.md',
   'LICENSE',
   'cordis.patch.yml',

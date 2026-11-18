@@ -1,6 +1,45 @@
 # 变更记录
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
+
+## 1.10.0 — 2026-11-18
+
+安全能力开关：**每个防护面都能在设置页单独打开/关闭**，同时修掉概览页的排版空洞。
+
+- **防护面开关（新）**：设置页新增「防护面」卡片，五面各一个下拉——输入 / 工具调用 / 工具结果（强制拦截 · 仅告警 · 关闭）、模型输出（强制拦截（缓冲流式）· 仅告警 · 关闭）、审批桥（插件策略 · 委派宿主）。改动经 `POST /safeharness/settings` 的 `op: save` 写入 `input.mode` / `tools.mode` / `results.mode` / `output.mode` / `approval.mode`：逐字段覆盖，`preset` 不变；与语义评审同一次保存时合并进同一个 `output` 对象，不会互相覆盖；沿用 revision CAS，stale 表单被拒。审计只记 `surfaces: changed`，不记具体值。
+- **概览排版**：四张卡片原先是等高网格，`会话` 很高会把 `防护面` 拉出一大片空白。改成两列瀑布（`columns: 2` + `break-inside: avoid`），窄容器（<700px）自动单列。
+- **协议**：`PanelSettingsValue.surfaces` 与 `PanelSettingsPatch.surfaces` 新增；旧面板缺这个字段时按服务端返回渲染。
+- **未改**：检测逻辑、规则、账本、端点栅栏全部不变——这一版只把已经存在的 `mode` 字段接到界面上。
+- **测试**：新增「逐面保存 + 与 judge 合并」「拒绝未知 mode」两条；45 文件 / 756 用例。
+
+## 1.9.5 — 2026-11-18
+
+插件页信息分级：**只留简要信息，完整手册放到按钮后面**。
+
+- **限制（宿主）**：插件详情页的「包文档」是**纯 Markdown**——raw HTML 被丢弃、相对链接不可点（宿主文档原文：*detail documents omit raw HTML … relative links … are not clickable*）。所以页内 `<details>` 折叠和 `[MANUAL.md](MANUAL.md)` 这类相对链接都做不到，长文只能走绝对 URL。
+- **修法**：`README.md` 再收短——一句话定位、安装命令、面板入口、三条 **GitHub 绝对链接**（手册 / 变更 / 示例）与安全边界；新增 `plugins.detail.actions` 页头按钮「完整文档」，在本包 bundle 页与行页渲染（按 `subject.pkg.name` 判定，别人的详情页返回 null），`target="_blank"` 打开 MANUAL.md。
+- **效果**：点进插件 → 描述 → 十几行简介 → 五标签工作台；要读长文点页头按钮或 README 里的 GitHub 链接。
+- **未改**：三个配置槽、端点、闸门、账本、规则装载全部不变。
+- **测试**：`tests/client-bundle.test.ts` 增加「按钮只出现在自家页面 + 链接是 https 绝对地址 + `_blank`」；`tests/acceptance-m4.test.ts` 的 README 断言改为「少于 30 行、含 GitHub 手册链接、不含相对链接」；45 文件 / 754 用例。
+
+## 1.9.4 — 2026-11-18
+
+插件页顺序修复：**工作台紧跟描述，不再被整本手册压在下面**。
+
+- **现象（1.9.3 真机）**：1.9.3 把面板注册进 `plugins.bundle.config` 后工作台确实出现了，但宿主的插件详情页先画「包文档（README）」再画配置区；本包的 README 是 790 行的完整手册，于是五个标签被推到整篇文档之后，点进插件的第一屏仍然是 README。
+- **修法**：完整手册移到包根 `MANUAL.md`（章节号不变，`README §4.7` 一类引用继续指向同一节），`README.md` 收成简短门面（一句话定位、安装命令、面板入口、文档索引、安全边界），并把 `MANUAL.md` 加进 `files` 与发布白名单，公开树同样可读。
+- **未改**：注册面（`settings.plugins.tab` / `plugins.bundle.config` / `plugins.row.config`）、端点、闸门、账本、规则装载全部不变。
+- **测试**：`tests/acceptance-m4.test.ts` 增加「README 少于 40 行且链接 MANUAL.md」的回归，`files` 断言同步为六项；45 文件 / 753 用例。
+
+## 1.9.3 — 2026-11-18
+
+面板入口修复：**点进插件就看到工作台，不再只剩 README**。
+
+- **问题（1.9.2 真机反馈）**：1.9.2 让这个包成为组合包后，「插件」页里确实出现了条目页，但点进去只有包自带的 README。原因是面板只注册了 `settings.plugins.tab`（设置里的标签页），而条目页正文由宿主按配置槽拼装：注册了 `plugins.bundle.config` / `plugins.row.config` / `plugins.item` 的包才有自己的配置界面，否则宿主用包 README 填满正文。安装随附的四个配置页（shell 执行器、agent loop、子智能体、DeepSeek 搜索提供方）就各来自一个注册 `plugins.item` 的伴生包。
+- **修法**：浏览器半侧在 `settings.plugins.tab` 之外，再注册宿主的两个**键控**槽——`plugins.bundle.config`（`key: '@upear/dsh-safeharness'`，渲染在组合包页面的描述与行之间）与 `plugins.row.config`（`key: '@upear/dsh-safeharness#safeharness'`，让该行多出「配置」控件）。三处共用同一套组件与 face；只有 `view: 'page'` 渲染工作台，`view: 'summary'` 返回 null。三个注册都走 `ctx.slots.inject`，槽不存在时安静缺省，不影响浏览器启动。
+- **未改**：面板端点、闸门、账本、规则装载与宿主半侧全部不变；这一版只改浏览器半侧的注册面。
+- **测试**：`tests/client-bundle.test.ts` 新增「注册三个槽 + 键名与语言命名空间 + page/summary 视图」断言；45 文件 / 752 用例。
+
 ## 1.9.2 — 2026-11-17
 
 打包形态修复：**这个包现在是一个真正的 DSH 组合包（bundle）**，装完就能在宿主「插件」页里点开面板。

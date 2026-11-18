@@ -37,8 +37,12 @@ const REACT_STUB = {
   useEffect: () => undefined,
 }
 
-/** The stub automatic JSX runtime. */
-const JSX_STUB = { jsx: () => null, jsxs: () => null, Fragment: 'fragment' }
+/** The stub automatic JSX runtime; element type/props are recorded, not rendered. */
+const JSX_STUB = {
+  jsx: (type: unknown, props: unknown) => ({ type, props }),
+  jsxs: (type: unknown, props: unknown) => ({ type, props }),
+  Fragment: 'fragment',
+}
 
 /** Materialize the built bundle the way the shell's module table would. */
 function materialize(): Record<string, unknown> {
@@ -58,10 +62,12 @@ function materialize(): Record<string, unknown> {
 interface SlotRegistration {
   readonly options: {
     readonly name: string
-    readonly id: string
-    readonly order: number
-    readonly label: () => string
-    readonly inject: () => {
+    readonly id?: string
+    readonly key?: string
+    readonly locale?: string
+    readonly order?: number
+    readonly label?: () => string
+    readonly inject?: () => {
       readonly load: () => Promise<unknown>
       readonly patrol: () => Promise<unknown>
       readonly draft: (input: { readonly description: string; readonly kind: 'inform' | 'chain' }) => Promise<unknown>
@@ -69,7 +75,7 @@ interface SlotRegistration {
       readonly writeRule: (input: { readonly filename: string; readonly yaml: string; readonly overwrite: boolean }) => Promise<unknown>
     }
   }
-  readonly component: unknown
+  readonly component: (props: Record<string, unknown>) => unknown
 }
 
 /** Run `apply` against a fake context and return what it contributed. */
@@ -97,6 +103,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** The tab's injected face; the keyed slots close over theirs instead. */
+function faceOf(entry: SlotRegistration): NonNullable<SlotRegistration['options']['inject']> {
+  const inject = entry.options.inject
+  if (inject === undefined) throw new Error('the settings tab registration must inject a face')
+  return inject
+}
+
 describe('client half manifest', () => {
   it('declares a web client half that points at the built bundle', () => {
     expect(manifest.dsh?.client?.platform).toBe('web')
@@ -120,20 +133,88 @@ describe.skipIf(!built)('lib/client.js', () => {
     expect(unexpected).toEqual([])
   })
 
-  it('materializes into a cordis plugin that registers the settings tab', () => {
+  it('materializes into a cordis plugin that registers the workbench on four surfaces', () => {
     const exported = materialize()
     expect(exported.inject).toEqual(['slots'])
     expect(typeof exported.apply).toBe('function')
 
     const { injectedSlots, registrations } = register(exported)
-    expect(injectedSlots).toEqual(['settings.plugins.tab'])
-    expect(registrations).toHaveLength(1)
-    const entry = registrations[0] as SlotRegistration
-    expect(entry.options.name).toBe('settings.plugins.tab')
-    expect(entry.options.id).toBe('safeharness')
-    expect(entry.options.order).toBe(20)
-    expect(entry.options.label()).toBe('SafeHarness')
-    expect(typeof entry.component).toBe('function')
+    expect(injectedSlots).toEqual([
+      'settings.plugins.tab',
+      'plugins.bundle.config',
+      'plugins.row.config',
+      'plugins.detail.actions',
+    ])
+    expect(registrations).toHaveLength(4)
+
+    const [tab, bundle, row, docs] = registrations as [
+      SlotRegistration,
+      SlotRegistration,
+      SlotRegistration,
+      SlotRegistration,
+    ]
+    expect(tab.options.name).toBe('settings.plugins.tab')
+    expect(tab.options.id).toBe('safeharness')
+    expect(tab.options.order).toBe(20)
+    expect(tab.options.label?.()).toBe('SafeHarness')
+    expect(typeof tab.component).toBe('function')
+
+    // The bundle page is keyed by the npm package name: the host looks that key
+    // up while drawing the page between the description and the rows, and the
+    // page body is otherwise the package README (the 1.9.2 report).
+    expect(bundle.options.name).toBe('plugins.bundle.config')
+    expect(bundle.options.key).toBe('@upear/dsh-safeharness')
+    expect(bundle.options.locale).toBe('safeHarness')
+    expect(typeof bundle.component).toBe('function')
+
+    // The row page is keyed `<package>#<row id>`, matching cordis.patch.yml.
+    expect(row.options.name).toBe('plugins.row.config')
+    expect(row.options.key).toBe('@upear/dsh-safeharness#safeharness')
+    expect(row.options.locale).toBe('safeHarness')
+    expect(typeof row.component).toBe('function')
+
+    // The head control that opens the manual: a list entry, so it needs an id.
+    expect(docs.options.name).toBe('plugins.detail.actions')
+    expect(docs.options.id).toBe('safeharness-docs')
+    expect(docs.options.order).toBe(10)
+    expect(typeof docs.component).toBe('function')
+  })
+
+  it('shows the docs button on its own pages only', () => {
+    const { registrations } = register(materialize())
+    const docs = registrations[3] as SlotRegistration
+    // The slot is shared by every plugin's detail page.
+    expect(docs.component({ subject: { kind: 'bundle', pkg: { name: '@deepseek-ai/dsh-web-app' } } })).toBeNull()
+    expect(docs.component({ subject: { kind: 'item', id: 'web-search' } })).toBeNull()
+
+    for (const subject of [
+      { kind: 'bundle', pkg: { name: '@upear/dsh-safeharness' } },
+      { kind: 'row', pkg: { name: '@upear/dsh-safeharness' } },
+    ]) {
+      const link = docs.component({ subject }) as { type: string; props: Record<string, unknown> } | null
+      expect(link?.type).toBe('a')
+      // The detail document drops relative links, so this one must be absolute.
+      expect(String(link?.props.href)).toMatch(/^https:\/\/github\.com\//u)
+      expect(link?.props.target).toBe('_blank')
+    }
+  })
+
+  it('draws the workbench as the page body and nothing in the summary slot', () => {
+    const { registrations } = register(materialize())
+    const bundle = registrations[1] as SlotRegistration
+    const row = registrations[2] as SlotRegistration
+    // `summary` is the title-side block some slots draw; we have nothing for it.
+    expect(bundle.component({ view: 'summary' })).toBeNull()
+    expect(row.component({ view: 'summary' })).toBeNull()
+
+    // `page` must mount the panel with its whole face, not an empty shell.
+    for (const entry of [bundle, row]) {
+      const element = entry.component({ view: 'page' }) as { type: unknown; props: Record<string, unknown> } | null
+      expect(typeof element?.type).toBe('function')
+      expect(typeof element?.props.load).toBe('function')
+      expect(typeof element?.props.writeRule).toBe('function')
+      expect(typeof element?.props.exportLedger).toBe('function')
+    }
   })
 
   it('loads the payload from the panel route and unwraps the envelope', async () => {
@@ -146,7 +227,7 @@ describe.skipIf(!built)('lib/client.js', () => {
 
     const { registrations } = register(materialize())
     const entry = registrations[0] as SlotRegistration
-    await expect(entry.options.inject().load()).resolves.toEqual(payload)
+    await expect(faceOf(entry)().load()).resolves.toEqual(payload)
     expect(fetchStub).toHaveBeenCalledWith('/safeharness/status', expect.objectContaining({
       method: 'POST',
       credentials: 'same-origin',
@@ -159,7 +240,7 @@ describe.skipIf(!built)('lib/client.js', () => {
     vi.stubGlobal('fetch', fetchStub)
     const { registrations } = register(materialize())
     const entry = registrations[0] as SlotRegistration
-    await expect(entry.options.inject().patrol()).resolves.toEqual(report)
+    await expect(faceOf(entry)().patrol()).resolves.toEqual(report)
     expect(fetchStub).toHaveBeenCalledWith('/safeharness/patrol', expect.objectContaining({ method: 'POST' }))
   })
 
@@ -169,7 +250,7 @@ describe.skipIf(!built)('lib/client.js', () => {
     vi.stubGlobal('fetch', fetchStub)
     const { registrations } = register(materialize())
     const entry = registrations[0] as SlotRegistration
-    await expect(entry.options.inject().writeRule({ filename: 'draft.yaml', yaml: 'rules: []', overwrite: false }))
+    await expect(faceOf(entry)().writeRule({ filename: 'draft.yaml', yaml: 'rules: []', overwrite: false }))
       .resolves.toEqual(value)
     expect(fetchStub).toHaveBeenCalledWith('/safeharness/write-rule', expect.objectContaining({
       method: 'POST',
@@ -179,10 +260,10 @@ describe.skipIf(!built)('lib/client.js', () => {
   it('surfaces a refused or failed read instead of rendering stale data', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ ok: false, error: { code: 'panel_failed' } }) })))
     const failed = register(materialize())
-    await expect((failed.registrations[0] as SlotRegistration).options.inject().load()).rejects.toThrow(/panel_failed/u)
+    await expect(faceOf(failed.registrations[0] as SlotRegistration)().load()).rejects.toThrow(/panel_failed/u)
 
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) })))
     const refused = register(materialize())
-    await expect((refused.registrations[0] as SlotRegistration).options.inject().load()).rejects.toThrow(/panel_http_403/u)
+    await expect(faceOf(refused.registrations[0] as SlotRegistration)().load()).rejects.toThrow(/panel_http_403/u)
   })
 })

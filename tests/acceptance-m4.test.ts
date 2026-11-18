@@ -108,12 +108,32 @@ describe('M4: published package shape', () => {
     expect(engines['node']).toBe('>=24')
   })
 
-  it('ships only lib, rules, the bundle patch, the sidecar script and README', () => {
+  it('ships only lib, rules, the bundle patch, the sidecar script and the two docs', () => {
     // 1.2.0 adds `scripts/safeharness_sidecar.py`: the optional Python engine is
     // spawned from the installed package, so a tarball install must contain it.
     // 1.9.2 adds `cordis.patch.yml`: `dsh.bundle.patch` points at it, and a bundle
     // whose patch is missing cannot mount its rows at all.
-    expect(manifest()['files']).toEqual(['lib', 'rules', 'cordis.patch.yml', 'scripts/safeharness_sidecar.py', 'README.md'])
+    // 1.9.4 splits the docs: `README.md` stays the short landing page the plugin
+    // page renders above the workbench, `MANUAL.md` carries the full manual.
+    expect(manifest()['files']).toEqual([
+      'lib',
+      'rules',
+      'cordis.patch.yml',
+      'scripts/safeharness_sidecar.py',
+      'README.md',
+      'MANUAL.md',
+    ])
+  })
+
+  it('keeps the landing README short, so the workbench follows it on the plugin page', () => {
+    // The host draws the package README above the bundle's configuration slot,
+    // and its detail document is plain Markdown: raw HTML and relative links are
+    // dropped. So the README is a short summary whose only links are absolute
+    // GitHub URLs, and the manual opens from the page head (see the client half).
+    const readme = readFileSync(join(pluginRoot, 'README.md'), 'utf8')
+    expect(readme.split('\n').length).toBeLessThan(30)
+    expect(readme).toContain('https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh/blob/main/MANUAL.md')
+    expect(readme).not.toContain('](MANUAL.md)')
   })
 
   it('declares no runtime dependencies', () => {

@@ -33,6 +33,7 @@ import type {
   PanelProviderProtocol,
   PanelSettingsPatch,
   PanelSettingsValue,
+  PanelSurfaceSettings,
 } from './protocol.js'
 
 /** Bounds keep a hostile or huge provider catalog out of the browser. */
@@ -466,9 +467,17 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       provider: cfg.draft.provider,
       model: cfg.draft.model,
     }
+    const surfaces: PanelSurfaceSettings = {
+      input: cfg.input.mode,
+      tools: cfg.tools.mode,
+      results: cfg.results.mode,
+      output: cfg.output.mode,
+      approval: cfg.approval.mode,
+    }
     const custom = loadCustomProviders().map(({ credentialRef: _credentialRef, ...row }) => row)
     return {
       preset: cfg.preset,
+      surfaces,
       judge,
       draft,
       providers: await loadCatalog(llm),
@@ -495,6 +504,43 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     }
     const cfg = runtime.config
     const update: Record<string, unknown> = {}
+    // `output` carries both the judge route and the surface mode; collect them in
+    // one object so a save that changes both does not drop either.
+    const output: Record<string, unknown> = {}
+
+    if (patch.surfaces !== undefined && patch.surfaces !== null) {
+      const surfaces = patch.surfaces
+      if (surfaces.input !== undefined) {
+        if (surfaces.input !== 'off' && surfaces.input !== 'warn' && surfaces.input !== 'enforce') {
+          throw new PanelSettingsError('settings_invalid', 'surfaces.input must be off, warn or enforce')
+        }
+        update['input'] = { mode: surfaces.input }
+      }
+      if (surfaces.tools !== undefined) {
+        if (surfaces.tools !== 'off' && surfaces.tools !== 'warn' && surfaces.tools !== 'enforce') {
+          throw new PanelSettingsError('settings_invalid', 'surfaces.tools must be off, warn or enforce')
+        }
+        update['tools'] = { mode: surfaces.tools }
+      }
+      if (surfaces.results !== undefined) {
+        if (surfaces.results !== 'off' && surfaces.results !== 'warn' && surfaces.results !== 'enforce') {
+          throw new PanelSettingsError('settings_invalid', 'surfaces.results must be off, warn or enforce')
+        }
+        update['results'] = { mode: surfaces.results }
+      }
+      if (surfaces.output !== undefined) {
+        if (surfaces.output !== 'off' && surfaces.output !== 'warn' && surfaces.output !== 'enforce-buffer') {
+          throw new PanelSettingsError('settings_invalid', 'surfaces.output must be off, warn or enforce-buffer')
+        }
+        output['mode'] = surfaces.output
+      }
+      if (surfaces.approval !== undefined) {
+        if (surfaces.approval !== 'delegate' && surfaces.approval !== 'policy') {
+          throw new PanelSettingsError('settings_invalid', 'surfaces.approval must be delegate or policy')
+        }
+        update['approval'] = { mode: surfaces.approval }
+      }
+    }
 
     if (patch.judge !== undefined && patch.judge !== null) {
       const judge = patch.judge
@@ -517,7 +563,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       if (enabled && (provider.length === 0 || model.length === 0)) {
         throw new PanelSettingsError('settings_invalid', 'enabling the judge requires both a provider and a model')
       }
-      update['output'] = { judge: next }
+      output['judge'] = next
     }
 
     if (patch.draft !== undefined && patch.draft !== null) {
@@ -531,6 +577,8 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       if (draft.model !== undefined) next['model'] = routeField(draft.model, 'draft.model')
       update['draft'] = next
     }
+
+    if (Object.keys(output).length > 0) update['output'] = output
 
     if (Object.keys(update).length === 0) throw new PanelSettingsError('settings_invalid', 'no supported field was supplied')
 
@@ -561,6 +609,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         judge: cfg.output.judge.enabled ? 'was_on' : 'was_off',
         ...(patch.judge?.enabled === undefined ? {} : { judge_next: patch.judge.enabled ? 'on' : 'off' }),
         ...(patch.draft === undefined ? {} : { draft_route: 'changed' }),
+        ...(patch.surfaces === undefined ? {} : { surfaces: 'changed' }),
       },
     })
     // The loader reconcile is asynchronous; the caller sees the value it can

@@ -49,6 +49,7 @@ describe('public tree plan: still contains what a stranger needs', () => {
     for (const file of [
       'package.json',
       'README.md',
+      'MANUAL.md',
       'CHANGELOG.md',
       'LICENSE',
       'tsconfig.json',

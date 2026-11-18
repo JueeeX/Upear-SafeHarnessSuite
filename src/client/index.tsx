@@ -1,11 +1,25 @@
 /**
- * Browser half of the SafeHarness panel (T5.3).
+ * Browser half of the SafeHarness panel (T5.3, 1.9.3).
  *
- * It contributes one tab to the host's Plugins settings section. The tab is
- * registered through `ctx.slots.inject`, so it waits for that section's
+ * It contributes the same workbench to three host surfaces:
+ *
+ * - `settings.plugins.tab` — the tab inside the Plugins settings section (since
+ *   1.9.0, kept for profiles whose plugins page is not composed);
+ * - `plugins.bundle.config` — the bundle's own page, keyed by npm package name
+ *   and rendered between the description and the rows. This is the surface the
+ *   bundle's page has for its own configuration, and without it the page falls
+ *   back to the package README as its whole body (the 1.9.2 report);
+ * - `plugins.row.config` — the row's page, keyed `<package>#<row id>`, which
+ *   gives the `safeharness` row a Configure control;
+ * - `plugins.detail.actions` — the head control that opens the full manual on
+ *   GitHub. The host's detail document is plain Markdown (raw HTML and relative
+ *   links are dropped), so the README above the workbench stays a short summary
+ *   and the button is the way to the long form.
+ *
+ * Every registration goes through `ctx.slots.inject`, so it waits for the slot's
  * declaration instead of assuming it: a profile that does not compose the
- * settings plugins package (or a future host that renames the slot) leaves the
- * panel out of the UI instead of failing the browser boot.
+ * settings plugins page (or a future host that renames a slot) leaves that
+ * surface out of the UI instead of failing the browser boot.
  *
  * Deliberate dependencies: `react` only (a platform seed module). Every DSH
  * client package is avoided — the browser module table has exactly ten
@@ -51,17 +65,40 @@ import type {
 } from '../panel/protocol.js'
 import { SafeHarnessPanel } from './panel.js'
 
+/**
+ * What the host passes to a slot component besides the injected face.
+ *
+ * Only `view` is read: `'page'` is the full page body (ours), `'summary'` is the
+ * title-side block some slots draw instead — we have nothing to say there.
+ */
+export interface SlotViewProps {
+  /** `'page'` for a body with its own save controls, `'summary'` for a title-side block. */
+  readonly view?: string
+}
+
+/** Options the host accepts for one slot registration. */
+export interface SlotRegisterOptions {
+  /** Slot name the registration is attached to. */
+  readonly name: string
+  /** List-entry registration id (owner-assigned); not used by the config slots. */
+  readonly id?: string
+  /** Key for a keyed slot: bundle package name, or `<package>#<row id>`. */
+  readonly key?: string
+  /** Locale namespace the host resolves the registration's labels in. */
+  readonly locale?: string
+  /** Ordering hint inside a slot. */
+  readonly order?: number
+  /** Static label for list slots. */
+  readonly label?: () => string
+  /** Face injected into the component (list slots only; keyed slots close over it). */
+  readonly inject?: () => PanelFace
+}
+
 /** The slice of the browser plugin context this half uses. */
 export interface ClientContextLike {
   readonly slots: {
     inject(name: string, callback: () => () => void): () => void
-    register(options: {
-      readonly name: string
-      readonly id: string
-      readonly order: number
-      readonly label: () => string
-      readonly inject: () => PanelFace
-    }, component: (props: PanelFace) => ReactNode): () => void
+    register<P>(options: SlotRegisterOptions, component: (props: P) => ReactNode): () => void
   }
 }
 
@@ -102,6 +139,82 @@ export interface PanelFace {
 
 /** Slot this tab is contributed to (owned by the plugins settings section). */
 const TAB_SLOT = 'settings.plugins.tab'
+
+/** Bundle-detail slot: keyed by the bundle's npm package name. */
+const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'
+
+/** Row-detail slot: keyed `<package>#<row id>`. */
+const ROW_CONFIG_SLOT = 'plugins.row.config'
+
+/**
+ * Detail-page head slot (list): the docs button.
+ *
+ * The plugin page renders the package README above the bundle's configuration,
+ * and the host's detail document is plain Markdown — raw HTML (so no in-page
+ * `<details>` fold) and relative links are dropped. The head control is the one
+ * clickable affordance outside that document, so the full manual opens from here.
+ */
+const DETAIL_ACTIONS_SLOT = 'plugins.detail.actions'
+
+/** Full manual on GitHub (absolute: the detail document only links absolutes). */
+const DOCS_URL = 'https://github.com/JueeeX/JueeeX-Upear-SafeHarnessSuite-dsh/blob/main/MANUAL.md'
+
+/** Package name used as the bundle key (also the registration id of the tab). */
+const PACKAGE_NAME = '@upear/dsh-safeharness'
+
+/** Row id this bundle's patch declares, used as the row key. */
+const ROW_ID = 'safeharness'
+
+/** Subject a detail-page contribution is rendered with (the parts this half reads). */
+export interface DetailSubject {
+  /** `bundle` / `row` / `item`, as the host names the open page. */
+  readonly kind: 'bundle' | 'row' | 'item'
+  /** The bundle the page is about, for bundle and row pages. */
+  readonly pkg?: { readonly name: string }
+}
+
+/** Owner props of a `plugins.detail.actions` entry. */
+export interface DetailActionProps {
+  /** The page's subject; an entry renders null for a subject it has nothing for. */
+  readonly subject: DetailSubject
+}
+
+/**
+ * The docs control shown at the head of this plugin's own detail pages.
+ *
+ * It renders only for our bundle (or one of its rows): the slot is shared by
+ * every plugin's detail page, and a contribution that ignored the subject would
+ * put a SafeHarness link on strangers' pages.
+ *
+ * @param props - the page's subject.
+ * @returns an external link styled as a small button, or null.
+ */
+function DocsAction({ subject }: DetailActionProps): ReactNode {
+  if (subject.pkg?.name !== PACKAGE_NAME) return null
+  return (
+    <a
+      href={DOCS_URL}
+      target="_blank"
+      rel="noreferrer"
+      title="在浏览器打开完整手册（GitHub）"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        height: '28px',
+        padding: '0 12px',
+        border: '1px solid currentColor',
+        borderRadius: '6px',
+        color: 'inherit',
+        font: 'inherit',
+        fontSize: '12px',
+        textDecoration: 'none',
+        opacity: 0.85,
+      }}
+    >
+      完整文档
+    </a>
+  )
+}
 
 /** Services this plugin needs from the browser context. */
 export const inject = ['slots']
@@ -174,11 +287,38 @@ export function apply(ctx: ClientContextLike): void {
   }
   ctx.slots.inject(TAB_SLOT, () => ctx.slots.register({
     name: TAB_SLOT,
-    id: 'safeharness',
+    id: ROW_ID,
     // After the configurable (0) and inventory (10) tabs: this one is
     // informational, not part of the configuration flow.
     order: 20,
     label: () => 'SafeHarness',
     inject: () => face,
   }, SafeHarnessPanel))
+
+  // The bundle's own page: this is what "click the plugin" opens. Without it the
+  // page body is only the package README, which reads as "the plugin has no UI".
+  // `view: 'page'` is the full body; the host draws the title, icon, and crumb.
+  ctx.slots.inject(BUNDLE_CONFIG_SLOT, () => ctx.slots.register<SlotViewProps>({
+    name: BUNDLE_CONFIG_SLOT,
+    key: PACKAGE_NAME,
+    locale: 'safeHarness',
+  }, ({ view }) => (view === 'page' ? <SafeHarnessPanel {...face} /> : null)))
+
+  // Same workbench on the `safeharness` row's page, reached through the row's
+  // Configure control. The patch declares the row under `ROW_ID`, which is what
+  // the host keys this slot with.
+  ctx.slots.inject(ROW_CONFIG_SLOT, () => ctx.slots.register<SlotViewProps>({
+    name: ROW_CONFIG_SLOT,
+    key: `${PACKAGE_NAME}#${ROW_ID}`,
+    locale: 'safeHarness',
+  }, ({ view }) => (view === 'page' ? <SafeHarnessPanel {...face} /> : null)))
+
+  // The head control: the host renders the package README (plain Markdown, no
+  // raw HTML, no relative links) above the configuration, so the full manual is
+  // one click away from the page head rather than buried in the document.
+  ctx.slots.inject(DETAIL_ACTIONS_SLOT, () => ctx.slots.register<DetailActionProps>({
+    name: DETAIL_ACTIONS_SLOT,
+    id: 'safeharness-docs',
+    order: 10,
+  }, DocsAction))
 }

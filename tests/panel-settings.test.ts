@@ -16,7 +16,11 @@ function stubRuntime(overrides: {
 } = {}): Runtime {
   const config = {
     preset: 'balanced',
+    input: { mode: 'enforce' as const },
+    tools: { mode: 'enforce' as const },
+    results: { mode: 'warn' as const },
     output: {
+      mode: 'warn' as const,
       judge: {
         enabled: false,
         scope: 'flagged' as const,
@@ -28,6 +32,7 @@ function stubRuntime(overrides: {
       },
     },
     draft: { enabled: false, provider: '', model: '', ...overrides.draft },
+    approval: { mode: 'delegate' as const },
   }
   return {
     config,
@@ -103,6 +108,13 @@ describe('createPanelSettingsHost', () => {
       configurable: true,
     })
     expect(value.draft).toEqual({ enabled: false, provider: '', model: '' })
+    expect(value.surfaces).toEqual({
+      input: 'enforce',
+      tools: 'enforce',
+      results: 'warn',
+      output: 'warn',
+      approval: 'delegate',
+    })
     expect(value.configPath).toContain('cordis.patch.yml')
     expect(value.providers).toEqual([
       { id: 'liao', name: 'Liao', models: [{ id: 'gpt-6-luna', name: 'gpt-6-luna' }] },
@@ -149,6 +161,39 @@ describe('createPanelSettingsHost', () => {
     expect(update).toHaveBeenCalledWith('safeharness', {
       draft: { enabled: true, provider: 'liao', model: 'gpt-6-luna' },
     })
+  })
+
+  it('writes the per-surface switchboard, keeping the judge route in the same output object', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({
+      surfaces: { input: 'off', results: 'enforce', output: 'enforce-buffer', approval: 'policy' },
+      judge: { enabled: true },
+    })
+    expect(update).toHaveBeenCalledWith('safeharness', {
+      input: { mode: 'off' },
+      results: { mode: 'enforce' },
+      output: { mode: 'enforce-buffer', judge: { enabled: true } },
+      approval: { mode: 'policy' },
+    })
+  })
+
+  it('refuses an unknown surface mode', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ surfaces: { input: 'loud' as never } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ surfaces: { approval: 'off' as never } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    expect(update).not.toHaveBeenCalled()
   })
 
   it('refuses invalid values before touching the host config', async () => {
