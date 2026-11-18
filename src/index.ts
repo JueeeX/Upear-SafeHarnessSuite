@@ -21,7 +21,7 @@ import { createSidecarEngine, type SidecarEngine } from './engine/sidecar-engine
 import { Sidecar, SidecarError } from './engine/sidecar.js'
 import type { RuleSet } from './engine/types.js'
 import { tryLoadRuleSet } from './engine/rules.js'
-import { resolveLedgerDir, resolvePanelStatePath, resolveSessionIndexPath } from './audit/paths.js'
+import { resolveLedgerDir, resolvePanelStatePath, resolveRulesHistoryDir, resolveSessionIndexPath } from './audit/paths.js'
 import { createLedger } from './audit/ledger.js'
 import { Config, resolveConfig, type SafeHarnessConfig, type ResolvedConfig } from './config.js'
 import { createRuntime, type LoggerLike, type Runtime } from './runtime.js'
@@ -39,6 +39,7 @@ import { safeharnessCommand, JUDGE_PROBE_TEXT, type JudgeCommandTarget, type Dra
 import { registerPanelRoute } from './panel/route.js'
 import { createPanelSettingsHost } from './panel/settings.js'
 import { createRuleWriter } from './panel/rules-write.js'
+import { createRuleHistory } from './panel/rules-history.js'
 import { createPatrolRunner } from './panel/patrol-runner.js'
 import { createPatrolScheduler } from './panel/schedule.js'
 import { SAFEHARNESS_SERVICE, type HookFlags, type PluginHandle, type SafeHarnessService } from './service.js'
@@ -715,11 +716,22 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   // service; every read is lazy because `settings` starts after this plugin.
   const panelSettings = createPanelSettingsHost(ctx, runtime, logger)
   // The panel's only disk write (D62): one operator rule file in `rules.dir`.
+  // 1.14.0: every write first snapshots the directory, and the same history backs
+  // the panel's list + rollback, so an operator can always step back.
+  const ruleHistory = createRuleHistory({
+    root: resolveRulesHistoryDir(),
+    packagedRulesDir: rulesOptions.packagedRulesDir,
+    inline: () => runtime.config.rules.inline,
+    reload: reloadRulesForPanel,
+    runtime,
+    logger,
+  })
   const ruleWriter = createRuleWriter({
     runtime,
     packagedRulesDir: rulesOptions.packagedRulesDir,
     reload: reloadRulesForPanel,
     logger,
+    beforeWrite: () => ruleHistory.snapshotBeforeWrite(),
   })
   registerPanelRoute(ctx, {
     runtime,
@@ -741,6 +753,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
     schedule,
     reloadRules: reloadRulesForPanel,
     ruleWriter,
+    ruleHistory,
     settings: panelSettings,
   })
   // 11) Rule-file watch (failures keep the previous rule set, never half-apply).

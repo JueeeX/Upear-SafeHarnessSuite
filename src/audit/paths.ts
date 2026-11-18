@@ -26,8 +26,11 @@ export const PANEL_STATE_FILENAME = 'panel-state.json'
 /** Plugin-owned session metadata index (workspace/title per session id). */
 export const SESSION_INDEX_FILENAME = 'sessions.json'
 
-/** Plugin-owned list of custom provider routes added through the panel (no keys). */
+/** Plugin-owned custom-provider index (no keys). */
 export const PROVIDER_INDEX_FILENAME = 'providers.json'
+
+/** Plugin-owned snapshots of the operator rule directory (1.14.0 rollback). */
+export const RULES_HISTORY_DIRNAME = 'rules-writes'
 
 /** Environment slice {@link resolveLedgerDir} consults (injectable for tests). */
 export interface LedgerPathEnv {
@@ -123,4 +126,19 @@ export function resolveSessionIndexPath(env?: LedgerPathEnv): string {
 export function resolveProviderIndexPath(env?: LedgerPathEnv): string {
   const home = firstNonEmpty(env?.DSH_HOME, process.env.DSH_HOME) ?? join(homedir(), '.dsh')
   return join(expandHome(home), 'safeharness', PROVIDER_INDEX_FILENAME)
+}
+
+/**
+ * Absolute directory holding the operator-rule snapshots (1.14.0).
+ *
+ * Like the panel state, it is deliberately independent of `audit.dir`: a snapshot
+ * is UI/rollback state, not evidence, and pointing the ledger at a shared volume
+ * must not put rollback copies somewhere else. It lives under
+ * `$DSH_HOME/safeharness/rules-writes/history/<id>/`.
+ *
+ * @param env - optional environment override; defaults to `process.env`.
+ */
+export function resolveRulesHistoryDir(env?: LedgerPathEnv): string {
+  const home = firstNonEmpty(env?.DSH_HOME, process.env.DSH_HOME) ?? join(homedir(), '.dsh')
+  return join(expandHome(home), 'safeharness', RULES_HISTORY_DIRNAME)
 }

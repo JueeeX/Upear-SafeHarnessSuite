@@ -39,6 +39,7 @@ import type {
   PanelProviderProtocol,
   PanelRule,
   PanelRuleWriteValue,
+  PanelRuleHistoryValue,
   PanelSchedule,
   PanelSession,
   PanelSettingsPatch,
@@ -2225,6 +2226,131 @@ function ruleFilenameFor(name: string): string {
 }
 
 /** The rules tab: inventory, search, reload, AI drafting, land-as-file. */
+/**
+ * Rule-directory snapshots (1.14.0).
+ *
+ * Every rule write first copies the directory, so this card is the "undo" shelf:
+ * newest first, with the live state marked. Rolling back is two clicks (the row
+ * turns into a confirm) because it rewrites the rule directory — the plugin's
+ * trust root — even though the Host runs the loader gate and snapshots the state
+ * being replaced.
+ */
+function SnapshotCard({ face, writable, refreshKey, onReloaded }: {
+  readonly face: PanelFace
+  readonly writable: boolean
+  /** Changes after a successful write so the list refreshes on its own. */
+  readonly refreshKey: string | null
+  readonly onReloaded: () => void
+}): ReactNode {
+  const [state, setState] = useState<
+    | { readonly status: 'idle' | 'loading' }
+    | { readonly status: 'done'; readonly value: PanelRuleHistoryValue }
+    | { readonly status: 'error'; readonly code: string }
+  >({ status: 'idle' })
+  const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [failure, setFailure] = useState<string | null>(null)
+
+  const load = useCallback((): void => {
+    setState(current => current.status === 'done' ? current : { status: 'loading' })
+    void face.ruleHistory().then(
+      value => { setState({ status: 'done', value }) },
+      (error: unknown) => { setState({ status: 'error', code: codeOf(error) }) },
+    )
+  }, [face])
+
+  useEffect(() => { load() }, [load, refreshKey])
+
+  const rollbackTo = (id: string): void => {
+    setBusy(true)
+    setMessage(null)
+    setFailure(null)
+    void face.rollbackRule(id).then(
+      (value) => {
+        setBusy(false)
+        setConfirming(null)
+        const removed = value.removed.length === 0 ? '' : `，移除 ${value.removed.length} 个不在快照中的文件`
+        setMessage(`已回滚到 ${value.snapshot}：恢复 ${value.files} 个文件${removed}${value.reloaded ? '，已重新加载' : '，但热重载未生效（看日志）'}`)
+        onReloaded()
+        load()
+      },
+      (error: unknown) => {
+        setBusy(false)
+        setConfirming(null)
+        setFailure(`${actionError(codeOf(error))}${detailOf(error) === undefined ? '' : `（${detailOf(error)}）`}`)
+      },
+    )
+  }
+
+  return (
+    <Card
+      title="快照与回滚"
+      hint={writable ? '每次写入前自动快照；最多保留 10 份' : '未配置 rules.dir：写入与快照都不可用'}
+      actions={(
+        <button type="button" className="shp-btn shp-btn-sm" onClick={load} disabled={state.status === 'loading' || busy}>
+          {state.status === 'loading' ? '读取中…' : '刷新快照'}
+        </button>
+      )}
+    >
+      {state.status === 'error' ? (
+        <p className="shp-line-error" role="alert">{actionError(state.code)}</p>
+      ) : null}
+      {state.status === 'done' && state.value.snapshots.length === 0 ? (
+        <p className="shp-card-hint">
+          还没有快照。第一次「写入并重载」时会自动生成一份；也可以先手动写入一条规则来建立基线。
+        </p>
+      ) : null}
+      {state.status === 'done' && state.value.snapshots.length > 0 ? (
+        <div className="shp-rule-list">
+          {state.value.snapshots.map((snapshot) => {
+            const when = new Date(snapshot.createdAt).toLocaleString('zh-CN', { hour12: false })
+            const trigger = snapshot.trigger === 'pre-rollback' ? '回滚前自动' : snapshot.trigger === 'manual' ? '手动' : '写入前自动'
+            return (
+              <div key={snapshot.id} className="shp-rule-row">
+                <div className="shp-rule-head">
+                  <span className="shp-rule-name">{when}</span>
+                  {snapshot.active ? <Badge tone="ok">当前状态</Badge> : null}
+                  <span className="shp-rule-meta">
+                    {snapshot.files} 个文件 · {(snapshot.bytes / 1024).toFixed(1)} KiB · {trigger} · {snapshot.id}
+                  </span>
+                  <span className="shp-spacer" />
+                  {confirming === snapshot.id ? (
+                    <>
+                      <button type="button" className="shp-btn shp-btn-sm shp-btn-primary" disabled={busy} onClick={() => { rollbackTo(snapshot.id) }}>
+                        {busy ? '回滚中…' : '确认回滚'}
+                      </button>
+                      <button type="button" className="shp-btn shp-btn-sm" disabled={busy} onClick={() => { setConfirming(null) }}>
+                        取消
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="shp-btn shp-btn-sm"
+                      disabled={busy || snapshot.active}
+                      onClick={() => { setConfirming(snapshot.id) }}
+                    >
+                      {snapshot.active ? '无需回滚' : '回滚'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+      {message === null ? null : <p className="shp-line-ok" role="status">{message}</p>}
+      {failure === null ? null : <p className="shp-line-error" role="alert">{failure}</p>}
+      <p className="shp-card-hint">
+        回滚会把 <code className="shp-mono">rules.dir</code> 恢复成该快照的样子：快照里没有的规则文件会被移除（只动
+        <code className="shp-mono"> .yaml/.yml</code>），并且先给当前状态拍一份快照，所以回滚本身也能反悔。
+        恢复前宿主会先在临时目录里跑一遍 loader，编不过就一个字节都不写。
+      </p>
+    </Card>
+  )
+}
+
 function RulesTab({ payload, face, onRefresh }: {
   readonly payload: PanelPayload
   readonly face: PanelFace
@@ -2380,6 +2506,8 @@ function RulesTab({ payload, face, onRefresh }: {
           </div>
         )}
       </Card>
+
+      <SnapshotCard face={face} writable={writable} refreshKey={write.status === 'done' ? write.value.filename : null} onReloaded={onRefresh} />
 
       <Card
         title="AI 起草规则"
@@ -3642,14 +3770,14 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
 /** The tab body. */
 export function SafeHarnessPanel(props: SafeHarnessPanelProps): ReactNode {
   const {
-    load, patrol, draft, schedule, reloadRules, writeRule, loadSettings, saveSettings,
+    load, patrol, draft, schedule, reloadRules, writeRule, ruleHistory, rollbackRule, loadSettings, saveSettings,
     addProvider, deleteProvider, probeJudge, exportLedger,
   } = props
   const face = useMemo<PanelFace>(() => ({
-    load, patrol, draft, schedule, reloadRules, writeRule, loadSettings, saveSettings,
+    load, patrol, draft, schedule, reloadRules, writeRule, ruleHistory, rollbackRule, loadSettings, saveSettings,
     addProvider, deleteProvider, probeJudge, exportLedger,
   }), [
-    load, patrol, draft, schedule, reloadRules, writeRule, loadSettings, saveSettings,
+    load, patrol, draft, schedule, reloadRules, writeRule, ruleHistory, rollbackRule, loadSettings, saveSettings,
     addProvider, deleteProvider, probeJudge, exportLedger,
   ])
 

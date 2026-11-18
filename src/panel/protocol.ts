@@ -598,6 +598,8 @@ export interface PanelRuleWriteValue {
   readonly created: boolean
   /** False when the file landed but the hot reload kept the previous set. */
   readonly reloaded: boolean
+  /** Snapshot taken before this write (1.14.0), when the history was writable. */
+  readonly snapshot?: string
 }
 
 /** Successful rule write. */
@@ -608,6 +610,70 @@ export interface PanelRuleWriteOk {
 
 /** What a rule write resolves to. */
 export type PanelRuleWriteResult = PanelRuleWriteOk | PanelError
+
+/** One rule-directory snapshot (metadata only: no file content, no absolute path). */
+export interface PanelRuleSnapshot {
+  /** Opaque id (`YYYYMMDDTHHMMSSZ-<n>`), the rollback handle. */
+  readonly id: string
+  /** Epoch milliseconds the snapshot was taken. */
+  readonly createdAt: number
+  /** Why it exists: a rule write, a manual capture, or the undo point of a rollback. */
+  readonly trigger: 'write' | 'manual' | 'pre-rollback'
+  /** Number of `.yaml`/`.yml` files captured. */
+  readonly files: number
+  /** Total bytes captured. */
+  readonly bytes: number
+  /** True when the live `rules.dir` currently equals this snapshot. */
+  readonly active: boolean
+}
+
+/** The snapshot list the rules tab renders. */
+export interface PanelRuleHistoryValue {
+  /** Number of snapshots retained (the oldest are pruned beyond it). */
+  readonly limit: number
+  /** Newest first. */
+  readonly snapshots: readonly PanelRuleSnapshot[]
+}
+
+/** Successful history read. */
+export interface PanelRuleHistoryOk {
+  readonly ok: true
+  readonly value: PanelRuleHistoryValue
+}
+
+/** What a history read resolves to. */
+export type PanelRuleHistoryResult = PanelRuleHistoryOk | PanelError
+
+/** Result of restoring one snapshot. */
+export interface PanelRuleRollbackValue {
+  /** The snapshot that was restored. */
+  readonly snapshot: string
+  /** The snapshot taken of the state being replaced (undo point), when there was one. */
+  readonly preRollback: string | null
+  /** Files restored. */
+  readonly files: number
+  /** Bytes restored. */
+  readonly bytes: number
+  /** Live files removed because the snapshot does not contain them. */
+  readonly removed: readonly string[]
+  /** Rules in force after the rollback. */
+  readonly rules: number
+  /** Chain rules in force after the rollback. */
+  readonly chains: number
+  /** Rule-set hash prefix in force after the rollback. */
+  readonly hash: string
+  /** False when the files were restored but the hot reload kept the previous set. */
+  readonly reloaded: boolean
+}
+
+/** Successful rollback. */
+export interface PanelRuleRollbackOk {
+  readonly ok: true
+  readonly value: PanelRuleRollbackValue
+}
+
+/** What a rollback resolves to. */
+export type PanelRuleRollbackResult = PanelRuleRollbackOk | PanelError
 
 /** Everything the SafeHarness settings tab renders. */
 export interface PanelPayload {
