@@ -823,3 +823,25 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 - `evidence/` 不入库；
 - 提交前 `git status` 自查，别把其他会话的文件带进来；
 - 写文档时别把 `key/secret/token = 真值` 这类样例写进去——1.8.3 的结果层会把它当凭据整条拦截，读者（包括后续 agent）将看不到那段文字（本文已规避）。
+
+---
+
+## 17. 2026-11-18 — 1.9.3 → 1.10.0 收口（面板可见性 + 安全开关）
+
+**背景**：1.9.2 让包成为组合包后，「插件」页有条目页但正文只有 README；面板挂在设置标签页里，用户点插件看不到功能。
+
+| 版本 | 改动 | 状态 |
+|---|---|---|
+| 1.9.3 | 浏览器半侧新增 `plugins.bundle.config`（key=包名）与 `plugins.row.config`（key=`@upear/dsh-safeharness#safeharness`），`view: 'page'` 渲染五标签工作台；设置标签页保留 | 已真机确认：工作台出现在条目页 README **之后** |
+| 1.9.4 | 完整手册移到包根 `MANUAL.md`（章节号不变），`README.md` 收成 22 行门面，`MANUAL.md` 进 `files` 与发布白名单 | 已安装确认 |
+| 1.9.5 | README 再收短（16 行，只留简介/安装/面板入口/三条 GitHub 绝对链接）；新增 `plugins.detail.actions` 页头「完整文档」按钮，按 `subject.pkg.name` 只在本包页面渲染，`target="_blank"` 打开 MANUAL | 已安装确认（按钮真机点击待验） |
+| 1.10.0 | 设置页新增「防护面」开关：五面（输入/工具/结果/输出/审批桥）逐面 `mode` 下拉，保存走 `op: save`（`surfaces` 合并进同一个 `output`，revision CAS，审计只记 `surfaces: changed`）；概览四卡从等高网格改两列瀑布（`columns: 2` + `break-inside: avoid`，<700px 单列） | 已安装，**待重启验证** |
+
+**宿主约束（重要，别再试）**：插件详情页的「包文档」是**纯 Markdown**——raw HTML（`<details>` 折叠、HTML 图片/布局）被丢弃，相对链接不可点，只有绝对 URL 可点。所以"页内展开完整 README"做不到；长文只能放外部链接 + 页头按钮。
+
+**公开仓**：`dsh` `main = 47baecc`、tag `v1.10.0`（`45f2ef0…`）；`MANUAL.md` / `README.md` 的 raw URL 均 200（此前 GitHub 404 已修）。发布方式：主仓 `git worktree add <dir> dsh/main` → `publish-public.mjs --target <dir>` → **先 `git config core.autocrlf false` + `git config core.eol lf`**，否则 79 个文件全是 CRLF 假 diff（`git add -A` 后只剩 14 个真实改动）。
+
+**测试**：45 文件 / 756 用例全过（1.9.4 起新增 README 行数与 MANUAL 链接回归；1.10.0 新增逐面保存/未知 mode 拒绝两条）。tarball `1.10.0` = 342,654 B / 138 文件。
+
+**下一步计划**：见 `docs/plan-next-2026-11-18.md`（插件维护 + 主项目 Upear 的 P0/P1 清账）。
+

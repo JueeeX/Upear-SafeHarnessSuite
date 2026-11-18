@@ -233,6 +233,8 @@ export interface PanelDraftSettings {
 /** Everything the settings tab renders (one `settings` call). */
 export interface PanelSettingsValue {
   readonly preset: string
+  /** Per-surface enforcement levels currently in force (after preset expansion). */
+  readonly surfaces: PanelSurfaceSettings
   readonly judge: PanelJudgeSettings
   readonly draft: PanelDraftSettings
   /** Provider/model catalog for the two route pickers (bounded). */
@@ -251,6 +253,29 @@ export interface PanelSettingsValue {
   readonly configPath: string | null
 }
 
+/** Enforcement level a detection surface offers in the panel. */
+export type PanelMode = 'off' | 'warn' | 'enforce'
+
+/** Output surface mode; `enforce-buffer` trades streaming for a veto window. */
+export type PanelOutputMode = 'off' | 'warn' | 'enforce-buffer'
+
+/** Approval bridge mode: delegate everything, or apply the plugin's coarse policy. */
+export type PanelApprovalMode = 'delegate' | 'policy'
+
+/**
+ * The five surfaces' live levels, as the settings tab shows them.
+ *
+ * These are the *resolved* values (preset expanded); writing one field stores an
+ * explicit override and leaves `preset` in place.
+ */
+export interface PanelSurfaceSettings {
+  readonly input: PanelMode
+  readonly tools: PanelMode
+  readonly results: PanelMode
+  readonly output: PanelOutputMode
+  readonly approval: PanelApprovalMode
+}
+
 /** Fields one save may change; omitted fields keep their current value. */
 export interface PanelSettingsPatch {
   /**
@@ -258,6 +283,14 @@ export interface PanelSettingsPatch {
    * Omitted by internal callers: the Host then reads the current revision itself.
    */
   readonly expectedRevision?: number
+  /** Per-surface overrides: the switchboard ("关掉某一面" without leaving the preset). */
+  readonly surfaces?: {
+    readonly input?: PanelMode
+    readonly tools?: PanelMode
+    readonly results?: PanelMode
+    readonly output?: PanelOutputMode
+    readonly approval?: PanelApprovalMode
+  }
   readonly judge?: {
     readonly enabled?: boolean
     readonly scope?: 'flagged' | 'always'

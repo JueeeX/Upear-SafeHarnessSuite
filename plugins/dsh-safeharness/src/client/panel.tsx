@@ -43,6 +43,10 @@ import type {
   PanelSession,
   PanelSettingsPatch,
   PanelSettingsValue,
+  PanelOutputMode,
+  PanelApprovalMode,
+  PanelMode,
+  PanelSurfaceSettings,
 } from '../panel/protocol.js'
 import type { PanelFace } from './index.js'
 
@@ -152,6 +156,7 @@ interface SettingsData {
   readonly value: PanelSettingsValue
   readonly judge: JudgeForm
   readonly draft: DraftForm
+  readonly surfaces: PanelSurfaceSettings
 }
 
 /** Settings tab load state. */
@@ -195,6 +200,15 @@ interface MutableJudgePatch {
 interface MutableDraftPatch {
   provider?: string
   model?: string
+}
+
+/** Mutable builder for the per-surface switchboard patch. */
+interface MutableSurfacePatch {
+  input?: PanelMode
+  tools?: PanelMode
+  results?: PanelMode
+  output?: PanelOutputMode
+  approval?: PanelApprovalMode
 }
 
 /**
@@ -294,7 +308,7 @@ function storeValue(key: string, value: string | null): void {
  * server still stands where it did when the draft was typed.
  */
 function baselineOf(value: PanelSettingsValue): string {
-  return JSON.stringify({ judge: value.judge, draft: value.draft })
+  return JSON.stringify({ judge: value.judge, draft: value.draft, surfaces: value.surfaces })
 }
 
 /** A settings form draft kept across a Host remount. */
@@ -302,6 +316,8 @@ interface StoredSettingsDraft {
   readonly baseline: string
   readonly judge: JudgeForm
   readonly draft: DraftForm
+  /** Absent drafts from 1.9.5 and earlier fall back to the loaded value. */
+  readonly surfaces?: PanelSurfaceSettings
 }
 
 /** Decision → human label. */
@@ -392,6 +408,41 @@ const MODE_MEANINGS: Record<string, string> = {
   approval: '审批桥：委派宿主或按插件策略裁决',
 }
 
+/** Switchboard options for the three detection surfaces. */
+const MODE_OPTIONS = [
+  { value: 'enforce', label: '强制拦截' },
+  { value: 'warn', label: '仅告警' },
+  { value: 'off', label: '关闭' },
+]
+
+/** The output surface adds a buffered enforcement level. */
+const OUTPUT_MODE_OPTIONS = [
+  { value: 'enforce-buffer', label: '强制拦截（缓冲流式）' },
+  { value: 'warn', label: '仅告警' },
+  { value: 'off', label: '关闭' },
+]
+
+/** The approval bridge has no "off": delegating is its pass-through. */
+const APPROVAL_MODE_OPTIONS = [
+  { value: 'policy', label: '插件策略' },
+  { value: 'delegate', label: '委派宿主' },
+]
+
+/** Narrow a select value back to the panel's mode unions. */
+function toMode(value: string): PanelMode {
+  return value === 'warn' ? 'warn' : value === 'off' ? 'off' : 'enforce'
+}
+
+/** Narrow the output select to its buffered union. */
+function toOutputMode(value: string): PanelOutputMode {
+  return value === 'warn' ? 'warn' : value === 'off' ? 'off' : 'enforce-buffer'
+}
+
+/** Narrow the approval select to its two-way union. */
+function toApprovalMode(value: string): PanelApprovalMode {
+  return value === 'policy' ? 'policy' : 'delegate'
+}
+
 /** Kind group → label for the 类别 picker. */
 const KIND_GROUP_LABELS: Record<KindGroup, string> = {
   all: '全部类别',
@@ -467,7 +518,9 @@ background:var(--shp-page);color:var(--shp-text);border-radius:14px;padding:16px
 .shp-kpi-value{font-size:26px;line-height:1.15;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .shp-kpi-sub{font-size:11px;color:var(--shp-faint)}
 .shp-kpi-note{font-size:11px;color:var(--shp-warn);font-variant-numeric:tabular-nums}
-.shp-overview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px;align-items:start}
+.shp-overview-grid{columns:2;column-gap:12px}
+@container shp (max-width:699px){.shp-overview-grid{columns:1}}
+.shp-overview-grid>.shp-card{break-inside:avoid;margin:0 0 12px}
 .shp-card{background:var(--shp-card);border:1px solid var(--shp-border);border-radius:12px;padding:12px 14px;box-shadow:var(--shp-shadow);display:flex;flex-direction:column;gap:10px;min-width:0}
 .shp-card-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .shp-card-title{font-size:13px;font-weight:650;line-height:1.4}
@@ -1063,11 +1116,17 @@ function toSettingsData(value: PanelSettingsValue): SettingsData {
       timeoutMs: String(value.judge.timeoutMs),
     },
     draft: { provider: value.draft.provider, model: value.draft.model },
+    surfaces: { ...value.surfaces },
   }
 }
 
 /** Diff the editable form against the loaded value. */
-function buildPatch(value: PanelSettingsValue, judge: JudgeForm, draft: DraftForm): PatchResult {
+function buildPatch(
+  value: PanelSettingsValue,
+  judge: JudgeForm,
+  draft: DraftForm,
+  surfaces: PanelSurfaceSettings,
+): PatchResult {
   const maxChars = positiveInt(judge.maxChars)
   const timeoutMs = positiveInt(judge.timeoutMs)
   if (maxChars === undefined) return { patch: undefined, invalid: '「送入评审的最大字符数」必须是正整数。' }
@@ -1082,15 +1141,23 @@ function buildPatch(value: PanelSettingsValue, judge: JudgeForm, draft: DraftFor
   const draftPatch: MutableDraftPatch = {}
   if (draft.provider !== value.draft.provider) draftPatch.provider = draft.provider
   if (draft.model !== value.draft.model) draftPatch.model = draft.model
+  const surfacePatch: MutableSurfacePatch = {}
+  if (surfaces.input !== value.surfaces.input) surfacePatch.input = surfaces.input
+  if (surfaces.tools !== value.surfaces.tools) surfacePatch.tools = surfaces.tools
+  if (surfaces.results !== value.surfaces.results) surfacePatch.results = surfaces.results
+  if (surfaces.output !== value.surfaces.output) surfacePatch.output = surfaces.output
+  if (surfaces.approval !== value.surfaces.approval) surfacePatch.approval = surfaces.approval
   const hasJudge = Object.keys(judgePatch).length > 0
   const hasDraft = Object.keys(draftPatch).length > 0
-  if (!hasJudge && !hasDraft) return { patch: undefined, invalid: null }
+  const hasSurfaces = Object.keys(surfacePatch).length > 0
+  if (!hasJudge && !hasDraft && !hasSurfaces) return { patch: undefined, invalid: null }
   return {
     patch: {
       // Echo the revision this form was rendered at: the next save is refused as stale
       // instead of overwriting a change another window (or the native settings page)
       // made in the meantime. Null means the host exposes no revision.
       ...(value.revision === null ? {} : { expectedRevision: value.revision }),
+      ...(hasSurfaces ? { surfaces: surfacePatch } : {}),
       ...(hasJudge ? { judge: judgePatch } : {}),
       ...(hasDraft ? { draft: draftPatch } : {}),
     },
@@ -2294,7 +2361,7 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
           try {
             const parsed = JSON.parse(stored) as Partial<StoredSettingsDraft>
             if (parsed.baseline === baselineOf(value) && parsed.judge !== undefined && parsed.draft !== undefined) {
-              data = { value, judge: parsed.judge, draft: parsed.draft }
+              data = { value, judge: parsed.judge, draft: parsed.draft, surfaces: parsed.surfaces ?? base.surfaces }
             } else {
               storeValue(SETTINGS_DRAFT_KEY, null)
             }
@@ -2324,15 +2391,15 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const data = view.status === 'ready' ? view.data : undefined
   const patchResult = useMemo<PatchResult>(() => {
     if (data === undefined) return { patch: undefined, invalid: null }
-    return buildPatch(data.value, data.judge, data.draft)
+    return buildPatch(data.value, data.judge, data.draft, data.surfaces)
   }, [data])
 
   // Keep an unsaved form across a remount; a clean form clears the draft.
   useEffect(() => {
     if (view.status !== 'ready') return
-    const { value, judge, draft } = view.data
-    const dirty = buildPatch(value, judge, draft).patch !== undefined
-    storeValue(SETTINGS_DRAFT_KEY, dirty ? JSON.stringify({ baseline: baselineOf(value), judge, draft }) : null)
+    const { value, judge, draft, surfaces } = view.data
+    const dirty = buildPatch(value, judge, draft, surfaces).patch !== undefined
+    storeValue(SETTINGS_DRAFT_KEY, dirty ? JSON.stringify({ baseline: baselineOf(value), judge, draft, surfaces }) : null)
   }, [view])
 
   const updateJudge = useCallback((patch: Partial<JudgeForm>): void => {
@@ -2346,6 +2413,13 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const updateDraft = useCallback((patch: Partial<DraftForm>): void => {
     setView(current => current.status === 'ready'
       ? { status: 'ready', data: { ...current.data, draft: { ...current.data.draft, ...patch } } }
+      : current)
+    setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
+  }, [])
+
+  const updateSurface = useCallback((patch: Partial<PanelSurfaceSettings>): void => {
+    setView(current => current.status === 'ready'
+      ? { status: 'ready', data: { ...current.data, surfaces: { ...current.data.surfaces, ...patch } } }
       : current)
     setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
   }, [])
@@ -2475,7 +2549,7 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
     return <div className="shp-stack"><Card title="设置"><Loading text="正在读取评审与起草路由…" /></Card></div>
   }
 
-  const { value, judge, draft } = data
+  const { value, judge, draft, surfaces } = data
   const readOnly = !value.judge.configurable
   const saving = save.status === 'saving'
   const dirty = patchResult.patch !== undefined
@@ -2510,6 +2584,59 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
           )}
         </div>
       ) : null}
+
+      <Card
+        title="防护面"
+        hint={`preset ${value.preset} · 关掉一面就只在该面不检测、不记账`}
+        actions={<Badge tone="accent">逐面覆盖</Badge>}
+      >
+        <div className="shp-form-grid">
+          <SelectField
+            label="输入"
+            value={surfaces.input}
+            disabled={readOnly}
+            onChange={(next) => { updateSurface({ input: toMode(next) }) }}
+            options={MODE_OPTIONS}
+            hint={MODE_MEANINGS.input ?? ''}
+          />
+          <SelectField
+            label="工具调用"
+            value={surfaces.tools}
+            disabled={readOnly}
+            onChange={(next) => { updateSurface({ tools: toMode(next) }) }}
+            options={MODE_OPTIONS}
+            hint={MODE_MEANINGS.tools ?? ''}
+          />
+          <SelectField
+            label="工具结果"
+            value={surfaces.results}
+            disabled={readOnly}
+            onChange={(next) => { updateSurface({ results: toMode(next) }) }}
+            options={MODE_OPTIONS}
+            hint={MODE_MEANINGS.results ?? ''}
+          />
+          <SelectField
+            label="模型输出"
+            value={surfaces.output}
+            disabled={readOnly}
+            onChange={(next) => { updateSurface({ output: toOutputMode(next) }) }}
+            options={OUTPUT_MODE_OPTIONS}
+            hint="强制拦截只在输出结束时裁决；流式预览会被缓冲"
+          />
+          <SelectField
+            label="审批桥"
+            value={surfaces.approval}
+            disabled={readOnly}
+            onChange={(next) => { updateSurface({ approval: toApprovalMode(next) }) }}
+            options={APPROVAL_MODE_OPTIONS}
+            hint="委派宿主 = 透传；插件策略 = 按本包的粗粒度规则裁决"
+          />
+        </div>
+        <p className="shp-card-hint">
+          这里的改动是逐字段覆盖：只写你动过的那几个字段，`preset` 保持原值；想整体切换用 profile 的 `preset`。
+          关闭一面后该面不检测、不记账，其他面不受影响。
+        </p>
+      </Card>
 
       <Card
         title="语义评审"
