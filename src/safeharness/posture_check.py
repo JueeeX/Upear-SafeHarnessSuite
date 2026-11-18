@@ -81,6 +81,7 @@ GUARD_FLAGS = (
     ("SAFEHARNESS_RUNNER_SANDBOX", "外部智能体 runner 无进程级沙箱隔离（三框架执行循环均在平台进程内运行）", TAG_NEXT_REQUEST),
     ("SAFEHARNESS_AUDIT_REDACTION", "审计账本不脱敏（payload 摘要/键名掩码关闭）", TAG_NEXT_REQUEST),
     ("SAFEHARNESS_INFORM_RULES_WATCH", "文件层规则改动需重启才生效", TAG_RULES_DIR),
+    ("SAFEHARNESS_READY_STRICT", "就绪判定不含 SafeHarness 组件健康（组件坏了 /ready 仍 200）", TAG_NEXT_REQUEST),
     ("MEM0_ENABLED", "跨会话长期记忆关闭（外部智能体仅会话窗记忆）", TAG_RESTART_BACKEND),
 )
 
