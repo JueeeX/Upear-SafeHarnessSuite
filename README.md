@@ -40,7 +40,7 @@ Upear SafeHarness Suite 的核心判断（源自 SafeHarness 论文并在此实�
 | 部署姿态校验 | `python -m safeharness.posture_check` 只读扫描守卫开关与配置对（建议性告警，绝不打印密钥值，可进 CI） |
 | Profile 化部署姿态 | 具名 Profile（demo/hardened/production）= JSON 数据基线：启动器按 Profile 注入守卫开关与现场生成密钥，`--profile` 按基线校验（偏离追加 FAIL），production 以 `--strict` 门禁启动；默认 demo 逐位一致 |
 | 可观测红绿灯一期 | 健康面组件红绿灯（`SAFEHARNESS_HEALTH_DETAIL` 门控默认关）+ `python -m safeharness.deploy_patrol` 三合一巡检（姿态 + 审计 DENY 速率异常 + 健康探针，飞书 webhook 通知可挂 OS 计划任务）；审计库/表缺失跳过不误报，密钥与 payload 零上报告警 |
-| Runner 沙箱试点 | 每个 runner 声明沙箱策略（代码侧按框架键定，自定义卡不可改）：smolagents（执行生成代码，风险最高）跑进程级沙箱 worker（stdin 传钥不落盘/env 白名单/临时文件回传/超时杀进程组），`SAFEHARNESS_RUNNER_SANDBOX` 门控默认关 |
+| Runner 沙箱 | 每个 runner 声明沙箱策略（代码侧按框架键定，自定义卡不可改）：三个内置框架（smolagents 执行生成代码风险最高 / openai-agents / autogen）均跑进程级沙箱 worker（stdin 传钥不落盘/env 白名单/临时文件回传/超时杀进程组），`SAFEHARNESS_RUNNER_SANDBOX` 门控默认关 |
 | 租户隔离一期 | 统一租户解析贯穿身份上下文、文件/记忆/进化结算属主校验（含匿名下载 401 收紧）、租户配额框架（账号容量 + 每日对话运行，缺席=无限制） |
 | FSM 规划安全守卫 | 规划输入逐条语义验证；LLM 只提案，执行权在确定性编译的代码 |
 | DSH 插件（DeepSeek Harness 侧） | 同一套安全语义的第四个交付面：profile 级 Cordis 插件装进 DSH 的执行生命周期（输入 / 工具 / 结果 / 输出 / 审批五面接缝 + 哈希链账本 + 姿态自检 + 外部巡检），运行时零第三方依赖（[`plugins/dsh-safeharness`](plugins/dsh-safeharness)，见[下文](#dsh-插件deepseek-harness)） |
