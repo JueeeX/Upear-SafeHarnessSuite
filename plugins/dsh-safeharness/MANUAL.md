@@ -157,6 +157,8 @@ $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里�
 & $dsh plugin --profile <profile> add 'file:<本仓库绝对路径>'
 ```
 
+> **不要用系统里的 pnpm 去装这个 profile。** profile 的 `node_modules` 必须由 **DSH 自带的那份 pnpm** 创建：桌面版 0.2.2-rc.3 自带 pnpm 11（store `…\store\v11`）。如果这个目录曾经被另一个主版本的 pnpm（比如系统里的 pnpm 10，store `…\store\v10`）写过，pnpm 会拒绝继续操作并报 `ERR_PNPM_UNEXPECTED_STORE`；安装脚本若先删掉了旧包，就会出现启动错误 `cannot resolve profile bundle "@upear/dsh-safeharness"`。修法是：**删掉 profile 的 `node_modules`，再用 `dsh plugin ... add`（或 `dsh plugin --profile <profile> install`）重装**，让自带的 pnpm 重建。仓库根目录的 `.npmrc` 若设置了 `store-dir`，手动 `pnpm install` 更容易踩这个坑——装 profile 一律走 `dsh` CLI。
+
 **从 1.9.2 起，这个包装好就是"插件"，装完不需要再写 patch。** 包里带 `cordis.patch.yml` 并在 `package.json` 声明了 `dsh.bundle.patch`，所以它是一个 DSH **组合包（bundle）**：安装动作会把它写进 profile 的 `dsh.profile.bundles`，启动时由它自带的 patch 挂载 `safeharness` 这一行，「插件」页里也会出现它自己的条目页。
 
 **1.9.3 起，面板就画在这个条目页的正文里。** 浏览器半侧同时注册宿主声明的三个配置槽：`plugins.bundle.config`（键是包名，渲染在组合包页面的文档之后、行之前）、`plugins.row.config`（键是 `<包名>#<行 id>`，让 `safeharness` 那一行多出「配置」控件）和 `settings.plugins.tab`（设置里的标签页，保留给没有组合包页面的 profile）。所以点进插件看到的就是工作台。
