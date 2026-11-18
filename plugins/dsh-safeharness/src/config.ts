@@ -20,6 +20,7 @@
 import z from '@deepseek-ai/schemastery'
 import type { NotifyChannel, NotifyChannelType } from './notify/channels.js'
 import { POSTURE_CODES } from './posture/checks.js'
+import { PII_CLASS_NAMES } from './engine/pii.js'
 
 /** Deployment posture preset. */
 export type PresetId = 'observe' | 'balanced' | 'hardened'
@@ -45,7 +46,7 @@ export type OutputMode = 'off' | 'warn' | 'enforce-buffer'
 export const MAX_BUFFERED_OUTPUT_CHARS = 512 * 1024
 
 /** Categories `results.blockOn` may name (mirrors `ResultFinding['category']`). */
-const RESULT_CATEGORIES = ['credential_leak', 'injection_marker'] as const
+const RESULT_CATEGORIES = ['credential_leak', 'injection_marker', 'pii'] as const
 /** Approval bridge mode: delegate everything, or apply our coarse policy. */
 export type ApprovalMode = 'delegate' | 'policy'
 /** When the semantic judge runs: only on structurally flagged output, or always. */
@@ -66,6 +67,15 @@ export type InputJudgeScope = 'off' | 'flagged' | 'always'
  * pre-1.2.2 "every string argument of every tool" behaviour.
  */
 export type SqlScanScope = 'execution' | 'all'
+/**
+ * What to do when a tool's own description (or name) matches an injection rule
+ * (kernel `mcp_guard` descriptor scan).
+ *
+ * `off` skips the scan; `warn` (default) records the hit and runs the call;
+ * `enforce` denies the call. The DSH tool registry has no seam to drop a tool from
+ * the model's list, so enforcement is per call rather than per surface.
+ */
+export type DescriptorScanScope = 'off' | 'warn' | 'enforce'
 
 /**
  * One operator-written notification destination.
@@ -146,6 +156,23 @@ export interface SafeHarnessConfig {
      * `execution`; `all` restores the pre-1.2.2 behaviour.
      */
     sqlScan?: SqlScanScope
+    /**
+     * SQL table allowlist for scanned arguments (kernel `SqlGuardPolicy`). Empty
+     * means "no table restriction"; any non-empty list denies a read that touches
+     * a table the list does not name.
+     */
+    sql?: { allowedTables?: string[] }
+    /**
+     * Tool-descriptor injection scan (kernel `mcp_guard`): `off`, `warn` (record
+     * the hit and run the call) or `enforce` (deny the call).
+     */
+    descriptorScan?: DescriptorScanScope
+    /** Deny a tool that already failed this many times in the session (0 = off). */
+    repeatedAttemptThreshold?: number
+    /** Deny a string argument whose Shannon entropy (bits/char) reaches this (0 = off). */
+    entropyThreshold?: number
+    /** Minimum string length before the entropy check applies. */
+    entropyMinLength?: number
     trajectory?: boolean
     /** Tool-name pattern → semantic tags, for chain rules (`bash*` → `shell`). */
     tagOverrides?: { pattern: string; tags: string[] }[]
@@ -154,6 +181,10 @@ export interface SafeHarnessConfig {
     mode?: EnforcementMode
     /** Finding categories that block when `mode: 'enforce'`. */
     blockOn?: string[]
+    /** Scan tool results for the kernel's PII classes (finding category `pii`). */
+    pii?: boolean
+    /** Enabled PII classes; absent means every class (see `PII_CLASS_NAMES`). */
+    piiClasses?: string[]
   }
   output?: {
     mode?: OutputMode
@@ -327,6 +358,18 @@ export const Config = z.object({
     maxArgsBytes: z.number().min(1).volatile().description('Maximum serialized argument size in bytes.'),
     sqlScan: z.union(['execution', 'all'] as const)
       .description('Dangerous-SQL scan scope: only execution-facing tools (default) or every tool argument.'),
+    sql: z.object({
+      allowedTables: keepAbsent(z.array(z.string()))
+        .description('SQL table allowlist for scanned arguments; empty means no restriction.'),
+    }).description('SQL table allowlist (kernel SqlGuardPolicy).'),
+    descriptorScan: z.union(['off', 'warn', 'enforce'] as const).volatile()
+      .description('Tool-descriptor injection scan: off, warn-only (default) or deny the call.'),
+    repeatedAttemptThreshold: z.number().min(0).step(1).volatile()
+      .description('Deny a tool that already failed this many times this session; 0 disables.'),
+    entropyThreshold: z.number().min(0).max(8).volatile()
+      .description('Deny a string argument at this Shannon entropy (bits/char); 0 disables.'),
+    entropyMinLength: z.number().min(1).volatile()
+      .description('Minimum argument length before the entropy check applies.'),
     trajectory: z.boolean().volatile().description('Track per-session tool sequence for chain rules.'),
     tagOverrides: keepAbsent(z.array(z.object({
       pattern: z.string().description('Tool name glob.'),
@@ -337,6 +380,9 @@ export const Config = z.object({
   results: z.object({
     mode: z.union(['off', 'warn', 'enforce'] as const).volatile().description('Tool result scan mode.'),
     blockOn: keepAbsent(z.array(z.string())).description('Finding categories blocked in enforce mode.'),
+    pii: z.boolean().volatile().description('Scan tool results for the kernel PII classes.'),
+    piiClasses: keepAbsent(z.array(z.string())).volatile()
+      .description('Enabled PII classes; absent means every class.'),
   }).description('Tool result guard (post-execute).'),
 
   output: z.object({
@@ -439,10 +485,27 @@ export interface ResolvedConfig {
     readonly maxArgsBytes: number
     /** Dangerous-SQL scan scope (R42); see {@link SqlScanScope}. */
     readonly sqlScan: SqlScanScope
+    /** SQL table allowlist; empty means no restriction (kernel `SqlGuardPolicy`). */
+    readonly sql: { readonly allowedTables: readonly string[] }
+    /** Tool-descriptor injection scan; see {@link DescriptorScanScope}. */
+    readonly descriptorScan: DescriptorScanScope
+    /** Failed-attempt threshold per tool per session; 0 disables. */
+    readonly repeatedAttemptThreshold: number
+    /** Shannon-entropy threshold for one string argument; 0 disables. */
+    readonly entropyThreshold: number
+    /** Minimum argument length before the entropy check applies. */
+    readonly entropyMinLength: number
     readonly trajectory: boolean
     readonly tagOverrides: readonly { readonly pattern: string; readonly tags: readonly string[] }[]
   }
-  readonly results: { readonly mode: EnforcementMode; readonly blockOn: readonly string[] }
+  readonly results: {
+    readonly mode: EnforcementMode
+    readonly blockOn: readonly string[]
+    /** Whether tool results are scanned for PII classes at all. */
+    readonly pii: boolean
+    /** Enabled PII class names (kernel `memory/sanitizer.py` vocabulary). */
+    readonly piiClasses: readonly string[]
+  }
   readonly output: {
     readonly mode: OutputMode
     readonly bufferTimeoutMs: number
@@ -565,10 +628,25 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
     // R42: an SQL example in a document is data, not intent. Only tools that can
     // execute what they receive are scanned; `all` restores the old behaviour.
     sqlScan: 'execution',
+    // 1.12.0: kernel parity — empty allowlist means "no table restriction", the
+    // descriptor scan warns (as the kernel's mcp_guard does by default), and both
+    // trajectory thresholds stay off until an operator sets them.
+    sql: { allowedTables: [] },
+    descriptorScan: 'warn',
+    repeatedAttemptThreshold: 0,
+    entropyThreshold: 0,
+    entropyMinLength: 48,
     trajectory: true,
     tagOverrides: [],
   },
-  results: { mode: 'warn', blockOn: ['credential_leak'] },
+  results: {
+    mode: 'warn',
+    blockOn: ['credential_leak'],
+    // PII detection is on by default but never blocks unless `blockOn` names it:
+    // a kernel-class finding is evidence, not a verdict.
+    pii: true,
+    piiClasses: [...PII_CLASS_NAMES],
+  },
   output: {
     mode: 'warn',
     bufferTimeoutMs: 15000,
@@ -665,6 +743,17 @@ function boundedBufferChars(value: unknown, problems: string[]): number {
   return MAX_BUFFERED_OUTPUT_CHARS
 }
 
+/**
+ * Entropy threshold: `0` disables the check, otherwise it must be within [0, 8]
+ * bits/char (the kernel's own constructor validates the same range).
+ */
+function boundedEntropy(value: unknown, problems: string[], fallback: number): number {
+  const parsed = nonNegative(value, 'tools.entropyThreshold', problems, fallback)
+  if (parsed <= 8) return parsed
+  problems.push('tools.entropyThreshold must be <= 8')
+  return 8
+}
+
 /** String list, or a recorded problem. */
 function stringList(value: unknown, path: string, problems: string[]): string[] {
   if (value === undefined) return []
@@ -739,6 +828,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
 
   const input = merged.input ?? {}
   const tools = merged.tools ?? {}
+  const sql = tools.sql ?? {}
   const results = merged.results ?? {}
   const output = merged.output ?? {}
   const judge = output.judge ?? {}
@@ -796,12 +886,25 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       denyTags: stringList(tools.denyTags, 'tools.denyTags', problems),
       maxArgsBytes: positive(tools.maxArgsBytes, 'tools.maxArgsBytes', problems, 65536),
       sqlScan: oneOf(tools.sqlScan ?? 'execution', ['execution', 'all'] as const, 'tools.sqlScan', problems),
+      sql: { allowedTables: stringList(sql.allowedTables, 'tools.sql.allowedTables', problems) },
+      descriptorScan: oneOf(tools.descriptorScan ?? 'warn', ['off', 'warn', 'enforce'] as const, 'tools.descriptorScan', problems),
+      repeatedAttemptThreshold: nonNegative(
+        tools.repeatedAttemptThreshold,
+        'tools.repeatedAttemptThreshold',
+        problems,
+        0,
+        { integer: true },
+      ),
+      entropyThreshold: boundedEntropy(tools.entropyThreshold, problems, 0),
+      entropyMinLength: positive(tools.entropyMinLength, 'tools.entropyMinLength', problems, 48),
       trajectory: typeof tools.trajectory === 'boolean' ? tools.trajectory : true,
       tagOverrides,
     },
     results: {
       mode: oneOf(results.mode, ['off', 'warn', 'enforce'] as const, 'results.mode', problems),
       blockOn: codeList(results.blockOn, 'results.blockOn', RESULT_CATEGORIES, problems),
+      pii: typeof results.pii === 'boolean' ? results.pii : true,
+      piiClasses: codeList(results.piiClasses, 'results.piiClasses', PII_CLASS_NAMES, problems),
     },
     output: {
       mode: oneOf(output.mode, ['off', 'warn', 'enforce-buffer'] as const, 'output.mode', problems),

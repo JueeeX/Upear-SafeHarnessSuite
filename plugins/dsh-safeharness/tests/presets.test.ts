@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'vitest'
 import { ConfigError, resolveConfig } from '../src/config.js'
 import type { PresetId, SafeHarnessConfig } from '../src/config.js'
+import { PII_CLASS_NAMES } from '../src/engine/pii.js'
 import { installToolHooks } from '../src/hooks/tools.js'
 import { TOOL_DENIAL_TEXT } from '../src/runtime.js'
 import { createFakeHost } from './helpers/fake-host.js'
@@ -58,11 +59,15 @@ describe('§5.3 preset table — one dimension per test', () => {
   })
 
   it('§5.3 工具结果 (results.mode + blockOn): observe warn/[], balanced warn/[credential_leak], hardened enforce/[credential_leak, injection_marker]', () => {
-    expect(resolveConfig({ preset: 'observe' }).results).toEqual({ mode: 'warn', blockOn: [] })
-    expect(resolveConfig({ preset: 'balanced' }).results).toEqual({ mode: 'warn', blockOn: ['credential_leak'] })
+    // 1.12.0 adds two results fields (pii / piiClasses) that no preset overrides:
+    // they are detection settings, not posture, so every preset keeps the defaults.
+    const pii = { pii: true, piiClasses: [...PII_CLASS_NAMES] }
+    expect(resolveConfig({ preset: 'observe' }).results).toEqual({ mode: 'warn', blockOn: [], ...pii })
+    expect(resolveConfig({ preset: 'balanced' }).results).toEqual({ mode: 'warn', blockOn: ['credential_leak'], ...pii })
     expect(resolveConfig({ preset: 'hardened' }).results).toEqual({
       mode: 'enforce',
       blockOn: ['credential_leak', 'injection_marker'],
+      ...pii,
     })
   })
 
@@ -137,7 +142,12 @@ describe('§5.3 preset mechanics — overrides, default and idempotency', () => 
     })
     expect(loosened.input.mode).toBe('warn')
     expect(loosened.tools.mode).toBe('warn')
-    expect(loosened.results).toEqual({ mode: 'warn', blockOn: [] })
+    expect(loosened.results).toEqual({
+      mode: 'warn',
+      blockOn: [],
+      pii: true,
+      piiClasses: [...PII_CLASS_NAMES],
+    })
     expect(loosened.output.mode).toBe('off')
     expect(loosened.approval.mode).toBe('delegate')
     expect(loosened.audit.required).toBe(false)

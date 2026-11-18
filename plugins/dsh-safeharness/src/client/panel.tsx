@@ -48,6 +48,8 @@ import type {
   PanelMode,
   PanelSurfaceSettings,
   PanelInputJudge,
+  PanelResultPii,
+  PanelToolDetection,
 } from '../panel/protocol.js'
 import type { PanelFace } from './index.js'
 
@@ -152,6 +154,16 @@ interface DraftForm {
   readonly model: string
 }
 
+/** Tool-surface detection form (numbers are edited as strings). */
+interface ToolDetectionForm {
+  readonly descriptorScan: 'off' | 'warn' | 'enforce'
+  readonly repeatedAttemptThreshold: string
+  readonly entropyThreshold: string
+  readonly entropyMinLength: string
+  /** One table name per line (empty = no restriction). */
+  readonly allowedTables: string
+}
+
 /** One loaded settings value plus the editable copy of it. */
 interface SettingsData {
   readonly value: PanelSettingsValue
@@ -159,6 +171,8 @@ interface SettingsData {
   readonly draft: DraftForm
   readonly surfaces: PanelSurfaceSettings
   readonly inputJudge: PanelInputJudge
+  readonly toolDetection: ToolDetectionForm
+  readonly pii: PanelResultPii
 }
 
 /** Settings tab load state. */
@@ -209,6 +223,21 @@ interface MutableInputJudgePatch {
   mode?: 'off' | 'flagged' | 'always'
   failClosed?: boolean
   normalize?: boolean
+}
+
+/** Mutable builder for the tool-detection patch. */
+interface MutableToolDetectionPatch {
+  descriptorScan?: 'off' | 'warn' | 'enforce'
+  repeatedAttemptThreshold?: number
+  entropyThreshold?: number
+  entropyMinLength?: number
+  allowedTables?: readonly string[]
+}
+
+/** Mutable builder for the PII patch. */
+interface MutablePiiPatch {
+  enabled?: boolean
+  classes?: readonly string[]
 }
 
 /** Mutable builder for the per-surface switchboard patch. */
@@ -322,6 +351,8 @@ function baselineOf(value: PanelSettingsValue): string {
     draft: value.draft,
     surfaces: value.surfaces,
     inputJudge: value.inputJudge,
+    toolDetection: value.toolDetection,
+    pii: value.pii,
   })
 }
 
@@ -334,6 +365,9 @@ interface StoredSettingsDraft {
   readonly surfaces?: PanelSurfaceSettings
   /** Absent drafts from 1.10.0 and earlier fall back to the loaded value. */
   readonly inputJudge?: PanelInputJudge
+  /** Absent drafts from 1.11.0 and earlier fall back to the loaded value. */
+  readonly toolDetection?: ToolDetectionForm
+  readonly pii?: PanelResultPii
 }
 
 /** Decision → human label. */
@@ -356,6 +390,7 @@ const KIND_LABELS: Record<string, string> = {
   input_checked: '输入',
   tool_denied: '工具调用',
   tool_asked: '工具审批',
+  tool_descriptor_flagged: '工具描述',
   tool_result: '工具结果',
   tool_result_flagged: '工具结果',
   tool_executed: '工具执行',
@@ -383,9 +418,14 @@ const REASON_LABELS: Record<string, string> = {
   tool_denied_by_chain: '命中调用链规则',
   tool_ask_required: '需要人工审批',
   tool_args_too_large: '参数过大',
+  unauthorized_sql_table: 'SQL 表不在白名单',
+  tool_descriptor_injection: '工具描述含注入',
+  tool_repeated_attempts: '同一工具反复失败',
+  tool_high_entropy_payload: '参数疑似编码载荷',
   guard_internal_error: '守卫内部错误',
   credential_leak: '结果中含凭据',
   injection_marker: '结果中含注入标记',
+  pii: '结果中含 PII',
   output_rule_hit: '输出命中规则',
   output_judge_blocked: '语义评审拦截',
   output_judge_unavailable: '语义评审不可用',
@@ -398,8 +438,26 @@ const REASON_LABELS: Record<string, string> = {
   none: '—',
 }
 
-/** Severity → label; unknown severities render raw. */
-const SEVERITY_LABELS: Record<string, string> = {
+/**
+ * PII class → operator label (1.12.0).
+ *
+ * The `name` values are the kernel's own rule names (`memory/sanitizer.py`), and the
+ * order is the kernel's declaration order; the label is only what the panel shows.
+ */
+const PII_CLASS_LABELS: readonly { readonly name: string; readonly label: string }[] = [
+  { name: 'id_card', label: '身份证' },
+  { name: 'phone_cn', label: '手机号' },
+  { name: 'email', label: '邮箱' },
+  { name: 'bank_card', label: '银行卡' },
+  { name: 'api_key', label: 'API Key' },
+  { name: 'jwt', label: 'JWT' },
+  { name: 'doc_no', label: '红头文号' },
+  { name: 'gov_serial', label: '公文流水号' },
+  { name: 'customer_id', label: '客户号' },
+  { name: 'internal_url', label: '内网地址' },
+]
+
+/** Severity → label; unknown severities render raw. */const SEVERITY_LABELS: Record<string, string> = {
   critical: '严重',
   high: '高',
   medium: '中',
@@ -1069,6 +1127,22 @@ function positiveInt(raw: string): number | undefined {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
+/** A non-negative integer from a text field (0 disables the check). */
+function nonNegativeInt(raw: string): number | undefined {
+  const trimmed = raw.trim()
+  if (!/^\d+$/u.test(trimmed)) return undefined
+  const value = Number(trimmed)
+  return Number.isSafeInteger(value) ? value : undefined
+}
+
+/** A non-negative number within [0, 8] from a text field (the entropy threshold). */
+function nonNegativeNumber(raw: string): number | undefined {
+  const trimmed = raw.trim()
+  if (!/^\d+(?:\.\d+)?$/u.test(trimmed)) return undefined
+  const value = Number(trimmed)
+  return Number.isFinite(value) && value >= 0 && value <= 8 ? value : undefined
+}
+
 /** Error copy for one provider add/delete failure code. */
 function providerErrorMessage(code: string): string {
   switch (code) {
@@ -1136,7 +1210,34 @@ function toSettingsData(value: PanelSettingsValue): SettingsData {
     draft: { provider: value.draft.provider, model: value.draft.model },
     surfaces: { ...value.surfaces },
     inputJudge: { ...value.inputJudge },
+    toolDetection: {
+      descriptorScan: value.toolDetection.descriptorScan,
+      repeatedAttemptThreshold: String(value.toolDetection.repeatedAttemptThreshold),
+      entropyThreshold: String(value.toolDetection.entropyThreshold),
+      entropyMinLength: String(value.toolDetection.entropyMinLength),
+      allowedTables: value.toolDetection.allowedTables.join('\n'),
+    },
+    pii: { enabled: value.pii.enabled, classes: [...value.pii.classes] },
   }
+}
+
+/**
+ * Parse the SQL table allowlist textarea: one entry per line, `,` also accepted as
+ * a separator, blanks ignored, duplicates removed (case-insensitively — the engine
+ * compares case-insensitively, so `Users` and `users` are one entry).
+ */
+function parseTableList(text: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of text.split(/[\r\n,]+/u)) {
+    const entry = raw.trim()
+    if (entry.length === 0) continue
+    const key = entry.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(entry)
+  }
+  return out
 }
 
 /** Diff the editable form against the loaded value. */
@@ -1146,11 +1247,22 @@ function buildPatch(
   draft: DraftForm,
   surfaces: PanelSurfaceSettings,
   inputJudge: PanelInputJudge,
+  toolDetection: ToolDetectionForm,
+  pii: PanelResultPii,
 ): PatchResult {
   const maxChars = positiveInt(judge.maxChars)
   const timeoutMs = positiveInt(judge.timeoutMs)
   if (maxChars === undefined) return { patch: undefined, invalid: '「送入评审的最大字符数」必须是正整数。' }
   if (timeoutMs === undefined) return { patch: undefined, invalid: '「评审超时」必须是正整数毫秒。' }
+  // Tool-detection numbers: 0 is a legal value (it disables the check), so the
+  // parser here only refuses negatives and non-integers beyond what the host accepts.
+  const retry = nonNegativeInt(toolDetection.repeatedAttemptThreshold)
+  const entropy = nonNegativeNumber(toolDetection.entropyThreshold)
+  const entropyMin = positiveInt(toolDetection.entropyMinLength)
+  if (retry === undefined) return { patch: undefined, invalid: '「重复失败阈值」必须是 0 或正整数。' }
+  if (entropy === undefined) return { patch: undefined, invalid: '「熵阈值」必须是 0–8 之间的数字。' }
+  if (entropyMin === undefined) return { patch: undefined, invalid: '「熵检测最短长度」必须是正整数。' }
+  const allowedTables = parseTableList(toolDetection.allowedTables)
   const judgePatch: MutableJudgePatch = {}
   if (judge.enabled !== value.judge.enabled) judgePatch.enabled = judge.enabled
   if (judge.scope !== value.judge.scope) judgePatch.scope = judge.scope
@@ -1171,11 +1283,28 @@ function buildPatch(
   if (inputJudge.mode !== value.inputJudge.mode) inputJudgePatch.mode = inputJudge.mode
   if (inputJudge.failClosed !== value.inputJudge.failClosed) inputJudgePatch.failClosed = inputJudge.failClosed
   if (inputJudge.normalize !== value.inputJudge.normalize) inputJudgePatch.normalize = inputJudge.normalize
+  const toolDetectionPatch: MutableToolDetectionPatch = {}
+  if (toolDetection.descriptorScan !== value.toolDetection.descriptorScan) {
+    toolDetectionPatch.descriptorScan = toolDetection.descriptorScan
+  }
+  if (retry !== value.toolDetection.repeatedAttemptThreshold) toolDetectionPatch.repeatedAttemptThreshold = retry
+  if (entropy !== value.toolDetection.entropyThreshold) toolDetectionPatch.entropyThreshold = entropy
+  if (entropyMin !== value.toolDetection.entropyMinLength) toolDetectionPatch.entropyMinLength = entropyMin
+  const savedTables = value.toolDetection.allowedTables.join('\u0000').toLowerCase()
+  if (allowedTables.join('\u0000').toLowerCase() !== savedTables) toolDetectionPatch.allowedTables = allowedTables
+  const piiPatch: MutablePiiPatch = {}
+  if (pii.enabled !== value.pii.enabled) piiPatch.enabled = pii.enabled
+  const savedClasses = [...value.pii.classes].sort().join(',')
+  if ([...pii.classes].sort().join(',') !== savedClasses) piiPatch.classes = pii.classes
   const hasJudge = Object.keys(judgePatch).length > 0
   const hasDraft = Object.keys(draftPatch).length > 0
   const hasSurfaces = Object.keys(surfacePatch).length > 0
   const hasInputJudge = Object.keys(inputJudgePatch).length > 0
-  if (!hasJudge && !hasDraft && !hasSurfaces && !hasInputJudge) return { patch: undefined, invalid: null }
+  const hasToolDetection = Object.keys(toolDetectionPatch).length > 0
+  const hasPii = Object.keys(piiPatch).length > 0
+  if (!hasJudge && !hasDraft && !hasSurfaces && !hasInputJudge && !hasToolDetection && !hasPii) {
+    return { patch: undefined, invalid: null }
+  }
   return {
     patch: {
       // Echo the revision this form was rendered at: the next save is refused as stale
@@ -1184,6 +1313,8 @@ function buildPatch(
       ...(value.revision === null ? {} : { expectedRevision: value.revision }),
       ...(hasSurfaces ? { surfaces: surfacePatch } : {}),
       ...(hasInputJudge ? { inputJudge: inputJudgePatch } : {}),
+      ...(hasToolDetection ? { toolDetection: toolDetectionPatch } : {}),
+      ...(hasPii ? { pii: piiPatch } : {}),
       ...(hasJudge ? { judge: judgePatch } : {}),
       ...(hasDraft ? { draft: draftPatch } : {}),
     },
@@ -1299,32 +1430,47 @@ function EmptyState({ title, body }: { readonly title: string; readonly body: st
 }
 
 /** A labelled text/number input (password mode for write-only secrets). */
-function Field({ label, hint, value, onChange, inputMode, disabled, type, autoComplete, placeholder, spellCheck }: {
+function Field({ label, hint, value, onChange, inputMode, disabled, type, autoComplete, placeholder, spellCheck, multiline }: {
   readonly label: string
   readonly hint?: string
   readonly value: string
   readonly onChange: (value: string) => void
-  readonly inputMode?: 'numeric' | 'text'
+  readonly inputMode?: 'numeric' | 'decimal' | 'text'
   readonly disabled?: boolean
   readonly type?: 'text' | 'password'
   readonly autoComplete?: string
   readonly placeholder?: string
   readonly spellCheck?: boolean
+  /** Render a `<textarea>` (one entry per line, e.g. the SQL table allowlist). */
+  readonly multiline?: boolean
 }): ReactNode {
   return (
     <div className="shp-field">
       <span className="shp-field-label">{label}</span>
-      <input
-        className="shp-input"
-        value={value}
-        type={type ?? 'text'}
-        inputMode={inputMode ?? 'text'}
-        autoComplete={autoComplete ?? 'off'}
-        placeholder={placeholder}
-        spellCheck={spellCheck === true}
-        disabled={disabled === true}
-        onChange={(event: ChangeEvent<HTMLInputElement>) => { onChange(event.target.value) }}
-      />
+      {multiline === true ? (
+        <textarea
+          className="shp-textarea"
+          value={value}
+          autoComplete={autoComplete ?? 'off'}
+          placeholder={placeholder}
+          spellCheck={spellCheck === true}
+          disabled={disabled === true}
+          rows={4}
+          onChange={(event: ChangeEvent<HTMLTextAreaElement>) => { onChange(event.target.value) }}
+        />
+      ) : (
+        <input
+          className="shp-input"
+          value={value}
+          type={type ?? 'text'}
+          inputMode={inputMode ?? 'text'}
+          autoComplete={autoComplete ?? 'off'}
+          placeholder={placeholder}
+          spellCheck={spellCheck === true}
+          disabled={disabled === true}
+          onChange={(event: ChangeEvent<HTMLInputElement>) => { onChange(event.target.value) }}
+        />
+      )}
       {hint === undefined ? null : <span className="shp-field-hint">{hint}</span>}
     </div>
   )
@@ -2393,6 +2539,8 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
                 draft: parsed.draft,
                 surfaces: parsed.surfaces ?? base.surfaces,
                 inputJudge: parsed.inputJudge ?? base.inputJudge,
+                toolDetection: parsed.toolDetection ?? base.toolDetection,
+                pii: parsed.pii ?? base.pii,
               }
             } else {
               storeValue(SETTINGS_DRAFT_KEY, null)
@@ -2423,17 +2571,19 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const data = view.status === 'ready' ? view.data : undefined
   const patchResult = useMemo<PatchResult>(() => {
     if (data === undefined) return { patch: undefined, invalid: null }
-    return buildPatch(data.value, data.judge, data.draft, data.surfaces, data.inputJudge)
+    return buildPatch(data.value, data.judge, data.draft, data.surfaces, data.inputJudge, data.toolDetection, data.pii)
   }, [data])
 
   // Keep an unsaved form across a remount; a clean form clears the draft.
   useEffect(() => {
     if (view.status !== 'ready') return
-    const { value, judge, draft, surfaces, inputJudge } = view.data
-    const dirty = buildPatch(value, judge, draft, surfaces, inputJudge).patch !== undefined
+    const { value, judge, draft, surfaces, inputJudge, toolDetection, pii } = view.data
+    const dirty = buildPatch(value, judge, draft, surfaces, inputJudge, toolDetection, pii).patch !== undefined
     storeValue(
       SETTINGS_DRAFT_KEY,
-      dirty ? JSON.stringify({ baseline: baselineOf(value), judge, draft, surfaces, inputJudge }) : null,
+      dirty
+        ? JSON.stringify({ baseline: baselineOf(value), judge, draft, surfaces, inputJudge, toolDetection, pii })
+        : null,
     )
   }, [view])
 
@@ -2462,6 +2612,20 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const updateInputJudge = useCallback((patch: Partial<PanelInputJudge>): void => {
     setView(current => current.status === 'ready'
       ? { status: 'ready', data: { ...current.data, inputJudge: { ...current.data.inputJudge, ...patch } } }
+      : current)
+    setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
+  }, [])
+
+  const updateToolDetection = useCallback((patch: Partial<ToolDetectionForm>): void => {
+    setView(current => current.status === 'ready'
+      ? { status: 'ready', data: { ...current.data, toolDetection: { ...current.data.toolDetection, ...patch } } }
+      : current)
+    setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
+  }, [])
+
+  const updatePii = useCallback((patch: Partial<PanelResultPii>): void => {
+    setView(current => current.status === 'ready'
+      ? { status: 'ready', data: { ...current.data, pii: { ...current.data.pii, ...patch } } }
       : current)
     setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
   }, [])
@@ -2591,7 +2755,7 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
     return <div className="shp-stack"><Card title="设置"><Loading text="正在读取评审与起草路由…" /></Card></div>
   }
 
-  const { value, judge, draft, surfaces, inputJudge } = data
+  const { value, judge, draft, surfaces, inputJudge, toolDetection, pii } = data
   const readOnly = !value.judge.configurable
   const saving = save.status === 'saving'
   const dirty = patchResult.patch !== undefined
@@ -2721,6 +2885,102 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
         <p className="shp-card-hint">
           这里的改动是逐字段覆盖：只写你动过的那几个字段，`preset` 保持原值；想整体切换用 profile 的 `preset`。
           关闭一面后该面不检测、不记账，其他面不受影响。
+        </p>
+      </Card>
+
+      <Card
+        title="工具与结果检测"
+        hint="1.12.0：工具描述符、轨迹阈值、SQL 表白名单与 PII 类别"
+        actions={(
+          <>
+            <Badge tone={toolDetection.descriptorScan === 'enforce' ? 'danger' : toolDetection.descriptorScan === 'warn' ? 'warn' : 'muted'}>
+              描述符 {toolDetection.descriptorScan}
+            </Badge>
+            <Badge tone={pii.enabled ? 'accent' : 'muted'}>{pii.enabled ? `PII ${pii.classes.length} 类` : 'PII 关闭'}</Badge>
+          </>
+        )}
+      >
+        <div className="shp-form-grid">
+          <SelectField
+            label="工具描述符扫描"
+            value={toolDetection.descriptorScan}
+            disabled={readOnly}
+            onChange={(next) => {
+              updateToolDetection({ descriptorScan: next === 'enforce' ? 'enforce' : next === 'off' ? 'off' : 'warn' })
+            }}
+            options={[
+              { value: 'warn', label: '仅告警（默认）' },
+              { value: 'enforce', label: '命中即拒绝该调用' },
+              { value: 'off', label: '关闭' },
+            ]}
+            hint="用注入规则扫工具名与描述；命中后每个会话记一次，enforce 时该工具的每次调用都被拒"
+          />
+          <Field
+            label="重复失败阈值（0 = 关）"
+            value={toolDetection.repeatedAttemptThreshold}
+            inputMode="numeric"
+            disabled={readOnly}
+            onChange={(next) => { updateToolDetection({ repeatedAttemptThreshold: next }) }}
+          />
+          <Field
+            label="熵阈值 bits/char（0 = 关）"
+            value={toolDetection.entropyThreshold}
+            inputMode="decimal"
+            disabled={readOnly}
+            onChange={(next) => { updateToolDetection({ entropyThreshold: next }) }}
+          />
+          <Field
+            label="熵检测最短长度"
+            value={toolDetection.entropyMinLength}
+            inputMode="numeric"
+            disabled={readOnly}
+            onChange={(next) => { updateToolDetection({ entropyMinLength: next }) }}
+          />
+        </div>
+        <Field
+          label="SQL 表白名单（每行一个，留空 = 不限制）"
+          value={toolDetection.allowedTables}
+          multiline
+          disabled={readOnly}
+          onChange={(next) => { updateToolDetection({ allowedTables: next }) }}
+        />
+        <p className="shp-card-hint">
+          白名单只作用于会被扫描的 SQL 参数（默认只扫能执行 SQL 的工具）；非白名单表的
+          <code className="shp-mono"> SELECT </code> 会被拒，破坏性语句仍按危险 SQL 拒绝。
+          这一格不是热更新字段：保存会重载插件。
+        </p>
+        <div className="shp-switch-row">
+          <label className="shp-switch-label">
+            <input
+              type="checkbox"
+              checked={pii.enabled}
+              disabled={readOnly}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => { updatePii({ enabled: event.target.checked }) }}
+            />
+            工具结果里扫描 PII（内核 10 类）
+          </label>
+          <span className="shp-card-hint">只产生 `pii` 类别的事件；要拦截需在 profile 里把 `pii` 加进 `results.blockOn`。</span>
+        </div>
+        <div className="shp-chips">
+          {PII_CLASS_LABELS.map(({ name, label }) => (
+            <label key={name} className="shp-chip" title={name}>
+              <input
+                type="checkbox"
+                checked={pii.classes.includes(name)}
+                disabled={readOnly || !pii.enabled}
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                  const next = event.target.checked
+                    ? [...pii.classes, name]
+                    : pii.classes.filter((entry) => entry !== name)
+                  updatePii({ classes: next })
+                }}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        <p className="shp-card-hint">
+          类别与内核 <code className="shp-mono">memory/sanitizer.py</code> 逐条对应；检测结果只记类别名，不记命中内容。
         </p>
       </Card>
 

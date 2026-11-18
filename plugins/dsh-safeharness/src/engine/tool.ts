@@ -11,10 +11,12 @@
  *   Python's `_endpoint_matches` ANDs them when both are given. OR is strictly
  *   more denying, i.e. fail-closed, and keeps tag-only and name-only rules
  *   working without the Python AND trap.
- * - The result scan (`credential_leak` / `injection_marker`) is new code: the
- *   Python `output_guard.py` has **no** credential, private-key or entropy
+ * - The result scan (`credential_leak` / `injection_marker` / `pii`) is new code:
+ *   the Python `output_guard.py` has **no** credential, private-key or entropy
  *   detector at all (digest §7.2/§7.3); it only runs the inform rule family plus
- *   an LLM judge. The patterns here are therefore additions, not a port.
+ *   an LLM judge. The credential patterns here are therefore additions, not a
+ *   port. The `pii` classes are a port of the kernel's
+ *   `memory/sanitizer.py` patterns (1.12.0).
  *
  * Secrets discipline: no function in this module ever receives a value it logs.
  * Decisions carry rule ids, tool names and statement kinds only; findings carry a
@@ -22,6 +24,7 @@
  * @module
  */
 import type { ResolvedConfig, SqlScanScope } from '../config.js'
+import { scanPii } from './pii.js'
 import { inspectSql } from './sql.js'
 import type {
   CompiledChainRule,
@@ -56,6 +59,9 @@ const ASK_SEVERITY: Severity = 'medium'
 
 /** Synthetic rule id recorded for dangerous SQL found in a tool argument. */
 const SQL_ARG_RULE_ID = 'dangerous_sql'
+
+/** Synthetic rule id recorded when a SQL read touches a non-allowlisted table. */
+const SQL_TABLE_RULE_ID = 'sql_table_allowlist'
 
 /** Category for a dangerous-SQL argument hit (Python risk-tag vocabulary). */
 const SQL_CATEGORY = 'dangerous_sql'
@@ -304,6 +310,64 @@ export function resolveTags(
 }
 
 // ---------------------------------------------------------------------------
+// Tool descriptor scan (kernel `llm/safeharness_mcp_guard.py`, descriptor part)
+// ---------------------------------------------------------------------------
+
+/** Bound on the descriptor characters scanned (a hostile server can send anything). */
+export const MAX_DESCRIPTOR_SCAN_CHARS = 8 * 1024
+
+/** Which parts of a descriptor carried an injection rule. */
+export type DescriptorField = 'name' | 'description'
+
+/** One descriptor finding: matched fields and the governing rule ids. */
+export interface DescriptorFinding {
+  readonly fields: readonly DescriptorField[]
+  readonly ruleIds: readonly string[]
+  readonly severity: Severity
+}
+
+/**
+ * Scan a tool's own name and description with the injection rule family.
+ *
+ * The kernel (`mcp_guard.apply_descriptor_guard`) runs the inform patterns over
+ * every listed MCP tool's `name`/`description`, warns by default and drops the
+ * tool when enforcement is enabled. The plugin has the same text at the tool
+ * surface (`ctx.tools.get(name).description`), so the same scan runs there.
+ *
+ * The scan is deliberately **not** part of the argument judgement: a hostile
+ * descriptor is a property of the tool, not of one call, so `evaluateToolCall`
+ * evaluates it first and the hook deduplicates the warning per session.
+ *
+ * @param ruleset - compiled rule set (the injection family).
+ * @param view - the proposed call as the engine sees it.
+ * @returns the finding, or `undefined` when nothing matched / nothing to scan.
+ */
+export function scanToolDescriptor(
+  ruleset: Pick<RuleSet, 'rules'>,
+  view: Pick<ToolView, 'name' | 'description'>,
+): DescriptorFinding | undefined {
+  if (ruleset.rules.length === 0) return undefined
+  const fields: DescriptorField[] = []
+  const ruleIds = new Set<string>()
+  let severity: Severity | undefined
+  for (const field of ['name', 'description'] as const) {
+    const raw = field === 'name' ? view.name : view.description
+    if (typeof raw !== 'string' || raw.length === 0) continue
+    const value = raw.length > MAX_DESCRIPTOR_SCAN_CHARS ? raw.slice(0, MAX_DESCRIPTOR_SCAN_CHARS) : raw
+    let hit = false
+    for (const rule of ruleset.rules) {
+      if (!testRegex(rule.regex, value)) continue
+      hit = true
+      ruleIds.add(rule.id)
+      if (severity === undefined || SEVERITY_RANK[rule.severity] > SEVERITY_RANK[severity]) severity = rule.severity
+    }
+    if (hit) fields.push(field)
+  }
+  if (fields.length === 0 || severity === undefined) return undefined
+  return { fields, ruleIds: sortedIds([...ruleIds]), severity }
+}
+
+// ---------------------------------------------------------------------------
 // Tool-call judgement
 // ---------------------------------------------------------------------------
 
@@ -427,14 +491,20 @@ function findChainDenial(
 /**
  * Judge one tool call before execution.
  *
- * Order (T1.2 spec): explicit `denyTools` name → `denyTags` → argument byte size
- * → dangerous SQL in any string argument → chain rules over the trail → `askTools`
- * → allow. The first match wins; the decision carries the governing rule's
- * severity where one exists.
+ * Order: tool descriptor injection → explicit `denyTools` name → `denyTags` →
+ * argument byte size → dangerous SQL / non-allowlisted table in any string
+ * argument → chain rules over the trail → repeated failed attempts → high-entropy
+ * argument → `askTools` → allow. The first match wins; the decision carries the
+ * governing rule's severity where one exists.
+ *
+ * A descriptor hit in `warn` mode is the one ALLOW that still carries a finding
+ * (`reasonCode` + `ruleIds`); the hook records it once per session and lets the
+ * call proceed.
  *
  * Arguments are **never** rendered into the decision: the reason names the shape
  * (`dangerous SQL`, `statement kinds`), not the value, so a credential-shaped
- * argument cannot leak through an audit record.
+ * argument cannot leak through an audit record. The high-entropy reason carries
+ * only the argument index, its length and the entropy value.
  *
  * @param ruleset - compiled rules (chains drive step 5).
  * @param cfg - `ResolvedConfig['tools']`.
@@ -448,6 +518,37 @@ export function evaluateToolCall(
   view: ToolView,
   session: SessionView,
 ): Decision {
+  // (0) tool descriptor: a tool whose own name/description carries an injection is
+  // hostile before any argument is considered (kernel `mcp_guard` descriptor scan).
+  //
+  // `warn` returns an ALLOW carrying the finding so the hook can record it without
+  // touching the call; `enforce` denies the call itself. The registry has no seam to
+  // drop a tool from the model's list, so enforcement is per call (documented in
+  // MANUAL §4.10).
+  if (cfg.descriptorScan !== 'off') {
+    const descriptor = scanToolDescriptor(ruleset, view)
+    if (descriptor !== undefined) {
+      if (cfg.descriptorScan === 'enforce') {
+        return {
+          kind: 'deny',
+          reasonCode: ReasonCode.ToolDescriptor,
+          ruleIds: descriptor.ruleIds,
+          severity: descriptor.severity,
+          category: 'descriptor_injection',
+          reason: `tool descriptor (${descriptor.fields.join(',')}) matched an injection rule`,
+        }
+      }
+      return {
+        kind: 'allow',
+        reasonCode: ReasonCode.ToolDescriptor,
+        ruleIds: descriptor.ruleIds,
+        severity: descriptor.severity,
+        category: 'descriptor_injection',
+        reason: `tool descriptor (${descriptor.fields.join(',')}) matched an injection rule (warn-only)`,
+      }
+    }
+  }
+
   // (1) explicit tool-name deny list
   if (matchNamePattern(view.name, cfg.denyTools)) {
     return {
@@ -487,29 +588,52 @@ export function evaluateToolCall(
   // Walking every string leaf of every tool was the pre-1.2.2 rule; it denied
   // `write`/`edit` whenever the document merely QUOTED a destructive statement
   // (R42). `sqlScan` decides who is scanned; the walk itself stays fail-closed.
-  if (shouldScanSql(view, cfg.sqlScan)) {
-    const scan = collectArgumentStrings(view.arguments)
-    if (scan.truncated) {
-      // Fail closed: a value too large or too convoluted to scan end-to-end may be
-      // hiding the very payload this check exists for.
-      return {
-        kind: 'deny',
-        reasonCode: ReasonCode.ToolArgsTooLarge,
-        ruleIds: [],
-        severity: 'high',
-        reason: 'tool arguments exceed the scan budget (too large or cyclic)',
-      }
+  //
+  // 1.12.0 adds the kernel's table allowlist: `tools.sql.allowedTables` non-empty
+  // means every table reference in a scanned argument must match an entry, exactly
+  // like `SqlGuardPolicy._argument_verdict` (a dangerous statement still wins, and
+  // the allowlist only fires when the statement is otherwise benign).
+  // One argument walk serves both the SQL scan and the entropy threshold: the walk
+  // is bounded and iterative, but repeating it for every feature would double the
+  // per-call cost of a large payload.
+  const sqlActive = shouldScanSql(view, cfg.sqlScan)
+  const entropyActive = cfg.entropyThreshold > 0
+  const scan = sqlActive || entropyActive ? collectArgumentStrings(view.arguments) : undefined
+  if (scan?.truncated === true) {
+    // Fail closed: a value too large or too convoluted to scan end-to-end may be
+    // hiding the very payload this check exists for.
+    return {
+      kind: 'deny',
+      reasonCode: ReasonCode.ToolArgsTooLarge,
+      ruleIds: [],
+      severity: 'high',
+      reason: 'tool arguments exceed the scan budget (too large or cyclic)',
     }
+  }
+
+  if (sqlActive && scan !== undefined) {
+    const allowedTables = cfg.sql.allowedTables.length > 0 ? cfg.sql.allowedTables : undefined
     for (const candidate of scan.strings) {
-      const verdict = inspectSql(candidate)
-      if (!verdict.dangerous) continue
-      return {
-        kind: 'deny',
-        reasonCode: ReasonCode.ToolArgs,
-        ruleIds: [SQL_ARG_RULE_ID],
-        severity: 'high',
-        category: SQL_CATEGORY,
-        reason: `tool arguments contain dangerous SQL (kinds=${verdict.statementKinds.join(',') || 'unknown'})`,
+      const verdict = inspectSql(candidate, allowedTables === undefined ? undefined : { allowedTables })
+      if (verdict.reasonCode === 'dangerous_sql_detected') {
+        return {
+          kind: 'deny',
+          reasonCode: ReasonCode.ToolArgs,
+          ruleIds: [SQL_ARG_RULE_ID],
+          severity: 'high',
+          category: SQL_CATEGORY,
+          reason: `tool arguments contain dangerous SQL (kinds=${verdict.statementKinds.join(',') || 'unknown'})`,
+        }
+      }
+      if (verdict.reasonCode === 'unauthorized_sql_table') {
+        return {
+          kind: 'deny',
+          reasonCode: ReasonCode.ToolSqlTable,
+          ruleIds: [SQL_TABLE_RULE_ID],
+          severity: 'high',
+          category: SQL_CATEGORY,
+          reason: `tool arguments read a table outside the allowlist (table=${verdict.matchedTable ?? 'unknown'})`,
+        }
       }
     }
   }
@@ -517,6 +641,43 @@ export function evaluateToolCall(
   // (5) trajectory chains over the session trail
   const chain = findChainDenial(ruleset.chains, view, session)
   if (chain !== undefined) return chain
+
+  // (5b) repeated failed attempts on the same tool (kernel `trajectory.py`
+  // `repeated_attempt_threshold`). A success resets the counter, so a tool that
+  // failed five times, then worked, starts clean again.
+  if (cfg.repeatedAttemptThreshold > 0) {
+    const failures = session.failures?.[view.name] ?? 0
+    if (failures >= cfg.repeatedAttemptThreshold) {
+      return {
+        kind: 'deny',
+        reasonCode: ReasonCode.ToolRepeatedAttempt,
+        ruleIds: [],
+        severity: 'high',
+        category: 'repeated_attempts',
+        reason: `tool already failed ${failures} times this session (threshold ${cfg.repeatedAttemptThreshold})`,
+      }
+    }
+  }
+
+  // (5c) high-entropy string argument (kernel `trajectory.py` `entropy_threshold`,
+  // default 0 = off, as in the kernel). Only the length, entropy value and the
+  // argument index are reported — never the value.
+  if (entropyActive && scan !== undefined) {
+    for (let index = 0; index < scan.strings.length; index += 1) {
+      const candidate = scan.strings[index]
+      if (candidate === undefined || candidate.length < cfg.entropyMinLength) continue
+      const entropy = shannonEntropy(candidate)
+      if (entropy < cfg.entropyThreshold) continue
+      return {
+        kind: 'deny',
+        reasonCode: ReasonCode.ToolHighEntropy,
+        ruleIds: [],
+        severity: 'high',
+        category: 'high_entropy',
+        reason: `argument ${index} looks like an encoded payload (length ${candidate.length}, entropy ${entropy.toFixed(2)})`,
+      }
+    }
+  }
 
   // (6) approval-required tools
   if (matchNamePattern(view.name, cfg.askTools)) {
@@ -651,11 +812,11 @@ function hasHighEntropyToken(text: string): boolean {
 }
 
 /**
- * Scan one tool result for credential leaks and injection markers.
+ * Scan one tool result for credential leaks, PII classes and injection markers.
  *
  * At most {@link MAX_RESULT_SCAN_CHARS} characters are inspected (the hook layer
- * applies the same bound to the view). Two findings can be returned, one per
- * category, each carrying every rule id that fired and the highest severity.
+ * applies the same bound to the view). Up to three findings can be returned, one
+ * per category, each carrying every rule id that fired and the highest severity.
  * `detail` is a fixed ASCII description: a matched substring is never copied into
  * a finding, so the finding is safe to persist and to show an operator.
  *
@@ -666,7 +827,7 @@ function hasHighEntropyToken(text: string): boolean {
  * @param ruleset - compiled injection/leak rules.
  * @param cfg - `ResolvedConfig['results']`.
  * @param view - the result as the engine sees it.
- * @returns findings in deterministic order (credential first), `[]` when clean.
+ * @returns findings in deterministic order (credential, pii, injection), `[]` when clean.
  */
 export function scanToolResult(
   ruleset: RuleSet,
@@ -703,7 +864,20 @@ export function scanToolResult(
     })
   }
 
-  // (b) injection markers: the same prompt-injection rule family as the input face
+  // (b) PII / sensitive-value classes (kernel `memory/sanitizer.py`, 1.12.0)
+  if (cfg.pii) {
+    const pii = scanPii(scanned, cfg.piiClasses)
+    if (pii.classes.length > 0) {
+      findings.push({
+        category: 'pii',
+        ruleIds: [...pii.classes],
+        severity: pii.severity ?? 'medium',
+        detail: 'PII-shaped value in tool result (value never recorded)',
+      })
+    }
+  }
+
+  // (c) injection markers: the same prompt-injection rule family as the input face
   const injectionIds: string[] = []
   let injectionSeverity: Severity | undefined
   for (const rule of ruleset.rules) {

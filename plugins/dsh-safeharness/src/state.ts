@@ -18,6 +18,10 @@ export const MAX_TRAIL = 64
 export const MAX_SESSIONS = 256
 /** Default page size for {@link SessionStateStore.list}. */
 export const MAX_LISTED_SESSIONS = 50
+/** Maximum distinct tool names whose failures are tracked per session. */
+export const MAX_FAILURE_TOOLS = 64
+/** Maximum distinct tool names whose descriptor warning was already reported. */
+export const MAX_FLAGGED_DESCRIPTORS = 64
 
 /** Format version of the plugin-owned session metadata index. */
 export const SESSION_INDEX_VERSION = 1
@@ -62,6 +66,17 @@ export interface SessionState {
   trail: ToolTrailEntry[]
   /** Total tool calls observed (may exceed the retained trail length). */
   totalCalls: number
+  /**
+   * Consecutive failed executions per tool name (kernel `trajectory.denials`):
+   * a success clears the entry, so "it failed, then worked" starts clean.
+   */
+  failures: Record<string, number>
+  /**
+   * Tool names whose descriptor already produced a warning in this session.
+   * A hostile description is a property of the tool, not of one call, so the
+   * warning is written once per session instead of on every proposal.
+   */
+  flaggedDescriptors: Set<string>
   /** Per-session decision counters. */
   counters: { allow: number; deny: number; ask: number; warn: number }
   /** Last time this session produced an event (epoch ms), for LRU. */
@@ -159,6 +174,8 @@ export class SessionStateStore {
       sessionId: key,
       trail: [],
       totalCalls: 0,
+      failures: {},
+      flaggedDescriptors: new Set<string>(),
       counters: { allow: 0, deny: 0, ask: 0, warn: 0 },
       touchedAt: Date.now(),
       historical: false,
@@ -175,7 +192,48 @@ export class SessionStateStore {
       sessionId: state.sessionId,
       trail: state.trail,
       totalCalls: state.totalCalls,
+      failures: state.failures,
     }
+  }
+
+  /**
+   * Record one execution outcome for the repeated-attempt check.
+   *
+   * Mirrors the kernel's `trajectory.py`: a failure raises the per-tool counter, a
+   * success clears it (the tool worked, so the pressure is gone). Only names are
+   * stored, never arguments, and the map is bounded so a session that touches
+   * thousands of MCP tools cannot grow it without limit.
+   */
+  recordToolOutcome(sessionId: string | undefined, toolName: string, isError: boolean): void {
+    if (toolName.length === 0) return
+    const state = this.of(sessionId)
+    if (!isError) {
+      delete state.failures[toolName]
+      return
+    }
+    if (state.failures[toolName] === undefined && Object.keys(state.failures).length >= MAX_FAILURE_TOOLS) {
+      // Bounded: drop the oldest insertion (object key order is insertion order for
+      // string keys), which is the least recently added failure.
+      const oldest = Object.keys(state.failures)[0]
+      if (oldest !== undefined) delete state.failures[oldest]
+    }
+    state.failures[toolName] = (state.failures[toolName] ?? 0) + 1
+  }
+
+  /**
+   * Note that a tool's descriptor was reported, returning true only the first time.
+   *
+   * @returns whether this call is the first flagged proposal of that tool this session.
+   */
+  noteDescriptorFlag(sessionId: string | undefined, toolName: string): boolean {
+    const state = this.of(sessionId)
+    if (state.flaggedDescriptors.has(toolName)) return false
+    if (state.flaggedDescriptors.size >= MAX_FLAGGED_DESCRIPTORS) {
+      const first = state.flaggedDescriptors.values().next()
+      if (first.done !== true) state.flaggedDescriptors.delete(first.value)
+    }
+    state.flaggedDescriptors.add(toolName)
+    return true
   }
 
   /** Record one tool call in the session trail (bounded). */
@@ -350,6 +408,8 @@ export class SessionStateStore {
           sessionId: item.id,
           trail: [],
           totalCalls: 0,
+          failures: {},
+          flaggedDescriptors: new Set<string>(),
           counters: { allow: 0, deny: 0, ask: 0, warn: 0 },
           touchedAt: item.touchedAt,
           ...(item.workspace === undefined ? {} : { workspace: item.workspace }),

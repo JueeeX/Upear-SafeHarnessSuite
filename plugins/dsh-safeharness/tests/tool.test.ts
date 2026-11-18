@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ResolvedConfig } from '../src/config.js'
+import { PII_CLASS_NAMES } from '../src/engine/pii.js'
 import {
   evaluateToolCall,
   matchNamePattern,
@@ -46,6 +47,13 @@ function toolsConfig(overrides: Partial<ResolvedConfig['tools']> = {}): Resolved
     askTools: [],
     denyTags: [],
     maxArgsBytes: 65_536,
+    // 1.12.0 fields, spelled out exactly as `resolveConfig` defaults them.
+    sqlScan: 'execution',
+    sql: { allowedTables: [] },
+    descriptorScan: 'warn',
+    repeatedAttemptThreshold: 0,
+    entropyThreshold: 0,
+    entropyMinLength: 48,
     trajectory: true,
     tagOverrides: [],
     ...overrides,
@@ -54,7 +62,16 @@ function toolsConfig(overrides: Partial<ResolvedConfig['tools']> = {}): Resolved
 
 /** Resolved `results` config with per-test overrides. */
 function resultsConfig(overrides: Partial<ResolvedConfig['results']> = {}): ResolvedConfig['results'] {
-  return { mode: 'warn', blockOn: ['credential_leak'], ...overrides }
+  // PII is off in this helper on purpose: the cases here assert the credential and
+  // injection findings exactly, and an email/sk- sample would add a third category.
+  // `tests/pii.test.ts` owns the pii path.
+  return {
+    mode: 'warn',
+    blockOn: ['credential_leak'],
+    pii: false,
+    piiClasses: [...PII_CLASS_NAMES],
+    ...overrides,
+  }
 }
 
 /** An engine view of one call. `argsBytes` defaults to the canonical JSON size. */

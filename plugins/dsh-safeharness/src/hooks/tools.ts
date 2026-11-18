@@ -19,6 +19,7 @@ import type { Runtime } from '../runtime.js'
 import { foundSomething, RESULT_BLOCK_TEXT, TOOL_DENIAL_TEXT } from '../runtime.js'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { contentDigest } from '../util/hash.js'
+import { ReasonCode } from '../engine/types.js'
 import { matchNamePattern } from '../engine/tool.js'
 import { agentIdOf, argsByteLength, callIdOf, sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf, toolResultViewOf, toolViewOf } from './context.js'
 
@@ -90,6 +91,25 @@ export function installToolHooks(ctx: Context, runtime: Runtime): void {
         severity: decision.severity,
         category: decision.category,
         args_chars: view.argsBytes,
+      }
+
+      // A descriptor hit in `warn` mode is the one ALLOW that still carries a
+      // finding: the call proceeds, but the tool itself is recorded once per
+      // session (kernel `mcp_guard` warns per listing; a DSH session lists a tool
+      // once, so warning once per session is the equivalent).
+      if (decision.kind === 'allow' && decision.reasonCode === ReasonCode.ToolDescriptor) {
+        if (runtime.state.noteDescriptorFlag(sessionId, view.name)) {
+          runtime.audit('tool_descriptor_flagged', {
+            ...base,
+            decision: 'warn',
+            reason_code: decision.reasonCode,
+            rule_ids: [...decision.ruleIds],
+            severity: decision.severity,
+            category: decision.category,
+          })
+          runtime.count('warn', sessionId)
+        }
+        return next()
       }
 
       if (!foundSomething(decision) || decision.kind === 'allow') {
@@ -228,6 +248,9 @@ export function installToolHooks(ctx: Context, runtime: Runtime): void {
       const start = takeStart(exec)
       const sessionId = sessionIdOf(exec.agent)
       const agentId = agentIdOf(exec.agent)
+      // Repeated-attempt pressure (kernel `trajectory.py`): a failed execution raises
+      // the per-tool counter a later pre-execute check reads; a success clears it.
+      runtime.state.recordToolOutcome(sessionId, exec.name, result.isError)
       const args = contentDigest(exec.arguments)
       const content = contentDigest(result.content.map((block) => (block.type === 'text' ? block.text : block.type)))
       const metrics: Record<string, number | boolean> = { is_error: result.isError, content_chars: content.chars }
