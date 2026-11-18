@@ -20,6 +20,7 @@ import { JUDGE_PROBE_TEXT } from '../surface/commands.js'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { resolveProviderIndexPath } from '../audit/paths.js'
+import { PII_CLASS_NAMES } from '../engine/pii.js'
 import type {
   PanelCustomProvider,
   PanelDraftSettings,
@@ -48,6 +49,15 @@ const MIN_MAX_CHARS = 500
 const MAX_MAX_CHARS = 200_000
 const MIN_TIMEOUT_MS = 500
 const MAX_TIMEOUT_MS = 60_000
+
+/** Tool-detection bounds accepted by a save (1.12.0). */
+const MAX_FAILURE_THRESHOLD = 1_000
+const MAX_ENTROPY_THRESHOLD = 8
+const MAX_ENTROPY_MIN_LENGTH = 1_000_000
+const MAX_ALLOWED_TABLES = 200
+const MAX_TABLE_CHARS = 128
+/** A table reference the allowlist accepts: identifier chars, dots and dashes. */
+const TABLE_PATTERN = /^[A-Za-z0-9_$.-]{1,128}$/u
 
 /** Custom-provider bounds and grammar. */
 const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]{1,39}$/u
@@ -170,6 +180,61 @@ function routeField(value: unknown, name: string): string {
   if (/[\r\n]/u.test(trimmed)) throw new PanelSettingsError('settings_invalid', `${name} must be a single line`)
   if (trimmed.length > MAX_ROUTE_CHARS) throw new PanelSettingsError('settings_invalid', `${name} is too long`)
   return trimmed
+}
+
+/**
+ * Validate a finite number field (the entropy threshold is not an integer).
+ *
+ * @param value - candidate value from the browser.
+ * @param name - dotted field name used in the refusal message.
+ * @param min - inclusive lower bound.
+ * @param max - inclusive upper bound.
+ * @returns the number, unchanged.
+ */
+function numberField(value: unknown, name: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+    throw new PanelSettingsError('settings_invalid', `${name} must be a number between ${min} and ${max}`)
+  }
+  return value
+}
+
+/**
+ * Validate the SQL table allowlist.
+ *
+ * The engine compares entries case-insensitively and on the bare table name, so the
+ * panel only has to refuse what could never be a table reference (whitespace, SQL
+ * punctuation, control characters) and keep the list bounded. An empty list is
+ * meaningful: it means "no restriction", exactly like the config default.
+ */
+function tableListField(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new PanelSettingsError('settings_invalid', 'toolDetection.allowedTables must be an array')
+  if (value.length > MAX_ALLOWED_TABLES) {
+    throw new PanelSettingsError('settings_invalid', `toolDetection.allowedTables accepts at most ${MAX_ALLOWED_TABLES} entries`)
+  }
+  const out: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') throw new PanelSettingsError('settings_invalid', 'toolDetection.allowedTables entries must be strings')
+    const trimmed = entry.trim()
+    if (trimmed.length === 0) continue
+    if (trimmed.length > MAX_TABLE_CHARS || !TABLE_PATTERN.test(trimmed)) {
+      throw new PanelSettingsError('settings_invalid', 'toolDetection.allowedTables entries must be table identifiers (letters, digits, _ $ . -)')
+    }
+    if (!out.includes(trimmed)) out.push(trimmed)
+  }
+  return out
+}
+
+/** Validate the enabled PII class subset against the kernel vocabulary. */
+function piiClassesField(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new PanelSettingsError('settings_invalid', 'pii.classes must be an array')
+  const out: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !PII_CLASS_NAMES.includes(entry)) {
+      throw new PanelSettingsError('settings_invalid', `pii.classes only accepts ${PII_CLASS_NAMES.join(', ')}`)
+    }
+    if (!out.includes(entry)) out.push(entry)
+  }
+  return out
 }
 
 /**
@@ -479,11 +544,21 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       failClosed: cfg.input.judgeFailClosed,
       normalize: cfg.input.normalize,
     }
+    const toolDetection = {
+      descriptorScan: cfg.tools.descriptorScan,
+      repeatedAttemptThreshold: cfg.tools.repeatedAttemptThreshold,
+      entropyThreshold: cfg.tools.entropyThreshold,
+      entropyMinLength: cfg.tools.entropyMinLength,
+      allowedTables: [...cfg.tools.sql.allowedTables],
+    }
+    const pii = { enabled: cfg.results.pii, classes: [...cfg.results.piiClasses] }
     const custom = loadCustomProviders().map(({ credentialRef: _credentialRef, ...row }) => row)
     return {
       preset: cfg.preset,
       surfaces,
       inputJudge,
+      toolDetection,
+      pii,
       judge,
       draft,
       providers: await loadCatalog(llm),
@@ -515,6 +590,10 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     const input: Record<string, unknown> = {}
     // `output` carries both the judge route and the surface mode; same reason.
     const output: Record<string, unknown> = {}
+    // `tools` / `results` carry a surface mode *and* the 1.12.0 detection knobs, so
+    // they are collected the same way (a save that changes both must not drop one).
+    const tools: Record<string, unknown> = {}
+    const results: Record<string, unknown> = {}
 
     if (patch.surfaces !== undefined && patch.surfaces !== null) {
       const surfaces = patch.surfaces
@@ -528,13 +607,13 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         if (surfaces.tools !== 'off' && surfaces.tools !== 'warn' && surfaces.tools !== 'enforce') {
           throw new PanelSettingsError('settings_invalid', 'surfaces.tools must be off, warn or enforce')
         }
-        update['tools'] = { mode: surfaces.tools }
+        tools['mode'] = surfaces.tools
       }
       if (surfaces.results !== undefined) {
         if (surfaces.results !== 'off' && surfaces.results !== 'warn' && surfaces.results !== 'enforce') {
           throw new PanelSettingsError('settings_invalid', 'surfaces.results must be off, warn or enforce')
         }
-        update['results'] = { mode: surfaces.results }
+        results['mode'] = surfaces.results
       }
       if (surfaces.output !== undefined) {
         if (surfaces.output !== 'off' && surfaces.output !== 'warn' && surfaces.output !== 'enforce-buffer') {
@@ -608,8 +687,58 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       update['draft'] = next
     }
 
+    if (patch.toolDetection !== undefined && patch.toolDetection !== null) {
+      const knobs = patch.toolDetection
+      if (knobs.descriptorScan !== undefined) {
+        if (knobs.descriptorScan !== 'off' && knobs.descriptorScan !== 'warn' && knobs.descriptorScan !== 'enforce') {
+          throw new PanelSettingsError('settings_invalid', 'toolDetection.descriptorScan must be off, warn or enforce')
+        }
+        tools['descriptorScan'] = knobs.descriptorScan
+      }
+      if (knobs.repeatedAttemptThreshold !== undefined) {
+        tools['repeatedAttemptThreshold'] = integerField(
+          knobs.repeatedAttemptThreshold,
+          'toolDetection.repeatedAttemptThreshold',
+          0,
+          MAX_FAILURE_THRESHOLD,
+        )
+      }
+      if (knobs.entropyThreshold !== undefined) {
+        tools['entropyThreshold'] = numberField(
+          knobs.entropyThreshold,
+          'toolDetection.entropyThreshold',
+          0,
+          MAX_ENTROPY_THRESHOLD,
+        )
+      }
+      if (knobs.entropyMinLength !== undefined) {
+        tools['entropyMinLength'] = integerField(
+          knobs.entropyMinLength,
+          'toolDetection.entropyMinLength',
+          1,
+          MAX_ENTROPY_MIN_LENGTH,
+        )
+      }
+      if (knobs.allowedTables !== undefined) {
+        tools['sql'] = { allowedTables: tableListField(knobs.allowedTables) }
+      }
+    }
+
+    if (patch.pii !== undefined && patch.pii !== null) {
+      const pii = patch.pii
+      if (pii.enabled !== undefined) {
+        if (typeof pii.enabled !== 'boolean') throw new PanelSettingsError('settings_invalid', 'pii.enabled must be a boolean')
+        results['pii'] = pii.enabled
+      }
+      if (pii.classes !== undefined) {
+        results['piiClasses'] = piiClassesField(pii.classes)
+      }
+    }
+
     if (Object.keys(input).length > 0) update['input'] = input
     if (Object.keys(output).length > 0) update['output'] = output
+    if (Object.keys(tools).length > 0) update['tools'] = tools
+    if (Object.keys(results).length > 0) update['results'] = results
 
     if (Object.keys(update).length === 0) throw new PanelSettingsError('settings_invalid', 'no supported field was supplied')
 
@@ -641,6 +770,8 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         ...(patch.judge?.enabled === undefined ? {} : { judge_next: patch.judge.enabled ? 'on' : 'off' }),
         ...(patch.draft === undefined ? {} : { draft_route: 'changed' }),
         ...(patch.surfaces === undefined ? {} : { surfaces: 'changed' }),
+        ...(patch.toolDetection === undefined ? {} : { tool_detection: 'changed' }),
+        ...(patch.pii === undefined ? {} : { pii: 'changed' }),
       },
     })
     // The loader reconcile is asynchronous; the caller sees the value it can

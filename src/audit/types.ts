@@ -21,6 +21,7 @@ export const AUDIT_KINDS = [
   'tool_checked',
   'tool_denied',
   'tool_asked',
+  'tool_descriptor_flagged',
   'tool_executed',
   'tool_result',
   'tool_result_flagged',

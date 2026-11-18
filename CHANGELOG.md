@@ -2,6 +2,18 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.12.0 — 2026-11-18
+
+检测面与 SafeHarness 内核对齐（P1）：**SQL 表白名单、工具描述符注入扫描、轨迹阈值、PII 10 类**，并把四组开关接到面板。
+
+- **SQL 表白名单（`tools.sql.allowedTables`，空 = 不限制）**：移植内核 `SqlGuardPolicy` 的 `allowed_tables`。非空时，被扫描的 SQL 参数里每个表引用都要命中白名单（`public.users` 也按裸表名 `users` 匹配），否则以 `unauthorized_sql_table` 拒绝；破坏性语句仍先按危险 SQL 拒绝（`tool_denied_by_args`）。只作用于 `tools.sqlScan` 认定的可执行工具。
+- **工具描述符扫描（`tools.descriptorScan`: `off` / `warn` / `enforce`，默认 `warn`）**：移植内核 `mcp_guard` 的描述符部分——用注入规则扫工具**自己的 name/description**（最多 8 KiB）。`warn` 只记一次 `tool_descriptor_flagged`（每会话每工具一次，避免刷账本），`enforce` 每次调用都拒（`tool_descriptor_injection`）。宿主没有「从模型工具表里移除工具」的接缝，所以强制是**逐次拒绝**而不是下架，已写进 MANUAL §4.10。
+- **轨迹阈值（`tools.repeatedAttemptThreshold` / `tools.entropyThreshold` / `tools.entropyMinLength`，默认 0 = 关）**：移植内核 `trajectory.py` 的两个 0 即关闭的阈值。同一工具连续失败达到阈值即拒（`tool_repeated_attempts`，成功清零）；字符串参数长度 ≥ 最短长度且 Shannon 熵 ≥ 阈值即拒（`tool_high_entropy_payload`，只记 index/长度/熵值，不记内容）。
+- **PII 10 类（`results.pii` 默认开，`results.piiClasses` 默认全类）**：把内核 `memory/sanitizer.py` 的十条正则搬进工具结果面，类别名与内核逐条一致（`id_card` / `phone_cn` / `email` / `bank_card` / `api_key` / `jwt` / `doc_no` / `gov_serial` / `customer_id` / `internal_url`），产出 `pii` 类别事件（`rule_ids` = 类别名）。默认只告警：要拦截需把 `pii` 加进 `results.blockOn`（该类别已进白名单校验）。不返回命中文本；邮箱/内网地址两条正则加了长度上界，否则 256 KiB 结果上的回溯是二次的（实测单次扫描 111 s）。
+- **面板**：设置页新增「工具与结果检测」卡片——描述符三档、两个阈值与最短长度、SQL 白名单文本域（每行一个，非热更新：保存会重载插件）、PII 总开关 + 10 个类别勾选。新增 `toolDetection` / `pii` 读写字段，仍走 `POST /safeharness/settings` 的 `op: save`（revision CAS、逐字段覆盖；`tools` / `results` 各自合并，不与同一面的 `mode` 互相覆盖）。审计只记 `tool_detection: changed` / `pii: changed`。
+- **差异（与内核）**：① 内核在 `list_tools` 时扫描描述符并可下架工具，插件在工具调用前扫描、且每个会话只告警一次；② 内核对 SQL 白名单在内容面也算，插件只在工具参数面算（内容面仍只拦破坏性语句，避免讨论 SQL 的良性文本被拒）；③ PII 在内核是记忆写入的脱敏/拒绝，插件没有记忆库，落在工具结果面且默认不拦截。
+- **测试**：新增 4 个文件 / 50 条（PII 20、描述符 9、SQL 白名单 9、轨迹阈值 12）＋面板 4 条；51 文件 / 821 用例。
+
 ## 1.11.0 — 2026-11-18
 
 输入面与 SafeHarness 内核对齐：**归一化 + MODIFY**，以及**输入语义评审**。

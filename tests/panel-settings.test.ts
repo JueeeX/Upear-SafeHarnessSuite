@@ -16,9 +16,16 @@ function stubRuntime(overrides: {
 } = {}): Runtime {
   const config = {
     preset: 'balanced',
-    input: { mode: 'enforce' as const },
-    tools: { mode: 'enforce' as const },
-    results: { mode: 'warn' as const },
+    input: { mode: 'enforce' as const, judge: 'flagged' as const, judgeFailClosed: false, normalize: true },
+    tools: {
+      mode: 'enforce' as const,
+      descriptorScan: 'warn' as const,
+      repeatedAttemptThreshold: 0,
+      entropyThreshold: 0,
+      entropyMinLength: 48,
+      sql: { allowedTables: [] as string[] },
+    },
+    results: { mode: 'warn' as const, pii: true, piiClasses: ['id_card', 'email'] as string[] },
     output: {
       mode: 'warn' as const,
       judge: {
@@ -181,6 +188,93 @@ describe('createPanelSettingsHost', () => {
       output: { mode: 'enforce-buffer', judge: { enabled: true } },
       approval: { mode: 'policy' },
     })
+  })
+
+  it('writes the 1.12.0 tool-detection knobs, keeping the surface mode in the same tools object', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({
+      surfaces: { tools: 'warn' },
+      toolDetection: {
+        descriptorScan: 'enforce',
+        repeatedAttemptThreshold: 3,
+        entropyThreshold: 4.5,
+        entropyMinLength: 64,
+        allowedTables: ['users', 'audit_log'],
+      },
+    })
+    expect(update).toHaveBeenCalledWith('safeharness', {
+      tools: {
+        mode: 'warn',
+        descriptorScan: 'enforce',
+        repeatedAttemptThreshold: 3,
+        entropyThreshold: 4.5,
+        entropyMinLength: 64,
+        sql: { allowedTables: ['users', 'audit_log'] },
+      },
+    })
+  })
+
+  it('writes the PII scan settings as a results object of their own', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ surfaces: { results: 'enforce' }, pii: { enabled: true, classes: ['id_card', 'phone_cn'] } })
+    expect(update).toHaveBeenCalledWith('safeharness', {
+      results: { mode: 'enforce', pii: true, piiClasses: ['id_card', 'phone_cn'] },
+    })
+  })
+
+  it('refuses invalid 1.12.0 values before touching the host config', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ toolDetection: { descriptorScan: 'block' as never } }))
+      .rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ toolDetection: { repeatedAttemptThreshold: -1 } }))
+      .rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ toolDetection: { entropyThreshold: 9 } }))
+      .rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ toolDetection: { entropyMinLength: 0 } }))
+      .rejects.toMatchObject({ code: 'settings_invalid' })
+    // A table entry is an identifier, never a statement or a quoted string.
+    await expect(host.save({ toolDetection: { allowedTables: ['users; DROP TABLE x'] } }))
+      .rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ pii: { classes: ['passport'] } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ pii: { enabled: 'yes' as never } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('reads the 1.12.0 detection state back to the panel', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    const value = await host.read()
+    expect(value.toolDetection).toEqual({
+      descriptorScan: 'warn',
+      repeatedAttemptThreshold: 0,
+      entropyThreshold: 0,
+      entropyMinLength: 48,
+      allowedTables: [],
+    })
+    expect(value.pii).toEqual({ enabled: true, classes: ['id_card', 'email'] })
   })
 
   it('refuses an unknown surface mode', async () => {

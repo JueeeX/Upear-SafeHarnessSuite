@@ -240,6 +240,35 @@ export interface PanelInputJudge {
   readonly normalize: boolean
 }
 
+/**
+ * Tool-surface detection knobs (1.12.0): the kernel-parity switches that are not
+ * an enforcement level — descriptor scanning, the two trajectory thresholds and the
+ * SQL table allowlist.
+ *
+ * Everything here except `allowedTables` is a `volatile` field, so a save takes
+ * effect without remounting the plugin; `allowedTables` lives in the patch layer
+ * and therefore reloads the entry (the panel says so next to the control).
+ */
+export interface PanelToolDetection {
+  /** `off`, `warn` (record the hit, run the call) or `enforce` (deny the call). */
+  readonly descriptorScan: 'off' | 'warn' | 'enforce'
+  /** Deny a tool that already failed this many times this session; 0 disables. */
+  readonly repeatedAttemptThreshold: number
+  /** Shannon-entropy threshold for one string argument, bits/char; 0 disables. */
+  readonly entropyThreshold: number
+  /** Minimum argument length before the entropy check applies. */
+  readonly entropyMinLength: number
+  /** SQL table allowlist for scanned arguments; empty means no restriction. */
+  readonly allowedTables: readonly string[]
+}
+
+/** Result-surface PII scan settings (kernel `memory/sanitizer.py` classes). */
+export interface PanelResultPii {
+  readonly enabled: boolean
+  /** Enabled class names, in the kernel's declaration order. */
+  readonly classes: readonly string[]
+}
+
 /** Everything the settings tab renders (one `settings` call). */
 export interface PanelSettingsValue {
   readonly preset: string
@@ -247,6 +276,10 @@ export interface PanelSettingsValue {
   readonly surfaces: PanelSurfaceSettings
   /** Input normalization and semantic judge. */
   readonly inputJudge: PanelInputJudge
+  /** Descriptor scan, trajectory thresholds and the SQL table allowlist. */
+  readonly toolDetection: PanelToolDetection
+  /** Tool-result PII scan. */
+  readonly pii: PanelResultPii
   readonly judge: PanelJudgeSettings
   readonly draft: PanelDraftSettings
   /** Provider/model catalog for the two route pickers (bounded). */
@@ -308,6 +341,19 @@ export interface PanelSettingsPatch {
     readonly mode?: 'off' | 'flagged' | 'always'
     readonly failClosed?: boolean
     readonly normalize?: boolean
+  }
+  /** Tool-surface detection knobs (descriptor scan, thresholds, table allowlist). */
+  readonly toolDetection?: {
+    readonly descriptorScan?: 'off' | 'warn' | 'enforce'
+    readonly repeatedAttemptThreshold?: number
+    readonly entropyThreshold?: number
+    readonly entropyMinLength?: number
+    readonly allowedTables?: readonly string[]
+  }
+  /** Tool-result PII scan (`enabled` plus an optional class subset). */
+  readonly pii?: {
+    readonly enabled?: boolean
+    readonly classes?: readonly string[]
   }
   readonly judge?: {
     readonly enabled?: boolean

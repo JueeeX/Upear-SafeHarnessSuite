@@ -104,8 +104,14 @@ describe('settings schema', () => {
       'output.judge.timeoutMs',
       'output.mode',
       'results.mode',
+      'results.pii',
+      'results.piiClasses',
+      'tools.descriptorScan',
+      'tools.entropyMinLength',
+      'tools.entropyThreshold',
       'tools.maxArgsBytes',
       'tools.mode',
+      'tools.repeatedAttemptThreshold',
       'tools.trajectory',
     ].sort())
   })

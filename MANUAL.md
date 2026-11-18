@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.11.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.12.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -88,6 +88,10 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 - SQL 判定是结构判定：危险关键字、批处理、导出子句；`SELECT 1; SELECT 2` 不算危险。
 - **SQL 判定只作用于能执行它的工具**（1.2.2，R42）：`db_query` / `pwsh` / `bash` / `mcp__postgres_query` 这类"执行面"工具照旧扫；`write` / `edit` / `apply_patch` / `read` 这类只落文本的工具不再因为**引用**一条破坏性语句被拒（写文档、写测试夹具、写迁移脚本都需要引用）。无法识别的工具名仍按旧规则扫描（fail-closed）；`tools.sqlScan: all` 可一键回到 1.2.1 语义。详见 §4.6。
 - 轨迹链规则默认 3 条（例如"先读凭据再外联"一类组合）；链规则只认工具名正则或标签，不依赖操作者额外配置。
+- **SQL 表白名单（1.12.0）**：`tools.sql.allowedTables` 非空时，被扫描参数里的每个表引用都必须命中白名单（`public.users` 按裸表名 `users` 匹配），否则 `unauthorized_sql_table`；破坏性语句仍先按危险 SQL 拒绝。
+- **工具描述符扫描（1.12.0）**：`tools.descriptorScan`（默认 `warn`）用注入规则扫工具自身的 name/description；`warn` 每会话每工具记一次 `tool_descriptor_flagged`，`enforce` 每次调用都拒。
+- **轨迹阈值（1.12.0）**：`tools.repeatedAttemptThreshold`（同一工具连续失败达到阈值即拒，成功清零）与 `tools.entropyThreshold` + `entropyMinLength`（长字符串参数的 Shannon 熵越界即拒），两者默认 0 = 关闭。
+- **PII 10 类（1.12.0）**：`results.pii`（默认开）把内核 `memory/sanitizer.py` 的十条正则用于工具结果，产出 `pii` 类别事件；默认只告警，拦截需把 `pii` 加进 `results.blockOn`。详见 §4.10。
 - 同步 guard 是最后一道内联兜底：pre-execute 是异步的，guard 是同步的；两者都对结果写账本。
 
 ### 2.3 输出面与语义 judge
@@ -130,7 +134,7 @@ pnpm test             # 752 个用例（45 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.11.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
+# -> dist/upear-dsh-safeharness-1.12.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -144,7 +148,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.11.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.12.0.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -581,6 +585,28 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 - **与内核的差异**：内核 `UNCERTAIN` 一律拦；插件默认 fail-open，只在 `hardened` 或显式开关时 fail-closed。原因是 DSH profile 可能没有配置评审路由，恒 fail-closed 会让每一次输入都被拒。
 - 结构规则已经拒绝的回合不再调用评审，省一次模型调用。
 - 面板位置：设置 → 防护面卡片（输入语义评审三档 + fail-closed + 归一化开关）。
+
+### 4.10 工具/结果检测与内核对齐（1.12.0）
+
+四组开关都来自内核**已经实现**的策略，不引入新语义。面板位置：设置 → **工具与结果检测**。
+
+| 字段 | 默认 | 作用 |
+|---|---|---|
+| `tools.sql.allowedTables` | `[]`（不限制） | 非空时，被扫描的 SQL 参数里每个表引用都必须命中；`public.users` 按裸表名匹配。命中非白名单 → `unauthorized_sql_table`。**非热更新**：面板保存会重载插件。 |
+| `tools.descriptorScan` | `warn` | 用注入规则扫工具自身的 name/description（≤8 KiB）。`off` 不扫；`warn` 每会话每工具记一次 `tool_descriptor_flagged` 后照常执行；`enforce` 每次调用都拒（`tool_descriptor_injection`）。 |
+| `tools.repeatedAttemptThreshold` | `0`（关） | 同一工具**连续失败**达到阈值即拒（`tool_repeated_attempts`）；一次成功清零。失败由 `tools/result` 的 `isError` 计数。 |
+| `tools.entropyThreshold` / `entropyMinLength` | `0` / `48` | 字符串参数（含嵌套）长度 ≥ 最短长度且 Shannon 熵（bits/char）≥ 阈值即拒（`tool_high_entropy_payload`）；只记 index、长度与熵值。阈值范围 0–8。 |
+| `results.pii` / `results.piiClasses` | `true` / 全部 10 类 | 工具结果面的 PII 检测，类别名与内核逐条一致：`id_card`、`phone_cn`、`email`、`bank_card`、`api_key`、`jwt`、`doc_no`、`gov_serial`、`customer_id`、`internal_url`。产出 `category: pii` 事件（`rule_ids` = 类别名）。 |
+
+**PII 怎么拦**：默认 `results.mode: warn` 只记事件；要拦截，把 `results.mode` 设为 `enforce` 且把 `pii` 加进 `results.blockOn`（该类别已进白名单校验；`blockOn` 的图形编辑排在下个版本）。检测不返回命中文本，`detail` 是固定英文描述。
+
+**SQL 白名单的边界**：只作用于 `tools.sqlScan` 认定的**可执行**工具（`db_query`、`pwsh`、`mcp__postgres_query` 等）；`write`/`edit`/`read` 这类只落文本的工具不在扫描范围（R42）。内容面（用户输入）仍只拦破坏性语句——否则讨论 SQL 的良性文本会被拒。
+
+**工具描述符为什么按"每次调用"强制**：宿主没有"从模型工具表里移除某个工具"的接缝（内核 `mcp_guard` 是在 `list_tools` 里下架）。插件的 `enforce` 因此是逐次拒绝；告警则按会话去重，避免模型反复调用同一个恶意工具时刷满账本。
+
+**与内核的三处差异**：① 描述符扫描时机（调用前 vs 列举时）与去重口径；② SQL 白名单只在工具参数面算；③ PII 在内核是记忆写入的脱敏/拒绝，插件没有记忆库，落在工具结果面且默认不拦截。
+
+**面板**：新卡片「工具与结果检测」提供描述符三档、两个阈值、最短长度、SQL 白名单文本域（每行一个，`,` 也接受）与 PII 10 个类别勾选。保存仍走 `POST /safeharness/settings` 的 `op: save`（revision CAS、逐字段覆盖）：`tools` 与 `results` 各自合并，不与同一面的 `mode` 互相覆盖；审计只记 `tool_detection: changed` / `pii: changed`。
 
 ---
 ## 5. 预设与失败语义

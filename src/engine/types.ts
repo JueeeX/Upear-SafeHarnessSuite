@@ -31,10 +31,20 @@ export const ReasonCode = {
   ToolChain: 'tool_denied_by_chain',
   ToolAsk: 'tool_ask_required',
   ToolArgsTooLarge: 'tool_args_too_large',
+  /** A SQL read touched a table outside `tools.sql.allowedTables` (kernel code). */
+  ToolSqlTable: 'unauthorized_sql_table',
+  /** The tool's own name/description matched an injection rule (kernel mcp_guard). */
+  ToolDescriptor: 'tool_descriptor_injection',
+  /** The same tool already failed this many times in one session (kernel trajectory). */
+  ToolRepeatedAttempt: 'tool_repeated_attempts',
+  /** A string argument is shaped like an encoded payload (kernel entropy threshold). */
+  ToolHighEntropy: 'tool_high_entropy_payload',
   GuardInternal: 'guard_internal_error',
   // result surface
   CredentialLeak: 'credential_leak',
   InjectionMarker: 'injection_marker',
+  /** PII / sensitive-value class matched (kernel memory sanitizer vocabulary). */
+  Pii: 'pii',
   // output surface
   OutputRule: 'output_rule_hit',
   OutputJudgeBlocked: 'output_judge_blocked',
@@ -191,6 +201,12 @@ export interface SessionView {
   readonly trail: readonly ToolTrailEntry[]
   /** Number of tool calls observed (== trail length unless bounded). */
   readonly totalCalls: number
+  /**
+   * Consecutive failed executions per tool name (kernel `trajectory.denials`):
+   * a success resets the entry. Absent means "nothing failed", so a caller that
+   * does not track outcomes keeps working unchanged.
+   */
+  readonly failures?: Readonly<Record<string, number>>
 }
 
 /** A tool result as the engine sees it: text projections only. */
@@ -206,7 +222,7 @@ export interface ToolResultView {
 
 /** One detected problem in a tool result. */
 export interface ResultFinding {
-  readonly category: 'credential_leak' | 'injection_marker'
+  readonly category: 'credential_leak' | 'injection_marker' | 'pii'
   readonly ruleIds: readonly string[]
   readonly severity: Severity
   /** Matched span descriptions (rule ids only, never the matched text). */
