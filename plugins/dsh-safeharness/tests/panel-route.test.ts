@@ -711,6 +711,78 @@ describe('write-rule endpoint', () => {
   })
 })
 
+describe('rule snapshot endpoint (1.14.0)', () => {
+  const logger = { info: () => {}, warn: () => {}, error: () => {} }
+  const url = '/safeharness/write-rule'
+
+  it('reports unavailability when this profile wires no history', async () => {
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { op: 'history' } }), out.res)
+    expect(JSON.parse(out.body)).toEqual({
+      ok: false,
+      error: { code: 'write_unavailable', message: 'rule snapshots are not wired in this profile' },
+    })
+  })
+
+  it('lists the snapshots through the same fenced endpoint', async () => {
+    const history = {
+      list: () => ({ limit: 10, snapshots: [{ id: '20261118T140000Z-1', createdAt: 1, trigger: 'write', files: 2, bytes: 40, active: true }] }),
+      rollback: () => { throw new Error('must not be called') },
+      snapshotBeforeWrite: () => undefined,
+    }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleHistory: history })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { op: 'history' } }), out.res)
+    expect(JSON.parse(out.body)).toEqual({
+      ok: true,
+      value: { limit: 10, snapshots: [{ id: '20261118T140000Z-1', createdAt: 1, trigger: 'write', files: 2, bytes: 40, active: true }] },
+    })
+  })
+
+  it('forwards the snapshot handle to rollback and returns its value', async () => {
+    const seen: unknown[] = []
+    const history = {
+      list: () => ({ limit: 10, snapshots: [] }),
+      rollback: (id: unknown) => {
+        seen.push(id)
+        return { snapshot: '20261118T140000Z-1', preRollback: null, files: 1, bytes: 10, removed: ['gone.yaml'], rules: 20, chains: 3, hash: 'abc', reloaded: true }
+      },
+      snapshotBeforeWrite: () => undefined,
+    }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleHistory: history })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { op: 'rollback', snapshot: '20261118T140000Z-1' } }), out.res)
+    expect(seen).toEqual(['20261118T140000Z-1'])
+    expect(JSON.parse(out.body)).toMatchObject({ ok: true, value: { removed: ['gone.yaml'], reloaded: true } })
+  })
+
+  it('carries a refused rollback as a typed error with the loader problems', async () => {
+    const history = {
+      list: () => ({ limit: 10, snapshots: [] }),
+      rollback: () => {
+        throw new RuleWriteError('rule_content_invalid', 'the snapshot does not load against the current packaged and inline rules', ["rule 'x': pattern does not compile"])
+      },
+      snapshotBeforeWrite: () => undefined,
+    }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleHistory: history })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { op: 'rollback', snapshot: '20261118T140000Z-1' } }), out.res)
+    expect(JSON.parse(out.body)).toMatchObject({
+      ok: false,
+      error: { code: 'rule_content_invalid', problems: ["rule 'x': pattern does not compile"] },
+    })
+  })
+
+  it('rejects an unknown op instead of silently writing', async () => {
+    const writer = { write: async () => { throw new Error('must not be called') } }
+    const handler = createPanelHandler({ runtime: stubRuntime(), startedAt: 0, logger, ruleWriter: writer })
+    const out = response()
+    await handler(request({ host: '127.0.0.1:61112' }, { url, body: { op: 'delete-everything' } }), out.res)
+    expect(JSON.parse(out.body)).toMatchObject({ ok: false, error: { code: 'invalid_body' } })
+  })
+})
+
 describe('registerPanelRoute', () => {
   /** One route registration captured from the fake web server. */
   interface CapturedRoute {

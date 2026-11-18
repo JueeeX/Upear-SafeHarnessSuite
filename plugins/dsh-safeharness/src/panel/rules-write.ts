@@ -68,7 +68,6 @@ export interface RuleWriteRequest {
   /** True only after the operator confirmed replacing an existing file. */
   readonly overwrite: boolean
 }
-
 /** What a successful write did. */
 export interface RuleWriteValue {
   readonly filename: string
@@ -84,6 +83,8 @@ export interface RuleWriteValue {
   readonly created: boolean
   /** False when the file landed but the hot reload kept the previous set. */
   readonly reloaded: boolean
+  /** Snapshot taken before this write (1.14.0), when the history was writable. */
+  readonly snapshot?: string
 }
 
 /** The write surface the panel route calls. */
@@ -102,6 +103,12 @@ export interface RuleWriterOptions {
   readonly reload: () => { readonly rules: number; readonly chains: number; readonly hash: string }
   /** Plugin logger (content-free messages only). */
   readonly logger: LoggerLike
+  /**
+   * Capture the live directory before the write (1.14.0 rollback support).
+   *
+   * @returns the snapshot id to report, or `undefined` when nothing was captured.
+   */
+  readonly beforeWrite?: () => string | undefined
 }
 
 /** One-line, content-free description of a filesystem failure. */
@@ -186,6 +193,11 @@ export function createRuleWriter(options: RuleWriterOptions): RuleWriterHost {
 
     // 3) Atomic write inside the target directory. The temporary name does not end
     //    in .yaml/.yml, so a watcher tick can never load a half-written file.
+    //
+    // Before touching the disk, capture the current directory: the write is already
+    // validated, so this is the undo point for the operator, and a failed capture
+    // must not block a validated write.
+    const snapshot = options.beforeWrite?.()
     try {
       mkdirSync(dir, { recursive: true })
     } catch (error) {
@@ -208,7 +220,7 @@ export function createRuleWriter(options: RuleWriterOptions): RuleWriterHost {
     runtime.audit('rules_written', {
       decision: 'ok',
       reason_code: 'panel_rule_write',
-      labels: { file: filename, mode: exists ? 'overwrite' : 'create' },
+      labels: { file: filename, mode: exists ? 'overwrite' : 'create', ...(snapshot === undefined ? {} : { snapshot }) },
       metrics: { bytes, rules: candidate.ruleset.ruleCount, chains: candidate.ruleset.chainCount },
     })
 
@@ -240,6 +252,7 @@ export function createRuleWriter(options: RuleWriterOptions): RuleWriterHost {
       hash: counts.hash,
       created: !exists,
       reloaded,
+      ...(snapshot === undefined ? {} : { snapshot }),
     }
   }
 

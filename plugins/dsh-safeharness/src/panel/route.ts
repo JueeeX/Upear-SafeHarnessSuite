@@ -51,6 +51,8 @@ import type {
   PanelProviderResult,
   PanelReloadResult,
   PanelResult,
+  PanelRuleHistoryResult,
+  PanelRuleRollbackResult,
   PanelRuleWriteResult,
   PanelScheduleResult,
   PanelSettingsPatch,
@@ -63,6 +65,7 @@ import type { PanelSettingsHost } from './settings.js'
 import { PanelSettingsError } from './settings.js'
 import type { RuleWriterHost } from './rules-write.js'
 import { RuleWriteError } from './rules-write.js'
+import type { RuleHistoryHost } from './rules-history.js'
 import { buildPanelPayload } from './status.js'
 import type { PanelFacts } from './status.js'
 
@@ -145,6 +148,8 @@ export interface PanelRouteOptions {
   readonly reloadRules?: () => { readonly rules: number; readonly chains: number; readonly hash: string }
   /** Land one rule file in `rules.dir`; absent makes the write endpoint unavailable. */
   readonly ruleWriter?: RuleWriterHost
+  /** Rule-directory snapshots (history + rollback); absent makes those ops unavailable. */
+  readonly ruleHistory?: RuleHistoryHost
   /** Judge/drafting settings; absent makes the settings endpoint unavailable. */
   readonly settings?: PanelSettingsHost
   /** Plugin logger. */
@@ -351,13 +356,46 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
   }
 
   /**
-   * Land one operator rule file and hot-reload it.
+   * Land one operator rule file and hot-reload it, or read/restore the rule
+   * directory snapshots (1.14.0).
    *
    * The writer owns every policy decision (target directory, file name, overwrite,
    * loader gate, atomic write); this envelope only shapes the body and maps the
    * typed failure, carrying the loader problems so the operator can fix the draft.
+   * `op: 'history'` and `op: 'rollback'` share the endpoint because they are the
+   * same trust boundary (the rule directory) under the same fence.
    */
-  const ruleWriteEnvelope = async (body: Record<string, unknown>): Promise<PanelRuleWriteResult> => {
+  const ruleWriteEnvelope = async (
+    body: Record<string, unknown>,
+  ): Promise<PanelRuleWriteResult | PanelRuleHistoryResult | PanelRuleRollbackResult> => {
+    const history = options.ruleHistory
+    const op = typeof body.op === 'string' ? body.op : 'write'
+    if (op === 'history' || op === 'rollback') {
+      if (history === undefined) {
+        return { ok: false, error: { code: 'write_unavailable', message: 'rule snapshots are not wired in this profile' } }
+      }
+      try {
+        return op === 'history'
+          ? { ok: true, value: history.list() }
+          : { ok: true, value: history.rollback(body.snapshot) }
+      } catch (error) {
+        if (error instanceof RuleWriteError) {
+          return {
+            ok: false,
+            error: {
+              code: error.code,
+              message: error.message.slice(0, 200),
+              ...(error.problems.length === 0 ? {} : { problems: error.problems.slice(0, 8) }),
+            },
+          }
+        }
+        runtime.internalError(op === 'history' ? 'panel-rule-history' : 'panel-rule-rollback', error)
+        return { ok: false, error: { code: 'rule_write_failed', message: 'the rule snapshot action failed' } }
+      }
+    }
+    if (op !== 'write') {
+      return { ok: false, error: { code: 'invalid_body', message: 'op must be write, history or rollback' } }
+    }
     const writer = options.ruleWriter
     if (writer === undefined) {
       return { ok: false, error: { code: 'write_unavailable', message: 'rule writing is not wired in this profile' } }
@@ -479,7 +517,7 @@ export function createPanelHandler(options: PanelRouteOptions): (req: IncomingMe
     const pathname = new URL(req.url ?? '/', 'http://x').pathname
     const endpoint = pathname.slice(PANEL_CHANNEL.length).replace(/^\//u, '')
 
-    let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult | PanelRuleWriteResult | PanelSettingsResult | PanelProbeResult | PanelProviderResult | PanelExportResult
+    let result: PanelResult | PanelPatrolResult | PanelDraftResult | PanelScheduleResult | PanelReloadResult | PanelRuleWriteResult | PanelRuleHistoryResult | PanelRuleRollbackResult | PanelSettingsResult | PanelProbeResult | PanelProviderResult | PanelExportResult
     if (endpoint === PANEL_PATROL_ENDPOINT) {
       const runner = options.patrolRunner
       if (runner === undefined) {

@@ -57,6 +57,10 @@ import type {
   PanelResult,
   PanelRuleWriteResult,
   PanelRuleWriteValue,
+  PanelRuleHistoryResult,
+  PanelRuleHistoryValue,
+  PanelRuleRollbackResult,
+  PanelRuleRollbackValue,
   PanelSchedule,
   PanelScheduleResult,
   PanelSettingsPatch,
@@ -123,6 +127,10 @@ export interface PanelFace {
     readonly yaml: string
     readonly overwrite: boolean
   }) => Promise<PanelRuleWriteValue>
+  /** List the retained rule-directory snapshots (1.14.0). */
+  readonly ruleHistory: () => Promise<PanelRuleHistoryValue>
+  /** Restore one snapshot; the Host runs the loader gate before touching the disk. */
+  readonly rollbackRule: (snapshot: string) => Promise<PanelRuleRollbackValue>
   /** Read the judge/drafting routes and the provider catalog (1.7.0 `settings` endpoint). */
   readonly loadSettings: () => Promise<PanelSettingsValue>
   /** Save a partial route change; the Host validates and hot-reloads it. */
@@ -227,6 +235,8 @@ type Envelope =
   | PanelScheduleResult
   | PanelReloadResult
   | PanelRuleWriteResult
+  | PanelRuleHistoryResult
+  | PanelRuleRollbackResult
   | PanelSettingsResult
   | PanelProbeResult
   | PanelProviderResult
@@ -275,6 +285,8 @@ export function apply(ctx: ClientContextLike): void {
     schedule: async (input) => (await call(PANEL_SCHEDULE_ENDPOINT, input)) as PanelSchedule,
     reloadRules: async () => (await call(PANEL_RELOAD_ENDPOINT)) as { rules: number; chains: number; hash: string },
     writeRule: async (input) => (await call(PANEL_RULE_WRITE_ENDPOINT, input)) as PanelRuleWriteValue,
+    ruleHistory: async () => (await call(PANEL_RULE_WRITE_ENDPOINT, { op: 'history' })) as PanelRuleHistoryValue,
+    rollbackRule: async (snapshot) => (await call(PANEL_RULE_WRITE_ENDPOINT, { op: 'rollback', snapshot })) as PanelRuleRollbackValue,
     // The settings endpoint is new in 1.7.0: on an older Host build the route
     // answers `unknown_endpoint`, which the settings tab renders as a readable
     // "server not ready" notice instead of breaking the panel.

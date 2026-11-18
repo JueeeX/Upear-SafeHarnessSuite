@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.13.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.14.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -134,7 +134,7 @@ pnpm test             # 752 个用例（45 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.13.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
+# -> dist/upear-dsh-safeharness-1.14.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -148,7 +148,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.13.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.14.0.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -609,6 +609,33 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 **与内核的三处差异**：① 描述符扫描时机（调用前 vs 列举时）与去重口径；② SQL 白名单只在工具参数面算；③ PII 在内核是记忆写入的脱敏/拒绝，插件没有记忆库，落在工具结果面且默认不拦截。
 
 **面板**：新卡片「工具与结果检测」提供描述符三档、两个阈值、最短长度、SQL 白名单文本域（每行一个，`,` 也接受）与 PII 10 个类别勾选。保存仍走 `POST /safeharness/settings` 的 `op: save`（revision CAS、逐字段覆盖）：`tools` 与 `results` 各自合并，不与同一面的 `mode` 互相覆盖；审计只记 `tool_detection: changed` / `pii: changed`。
+
+### 4.11 规则快照与回滚（1.14.0）
+
+内核把热更新的规则版本存在数据库里（保留最近 10 版，`rules_loader.py`）。插件没有数据库，等价物是**目录快照**：
+
+| 项 | 位置/取值 |
+|---|---|
+| 快照目录 | `$DSH_HOME/safeharness/rules-writes/history/<id>/`（与 `audit.dir` 无关，纯文件） |
+| 快照内容 | `rules.dir` 顶层的 `.yaml`/`.yml` + `manifest.json`（含每个文件的 sha256） |
+| id | `YYYYMMDDTHHMMSSZ-<n>`（UTC，同一秒内递增） |
+| 保留份数 | 最近 **10** 份，超出按时间淘汰 |
+| 触发 | 面板「写入并重载」前（`write`）、回滚前（`pre-rollback`） |
+
+**回滚的执行顺序**（任何一步失败都停在原地）：
+
+1. 校验 id 形状（`^[0-9]{8}T[0-9]{6}Z-[0-9]{1,3}$`）与 manifest；
+2. 逐文件校验 sha256 —— 快照被改动过就拒绝，不恢复；
+3. 把快照复制进临时目录，**用真实 loader 跑一遍**（打包规则 + `rules.inline` 一起参与），编不过就拒绝；
+4. 先给**当前**目录拍一份 `pre-rollback` 快照（所以"回滚的回滚"成立）；
+5. 原子写回快照文件，再删掉快照里没有的规则文件（只动 `.yaml`/`.yml`）；
+6. 热重载；重载失败只把 `reloaded: false` 报给面板，磁盘已经是快照内容。
+
+**边界与拒绝**：`rules.dir` 为空、相对路径、指进包内或指进历史目录 → 拒绝；单份快照 >64 个文件或单文件 >256 KiB → 跳过捕获并告警；面板回滚是两步确认（点「回滚」后行内出现「确认回滚」）。
+
+**它不是什么**：不是版本库（没有 diff、没有分支），也不是备份（`$DSH_HOME` 被删就没了）。它的承诺只有一条：**每次经面板改规则，都可以一步退回上一版**。手工改文件不在快照覆盖范围内——那样做时请自己留副本，或改完点一次「写入并重载」建立新基线（会先快照当前状态）。
+
+**证据**：成功写入记 `rules_written`（`labels.snapshot`）；回滚同样记 `rules_written`，`labels.mode = rollback`、`labels.snapshot`、`labels.pre_rollback`；重载失败另记 `invariant_probe`。
 
 ---
 ## 5. 预设与失败语义
