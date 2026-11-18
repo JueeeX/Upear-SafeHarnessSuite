@@ -280,6 +280,12 @@ export interface PanelSettingsValue {
   readonly toolDetection: PanelToolDetection
   /** Tool-result PII scan. */
   readonly pii: PanelResultPii
+  /** List/pattern settings (deny lists, tags, blockOn, allowOnce). */
+  readonly lists: PanelListSettings
+  /** Rule-source and patrol knobs. */
+  readonly source: PanelSourceSettings
+  /** Read-only facts: engine, rules, audit, posture, patrol destinations. */
+  readonly facts: PanelConfigFacts
   readonly judge: PanelJudgeSettings
   readonly draft: PanelDraftSettings
   /** Provider/model catalog for the two route pickers (bounded). */
@@ -321,6 +327,63 @@ export interface PanelSurfaceSettings {
   readonly approval: PanelApprovalMode
 }
 
+/**
+ * List/pattern settings the panel may edit (1.13.0).
+ *
+ * These are `patch`-layer fields, not `volatile` ones: a save rewrites the profile
+ * patch and the loader remounts the entry, which the card says next to the buttons.
+ */
+export interface PanelListSettings {
+  /** Tool-name globs always denied. */
+  readonly denyTools: readonly string[]
+  /** Tool-name globs that require approval. */
+  readonly askTools: readonly string[]
+  /** Semantic tags denied outright. */
+  readonly denyTags: readonly string[]
+  /** Tool-name glob → semantic tags. */
+  readonly tagOverrides: readonly { readonly pattern: string; readonly tags: readonly string[] }[]
+  /** Result categories that block in `enforce` mode. */
+  readonly blockOn: readonly string[]
+  /** Tool-name globs granted once by the approval policy. */
+  readonly allowOnce: readonly string[]
+}
+
+/** Rule-source and patrol knobs (patch layer; a save remounts the plugin). */
+export interface PanelSourceSettings {
+  /** Extra rule directory; empty means the packaged rules. */
+  readonly rulesDir: string
+  /** Recompile the rule set when a rule file changes. */
+  readonly rulesWatch: boolean
+  /** Patrol denial-rate window. */
+  readonly patrolWindowMinutes: number
+  /** Patrol rate multiplier that counts as anomalous. */
+  readonly patrolFactor: number
+  /** Patrol minimum denials before the rate can fail. */
+  readonly patrolMinCount: number
+}
+
+/**
+ * Read-only configuration facts (panel stage three: show, never edit).
+ *
+ * Two rules hold here: no credential ever appears (notification destinations are
+ * reported by *type* only), and nothing in this block is writable from the panel —
+ * an operator changes it in the profile patch, whose path the card copies.
+ */
+export interface PanelConfigFacts {
+  readonly engine: { readonly kind: string; readonly command: string }
+  readonly rules: { readonly inlineRules: number; readonly sources: number }
+  readonly audit: {
+    readonly format: string
+    readonly dir: string
+    readonly rotateMb: number
+    readonly required: boolean
+    readonly hashChain: boolean
+  }
+  readonly posture: { readonly onLoad: boolean; readonly failOn: readonly string[] }
+  /** Notification channels by type only (`feishu`, `wecom`, ...), never their URLs. */
+  readonly patrolNotify: { readonly channels: readonly string[]; readonly healthUrls: number }
+}
+
 /** Fields one save may change; omitted fields keep their current value. */
 export interface PanelSettingsPatch {
   /**
@@ -354,6 +417,23 @@ export interface PanelSettingsPatch {
   readonly pii?: {
     readonly enabled?: boolean
     readonly classes?: readonly string[]
+  }
+  /** List/pattern settings; every list replaces the stored one as a whole. */
+  readonly lists?: {
+    readonly denyTools?: readonly string[]
+    readonly askTools?: readonly string[]
+    readonly denyTags?: readonly string[]
+    readonly tagOverrides?: readonly { readonly pattern: string; readonly tags: readonly string[] }[]
+    readonly blockOn?: readonly string[]
+    readonly allowOnce?: readonly string[]
+  }
+  /** Rule-source and patrol knobs (patch layer: the save remounts the plugin). */
+  readonly source?: {
+    readonly rulesDir?: string
+    readonly rulesWatch?: boolean
+    readonly patrolWindowMinutes?: number
+    readonly patrolFactor?: number
+    readonly patrolMinCount?: number
   }
   readonly judge?: {
     readonly enabled?: boolean

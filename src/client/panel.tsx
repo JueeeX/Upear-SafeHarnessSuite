@@ -164,15 +164,47 @@ interface ToolDetectionForm {
   readonly allowedTables: string
 }
 
-/** One loaded settings value plus the editable copy of it. */
-interface SettingsData {
-  readonly value: PanelSettingsValue
+/**
+ * List/pattern form (1.13.0). Every list is edited as text — one entry per line —
+ * and only the entries that differ from the loaded value go on the wire.
+ */
+interface ListForm {
+  /** One tool-name glob per line. */
+  readonly denyTools: string
+  readonly askTools: string
+  readonly allowOnce: string
+  /** One semantic tag per line. */
+  readonly denyTags: string
+  /** `pattern: tag1, tag2` per line. */
+  readonly tagOverrides: string
+  /** Result categories that block, as chips. */
+  readonly blockOn: readonly string[]
+}
+
+/** Rule-source and patrol form (numbers stay strings while being edited). */
+interface SourceForm {
+  readonly rulesDir: string
+  readonly rulesWatch: boolean
+  readonly patrolWindowMinutes: string
+  readonly patrolFactor: string
+  readonly patrolMinCount: string
+}
+
+/** The editable half of a loaded settings value. */
+interface SettingsForm {
   readonly judge: JudgeForm
   readonly draft: DraftForm
   readonly surfaces: PanelSurfaceSettings
   readonly inputJudge: PanelInputJudge
   readonly toolDetection: ToolDetectionForm
   readonly pii: PanelResultPii
+  readonly lists: ListForm
+  readonly source: SourceForm
+}
+
+/** One loaded settings value plus the editable copy of it. */
+interface SettingsData extends SettingsForm {
+  readonly value: PanelSettingsValue
 }
 
 /** Settings tab load state. */
@@ -238,6 +270,25 @@ interface MutableToolDetectionPatch {
 interface MutablePiiPatch {
   enabled?: boolean
   classes?: readonly string[]
+}
+
+/** Mutable builder for the list/pattern patch. */
+interface MutableListPatch {
+  denyTools?: readonly string[]
+  askTools?: readonly string[]
+  denyTags?: readonly string[]
+  tagOverrides?: readonly { readonly pattern: string; readonly tags: readonly string[] }[]
+  blockOn?: readonly string[]
+  allowOnce?: readonly string[]
+}
+
+/** Mutable builder for the rule-source / patrol patch. */
+interface MutableSourcePatch {
+  rulesDir?: string
+  rulesWatch?: boolean
+  patrolWindowMinutes?: number
+  patrolFactor?: number
+  patrolMinCount?: number
 }
 
 /** Mutable builder for the per-surface switchboard patch. */
@@ -353,6 +404,8 @@ function baselineOf(value: PanelSettingsValue): string {
     inputJudge: value.inputJudge,
     toolDetection: value.toolDetection,
     pii: value.pii,
+    lists: value.lists,
+    source: value.source,
   })
 }
 
@@ -368,6 +421,9 @@ interface StoredSettingsDraft {
   /** Absent drafts from 1.11.0 and earlier fall back to the loaded value. */
   readonly toolDetection?: ToolDetectionForm
   readonly pii?: PanelResultPii
+  /** Absent drafts from 1.12.0 and earlier fall back to the loaded value. */
+  readonly lists?: ListForm
+  readonly source?: SourceForm
 }
 
 /** Decision → human label. */
@@ -455,6 +511,13 @@ const PII_CLASS_LABELS: readonly { readonly name: string; readonly label: string
   { name: 'gov_serial', label: '公文流水号' },
   { name: 'customer_id', label: '客户号' },
   { name: 'internal_url', label: '内网地址' },
+]
+
+/** Result categories a save may name in `results.blockOn` (1.13.0). */
+const RESULT_CATEGORY_LABELS: readonly { readonly name: string; readonly label: string }[] = [
+  { name: 'credential_leak', label: '凭据泄漏' },
+  { name: 'injection_marker', label: '注入标记' },
+  { name: 'pii', label: 'PII' },
 ]
 
 /** Severity → label; unknown severities render raw. */const SEVERITY_LABELS: Record<string, string> = {
@@ -638,6 +701,10 @@ background:var(--shp-page);color:var(--shp-text);border-radius:14px;padding:16px
 .shp-input{width:100%}
 .shp-field .shp-select{width:100%}
 .shp-field{display:flex;flex-direction:column;gap:4px;position:relative;min-width:0}
+.shp-facts{display:flex;flex-direction:column;gap:6px}
+.shp-fact{display:grid;grid-template-columns:88px 1fr;gap:8px;align-items:baseline;min-width:0}
+.shp-fact-label{font-size:11.5px;color:var(--shp-muted)}
+.shp-fact code{font-size:12px;color:var(--shp-text);overflow-wrap:anywhere}
 .shp-field-label{font-size:11px;color:var(--shp-muted);font-weight:500;white-space:nowrap}
 .shp-field-hint{font-size:10.5px;color:var(--shp-faint);line-height:1.4}
 .shp-field-wide{grid-column:1/-1}
@@ -1218,6 +1285,21 @@ function toSettingsData(value: PanelSettingsValue): SettingsData {
       allowedTables: value.toolDetection.allowedTables.join('\n'),
     },
     pii: { enabled: value.pii.enabled, classes: [...value.pii.classes] },
+    lists: {
+      denyTools: value.lists.denyTools.join('\n'),
+      askTools: value.lists.askTools.join('\n'),
+      allowOnce: value.lists.allowOnce.join('\n'),
+      denyTags: value.lists.denyTags.join('\n'),
+      tagOverrides: value.lists.tagOverrides.map((item) => `${item.pattern}: ${item.tags.join(', ')}`).join('\n'),
+      blockOn: [...value.lists.blockOn],
+    },
+    source: {
+      rulesDir: value.source.rulesDir,
+      rulesWatch: value.source.rulesWatch,
+      patrolWindowMinutes: String(value.source.patrolWindowMinutes),
+      patrolFactor: String(value.source.patrolFactor),
+      patrolMinCount: String(value.source.patrolMinCount),
+    },
   }
 }
 
@@ -1240,16 +1322,41 @@ function parseTableList(text: string): string[] {
   return out
 }
 
+/**
+ * Parse a plain list textarea: one entry per line, blanks ignored.
+ *
+ * `,` is NOT a separator here (unlike the table list) because a tool-name glob or a
+ * tag may legitimately contain a comma-free punctuation like `mcp__*`; a line is the
+ * unit an operator thinks in.
+ */
+function parseLineList(text: string): string[] {
+  const out: string[] = []
+  for (const raw of text.split(/\r?\n/u)) {
+    const entry = raw.trim()
+    if (entry.length > 0 && !out.includes(entry)) out.push(entry)
+  }
+  return out
+}
+
+/** Parse the `pattern: tag1, tag2` tag-override textarea. */
+function parseTagOverrides(text: string): { pattern: string; tags: string[] }[] {
+  const out: { pattern: string; tags: string[] }[] = []
+  for (const raw of text.split(/\r?\n/u)) {
+    const line = raw.trim()
+    if (line.length === 0 || line.startsWith('#')) continue
+    const colon = line.indexOf(':')
+    const pattern = (colon >= 0 ? line.slice(0, colon) : line).trim()
+    const rest = colon >= 0 ? line.slice(colon + 1) : ''
+    const tags = rest.split(/[,;]+/u).map((tag) => tag.trim()).filter((tag) => tag.length > 0)
+    if (pattern.length === 0) continue
+    out.push({ pattern, tags })
+  }
+  return out
+}
+
 /** Diff the editable form against the loaded value. */
-function buildPatch(
-  value: PanelSettingsValue,
-  judge: JudgeForm,
-  draft: DraftForm,
-  surfaces: PanelSurfaceSettings,
-  inputJudge: PanelInputJudge,
-  toolDetection: ToolDetectionForm,
-  pii: PanelResultPii,
-): PatchResult {
+function buildPatch(value: PanelSettingsValue, form: SettingsForm): PatchResult {
+  const { judge, draft, surfaces, inputJudge, toolDetection, pii, lists, source } = form
   const maxChars = positiveInt(judge.maxChars)
   const timeoutMs = positiveInt(judge.timeoutMs)
   if (maxChars === undefined) return { patch: undefined, invalid: '「送入评审的最大字符数」必须是正整数。' }
@@ -1263,6 +1370,17 @@ function buildPatch(
   if (entropy === undefined) return { patch: undefined, invalid: '「熵阈值」必须是 0–8 之间的数字。' }
   if (entropyMin === undefined) return { patch: undefined, invalid: '「熵检测最短长度」必须是正整数。' }
   const allowedTables = parseTableList(toolDetection.allowedTables)
+  // Source/patrol numbers: same rule (0 is legal for minCount, not for the window).
+  const windowMinutes = nonNegativeNumber(source.patrolWindowMinutes.replace(',', '.'))
+  const factor = nonNegativeNumber(source.patrolFactor.replace(',', '.'))
+  const minCount = nonNegativeInt(source.patrolMinCount)
+  if (windowMinutes === undefined || windowMinutes < 1) {
+    return { patch: undefined, invalid: '「巡检窗口」必须是 ≥ 1 的分钟数。' }
+  }
+  if (factor === undefined || factor < 1) {
+    return { patch: undefined, invalid: '「速率倍数」必须是 ≥ 1 的数字。' }
+  }
+  if (minCount === undefined) return { patch: undefined, invalid: '「最少拒绝数」必须是 0 或正整数。' }
   const judgePatch: MutableJudgePatch = {}
   if (judge.enabled !== value.judge.enabled) judgePatch.enabled = judge.enabled
   if (judge.scope !== value.judge.scope) judgePatch.scope = judge.scope
@@ -1296,13 +1414,41 @@ function buildPatch(
   if (pii.enabled !== value.pii.enabled) piiPatch.enabled = pii.enabled
   const savedClasses = [...value.pii.classes].sort().join(',')
   if ([...pii.classes].sort().join(',') !== savedClasses) piiPatch.classes = pii.classes
+  // Lists: whole-list comparison (the wire field replaces the stored list), with line
+  // order ignored so re-ordering alone never triggers a save/remount.
+  const listPatch: MutableListPatch = {}
+  const denyTools = parseLineList(lists.denyTools)
+  const askTools = parseLineList(lists.askTools)
+  const allowOnce = parseLineList(lists.allowOnce)
+  const denyTags = parseLineList(lists.denyTags)
+  if (!sameList(denyTools, value.lists.denyTools)) listPatch.denyTools = denyTools
+  if (!sameList(askTools, value.lists.askTools)) listPatch.askTools = askTools
+  if (!sameList(allowOnce, value.lists.allowOnce)) listPatch.allowOnce = allowOnce
+  if (!sameList(denyTags, value.lists.denyTags)) listPatch.denyTags = denyTags
+  const tagOverrides = parseTagOverrides(lists.tagOverrides)
+  const savedOverrides = value.lists.tagOverrides.map((item) => `${item.pattern}|${item.tags.join(',')}`).sort().join('\n')
+  const nextOverrides = tagOverrides.map((item) => `${item.pattern}|${item.tags.join(',')}`).sort().join('\n')
+  if (nextOverrides !== savedOverrides) listPatch.tagOverrides = tagOverrides
+  if (!sameList(lists.blockOn, value.lists.blockOn)) listPatch.blockOn = [...lists.blockOn]
+  const sourcePatch: MutableSourcePatch = {}
+  const rulesDir = source.rulesDir.trim()
+  if (rulesDir !== value.source.rulesDir) sourcePatch.rulesDir = rulesDir
+  if (source.rulesWatch !== value.source.rulesWatch) sourcePatch.rulesWatch = source.rulesWatch
+  if (windowMinutes !== value.source.patrolWindowMinutes) sourcePatch.patrolWindowMinutes = windowMinutes
+  if (factor !== value.source.patrolFactor) sourcePatch.patrolFactor = factor
+  if (minCount !== value.source.patrolMinCount) sourcePatch.patrolMinCount = minCount
   const hasJudge = Object.keys(judgePatch).length > 0
   const hasDraft = Object.keys(draftPatch).length > 0
   const hasSurfaces = Object.keys(surfacePatch).length > 0
   const hasInputJudge = Object.keys(inputJudgePatch).length > 0
   const hasToolDetection = Object.keys(toolDetectionPatch).length > 0
   const hasPii = Object.keys(piiPatch).length > 0
-  if (!hasJudge && !hasDraft && !hasSurfaces && !hasInputJudge && !hasToolDetection && !hasPii) {
+  const hasLists = Object.keys(listPatch).length > 0
+  const hasSource = Object.keys(sourcePatch).length > 0
+  if (
+    !hasJudge && !hasDraft && !hasSurfaces && !hasInputJudge && !hasToolDetection
+    && !hasPii && !hasLists && !hasSource
+  ) {
     return { patch: undefined, invalid: null }
   }
   return {
@@ -1315,11 +1461,21 @@ function buildPatch(
       ...(hasInputJudge ? { inputJudge: inputJudgePatch } : {}),
       ...(hasToolDetection ? { toolDetection: toolDetectionPatch } : {}),
       ...(hasPii ? { pii: piiPatch } : {}),
+      ...(hasLists ? { lists: listPatch } : {}),
+      ...(hasSource ? { source: sourcePatch } : {}),
       ...(hasJudge ? { judge: judgePatch } : {}),
       ...(hasDraft ? { draft: draftPatch } : {}),
     },
     invalid: null,
   }
+}
+
+/** Order-insensitive list equality: a reorder alone must never cause a save. */
+function sameList(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false
+  const a = [...left].sort()
+  const b = [...right].sort()
+  return a.every((entry, index) => entry === b[index])
 }
 
 /** Provider choices for a route picker, keeping an out-of-catalog saved value. */
@@ -2541,6 +2697,8 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
                 inputJudge: parsed.inputJudge ?? base.inputJudge,
                 toolDetection: parsed.toolDetection ?? base.toolDetection,
                 pii: parsed.pii ?? base.pii,
+                lists: parsed.lists ?? base.lists,
+                source: parsed.source ?? base.source,
               }
             } else {
               storeValue(SETTINGS_DRAFT_KEY, null)
@@ -2571,19 +2729,17 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const data = view.status === 'ready' ? view.data : undefined
   const patchResult = useMemo<PatchResult>(() => {
     if (data === undefined) return { patch: undefined, invalid: null }
-    return buildPatch(data.value, data.judge, data.draft, data.surfaces, data.inputJudge, data.toolDetection, data.pii)
+    return buildPatch(data.value, data)
   }, [data])
 
   // Keep an unsaved form across a remount; a clean form clears the draft.
   useEffect(() => {
     if (view.status !== 'ready') return
-    const { value, judge, draft, surfaces, inputJudge, toolDetection, pii } = view.data
-    const dirty = buildPatch(value, judge, draft, surfaces, inputJudge, toolDetection, pii).patch !== undefined
+    const { value, ...form } = view.data
+    const dirty = buildPatch(value, form).patch !== undefined
     storeValue(
       SETTINGS_DRAFT_KEY,
-      dirty
-        ? JSON.stringify({ baseline: baselineOf(value), judge, draft, surfaces, inputJudge, toolDetection, pii })
-        : null,
+      dirty ? JSON.stringify({ baseline: baselineOf(value), ...form }) : null,
     )
   }, [view])
 
@@ -2626,6 +2782,20 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const updatePii = useCallback((patch: Partial<PanelResultPii>): void => {
     setView(current => current.status === 'ready'
       ? { status: 'ready', data: { ...current.data, pii: { ...current.data.pii, ...patch } } }
+      : current)
+    setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
+  }, [])
+
+  const updateList = useCallback((patch: Partial<ListForm>): void => {
+    setView(current => current.status === 'ready'
+      ? { status: 'ready', data: { ...current.data, lists: { ...current.data.lists, ...patch } } }
+      : current)
+    setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
+  }, [])
+
+  const updateSource = useCallback((patch: Partial<SourceForm>): void => {
+    setView(current => current.status === 'ready'
+      ? { status: 'ready', data: { ...current.data, source: { ...current.data.source, ...patch } } }
       : current)
     setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
   }, [])
@@ -2755,7 +2925,7 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
     return <div className="shp-stack"><Card title="设置"><Loading text="正在读取评审与起草路由…" /></Card></div>
   }
 
-  const { value, judge, draft, surfaces, inputJudge, toolDetection, pii } = data
+  const { value, judge, draft, surfaces, inputJudge, toolDetection, pii, lists, source } = data
   const readOnly = !value.judge.configurable
   const saving = save.status === 'saving'
   const dirty = patchResult.patch !== undefined
@@ -2982,6 +3152,171 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
         <p className="shp-card-hint">
           类别与内核 <code className="shp-mono">memory/sanitizer.py</code> 逐条对应；检测结果只记类别名，不记命中内容。
         </p>
+      </Card>
+
+      <Card
+        title="列表与匹配"
+        hint="1.13.0：黑白名单、标签覆盖、拦截类别与规则/巡检参数"
+        actions={<Badge tone="accent">保存会重载插件</Badge>}
+      >
+        <div className="shp-form-grid">
+          <Field
+            label="必拒工具（每行一个 glob，`*` 通配）"
+            value={lists.denyTools}
+            multiline
+            disabled={readOnly}
+            onChange={(next) => { updateList({ denyTools: next }) }}
+          />
+          <Field
+            label="需审批工具（每行一个 glob）"
+            value={lists.askTools}
+            multiline
+            disabled={readOnly}
+            onChange={(next) => { updateList({ askTools: next }) }}
+          />
+          <Field
+            label="允许一次（每行一个 glob）"
+            value={lists.allowOnce}
+            multiline
+            disabled={readOnly}
+            onChange={(next) => { updateList({ allowOnce: next }) }}
+          />
+          <Field
+            label="必拒标签（每行一个，如 shell / egress）"
+            value={lists.denyTags}
+            multiline
+            disabled={readOnly}
+            onChange={(next) => { updateList({ denyTags: next }) }}
+          />
+        </div>
+        <Field
+          label="工具名 → 标签覆盖（每行 `pattern: tag1, tag2`，# 开头为注释）"
+          value={lists.tagOverrides}
+          multiline
+          disabled={readOnly}
+          onChange={(next) => { updateList({ tagOverrides: next }) }}
+        />
+        <div className="shp-field">
+          <span className="shp-field-label">工具结果在强制拦截时拦哪些类别（results.blockOn）</span>
+          <div className="shp-chips">
+            {RESULT_CATEGORY_LABELS.map(({ name, label }) => (
+              <label key={name} className="shp-chip" title={name}>
+                <input
+                  type="checkbox"
+                  checked={lists.blockOn.includes(name)}
+                  disabled={readOnly}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    const next = event.target.checked
+                      ? [...lists.blockOn, name]
+                      : lists.blockOn.filter((entry) => entry !== name)
+                    updateList({ blockOn: next })
+                  }}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <span className="shp-field-hint">
+            只影响 `工具结果 = 强制拦截` 时的裁决；空 = 不拦任何类别（只记事件）。
+          </span>
+        </div>
+        <div className="shp-form-grid">
+          <Field
+            label="额外规则目录（空 = 只用包内规则）"
+            value={source.rulesDir}
+            disabled={readOnly}
+            onChange={(next) => { updateSource({ rulesDir: next }) }}
+          />
+          <Field
+            label="巡检窗口（分钟）"
+            value={source.patrolWindowMinutes}
+            inputMode="numeric"
+            disabled={readOnly}
+            onChange={(next) => { updateSource({ patrolWindowMinutes: next }) }}
+          />
+          <Field
+            label="速率倍数"
+            value={source.patrolFactor}
+            inputMode="decimal"
+            disabled={readOnly}
+            onChange={(next) => { updateSource({ patrolFactor: next }) }}
+          />
+          <Field
+            label="最少拒绝数"
+            value={source.patrolMinCount}
+            inputMode="numeric"
+            disabled={readOnly}
+            onChange={(next) => { updateSource({ patrolMinCount: next }) }}
+          />
+        </div>
+        <div className="shp-switch-row">
+          <label className="shp-switch-label">
+            <input
+              type="checkbox"
+              checked={source.rulesWatch}
+              disabled={readOnly}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => { updateSource({ rulesWatch: event.target.checked }) }}
+            />
+            规则文件变化时自动重编译
+          </label>
+          <span className="shp-card-hint">关闭后新增/修改规则要重启插件才生效。</span>
+        </div>
+        <p className="shp-card-hint">
+          这些字段都不是宿主的热更新字段：保存会改写 profile patch，宿主重载本插件（正在跑的会话不受影响，下一条调用即用新配置）。
+          写前按现有语法校验（glob 单行、标签标识符、类别白名单、数值范围），失败一个字节都不写。
+        </p>
+      </Card>
+
+      <Card
+        title="只读配置"
+        hint="阶段三：这些只能在 profile patch 里改，这里只显示"
+        actions={<Badge tone="muted">只读</Badge>}
+      >
+        <div className="shp-facts">
+          <div className="shp-fact">
+            <span className="shp-fact-label">输入引擎</span>
+            <code className="shp-mono">{value.facts.engine.kind}{value.facts.engine.command.length === 0 ? '' : ` · ${value.facts.engine.command}`}</code>
+          </div>
+          <div className="shp-fact">
+            <span className="shp-fact-label">规则来源</span>
+            <code className="shp-mono">内联 {value.facts.rules.inlineRules} 条 · 文件 {value.facts.rules.sources} 份</code>
+          </div>
+          <div className="shp-fact">
+            <span className="shp-fact-label">账本</span>
+            <code className="shp-mono">
+              {value.facts.audit.format} · {value.facts.audit.dir.length === 0 ? '默认目录' : value.facts.audit.dir} · 轮转{' '}
+              {value.facts.audit.rotateMb} MB · {value.facts.audit.required ? '写入失败即拒' : '写入失败仍放行'}
+            </code>
+          </div>
+          <div className="shp-fact">
+            <span className="shp-fact-label">加载闸门</span>
+            <code className="shp-mono">
+              {value.facts.posture.failOn.length === 0
+                ? '姿态 FAIL 不阻止加载'
+                : `FAIL 即拒绝加载：${value.facts.posture.failOn.join(', ')}`}
+            </code>
+          </div>
+          <div className="shp-fact">
+            <span className="shp-fact-label">巡检通知</span>
+            <code className="shp-mono">
+              {value.facts.patrolNotify.channels.length === 0
+                ? '未配置通道'
+                : `${value.facts.patrolNotify.channels.join(' / ')} · ${value.facts.patrolNotify.channels.length} 个通道`}
+              {value.facts.patrolNotify.healthUrls > 0 ? ` · 探针 ${value.facts.patrolNotify.healthUrls} 个` : ''}
+            </code>
+          </div>
+        </div>
+        <p className="shp-card-hint">
+          通知只显示通道类型与数量，webhook / token 永不回显。要改这些值：编辑 profile patch 的
+          <code className="shp-mono"> id: safeharness → config </code>
+          段后重启。
+        </p>
+        {value.configPath === null ? null : (
+          <div className="shp-card-actions">
+            <code className="shp-mono">{value.configPath}</code>
+            <CopyButton text={value.configPath} label="复制路径" />
+          </div>
+        )}
       </Card>
 
       <Card

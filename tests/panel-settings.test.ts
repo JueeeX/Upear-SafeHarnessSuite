@@ -24,8 +24,18 @@ function stubRuntime(overrides: {
       entropyThreshold: 0,
       entropyMinLength: 48,
       sql: { allowedTables: [] as string[] },
+      // 1.13.0 list fields.
+      denyTools: [] as string[],
+      askTools: [] as string[],
+      denyTags: [] as string[],
+      tagOverrides: [] as { pattern: string; tags: string[] }[],
     },
-    results: { mode: 'warn' as const, pii: true, piiClasses: ['id_card', 'email'] as string[] },
+    results: {
+      mode: 'warn' as const,
+      pii: true,
+      piiClasses: ['id_card', 'email'] as string[],
+      blockOn: ['credential_leak'] as string[],
+    },
     output: {
       mode: 'warn' as const,
       judge: {
@@ -39,12 +49,18 @@ function stubRuntime(overrides: {
       },
     },
     draft: { enabled: false, provider: '', model: '', ...overrides.draft },
-    approval: { mode: 'delegate' as const },
+    approval: { mode: 'delegate' as const, allowOnce: [] as string[] },
+    rules: { dir: '', watch: true, inline: [] as unknown[] },
+    patrol: { windowMinutes: 10, factor: 5, minCount: 10, healthUrls: [] as string[], notify: [] as { type: string }[] },
+    engine: { kind: 'builtin' as const, command: '' },
+    audit: { format: 'ndjson' as const, dir: '', rotateMb: 64, required: true, hashChain: true },
+    posture: { onLoad: true, failOn: [] as string[] },
   }
   return {
     config,
     audit: vi.fn(),
     internalError: vi.fn(),
+    engine: { ruleset: { sources: ['rules/inform.yaml', 'rules/chains.yaml'] } },
   } as unknown as Runtime
 }
 
@@ -275,6 +291,108 @@ describe('createPanelSettingsHost', () => {
       allowedTables: [],
     })
     expect(value.pii).toEqual({ enabled: true, classes: ['id_card', 'email'] })
+  })
+
+  it('writes the 1.13.0 list fields into tools / results / approval', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({
+      lists: {
+        denyTools: ['shell_*', 'mcp__fs__delete'],
+        askTools: ['web_*'],
+        allowOnce: ['db_query'],
+        denyTags: ['egress'],
+        tagOverrides: [{ pattern: 'bash*', tags: ['shell', 'exec'] }],
+        blockOn: ['credential_leak', 'pii'],
+      },
+    })
+    expect(update).toHaveBeenCalledWith('safeharness', {
+      tools: {
+        denyTools: ['shell_*', 'mcp__fs__delete'],
+        askTools: ['web_*'],
+        denyTags: ['egress'],
+        tagOverrides: [{ pattern: 'bash*', tags: ['shell', 'exec'] }],
+      },
+      results: { blockOn: ['credential_leak', 'pii'] },
+      approval: { allowOnce: ['db_query'] },
+    })
+  })
+
+  it('writes the 1.13.0 source and patrol knobs', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({
+      source: { rulesDir: 'C:\\Users\\x\\.dsh\\safeharness\\rules', rulesWatch: false, patrolWindowMinutes: 15, patrolFactor: 6.5, patrolMinCount: 20 },
+    })
+    expect(update).toHaveBeenCalledWith('safeharness', {
+      rules: { dir: 'C:\\Users\\x\\.dsh\\safeharness\\rules', watch: false },
+      patrol: { windowMinutes: 15, factor: 6.5, minCount: 20 },
+    })
+  })
+
+  it('refuses invalid 1.13.0 list/source values before touching the host config', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    // A tag is an identifier, not free text.
+    await expect(host.save({ lists: { denyTags: ['not a tag!'] } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    // A glob must stay on one line.
+    await expect(host.save({ lists: { denyTools: ['a\nb'] } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    // blockOn is a closed vocabulary.
+    await expect(host.save({ lists: { blockOn: ['everything'] } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    // A tag override needs at least one tag.
+    await expect(host.save({ lists: { tagOverrides: [{ pattern: 'bash*', tags: [] }] } }))
+      .rejects.toMatchObject({ code: 'settings_invalid' })
+    // A path is a single line and the patrol numbers have floors.
+    await expect(host.save({ source: { rulesDir: 'a\nb' } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ source: { patrolFactor: 0.5 } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ source: { patrolWindowMinutes: 0 } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ source: { patrolMinCount: -1 } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('reads back lists, source and the read-only facts without any credential', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    const value = await host.read()
+    expect(value.lists).toEqual({
+      denyTools: [],
+      askTools: [],
+      denyTags: [],
+      tagOverrides: [],
+      blockOn: ['credential_leak'],
+      allowOnce: [],
+    })
+    expect(value.source).toEqual({
+      rulesDir: '',
+      rulesWatch: true,
+      patrolWindowMinutes: 10,
+      patrolFactor: 5,
+      patrolMinCount: 10,
+    })
+    expect(value.facts.audit).toEqual({ format: 'ndjson', dir: '', rotateMb: 64, required: true, hashChain: true })
+    expect(value.facts.posture).toEqual({ onLoad: true, failOn: [] })
+    expect(value.facts.patrolNotify).toEqual({ channels: [], healthUrls: 0 })
+    expect(value.facts.rules).toEqual({ inlineRules: 0, sources: 2 })
   })
 
   it('refuses an unknown surface mode', async () => {

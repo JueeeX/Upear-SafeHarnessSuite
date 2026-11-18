@@ -59,6 +59,21 @@ const MAX_TABLE_CHARS = 128
 /** A table reference the allowlist accepts: identifier chars, dots and dashes. */
 const TABLE_PATTERN = /^[A-Za-z0-9_$.-]{1,128}$/u
 
+/** List/pattern bounds accepted by a save (1.13.0). */
+const MAX_LIST_ENTRIES = 200
+const MAX_PATTERN_CHARS = 200
+const MAX_TAG_CHARS = 64
+const MAX_TAG_OVERRIDES = 50
+const MAX_DIR_CHARS = 1_000
+/** A semantic tag: lowercase-ish identifier, dots/colons allowed (`fs`, `egress`, `mcp:write`). */
+const TAG_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/u
+/** Result categories `results.blockOn` may name (mirrors the config schema). */
+const RESULT_CATEGORIES: readonly string[] = ['credential_leak', 'injection_marker', 'pii']
+/** Patrol bounds (the check is a rate window; these are sanity limits, not policy). */
+const MAX_PATROL_MINUTES = 10_080
+const MAX_PATROL_FACTOR = 1_000
+const MAX_PATROL_COUNT = 1_000_000
+
 /** Custom-provider bounds and grammar. */
 const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]{1,39}$/u
 const MAX_DISPLAY_NAME = 80
@@ -235,6 +250,105 @@ function piiClassesField(value: unknown): string[] {
     if (!out.includes(entry)) out.push(entry)
   }
   return out
+}
+
+/**
+ * Validate one tool-name glob list (`denyTools` / `askTools` / `allowOnce`).
+ *
+ * The matcher only treats `*` as a wildcard and every other character literally, so
+ * validation is about shape: a single-line, bounded, non-empty entry. An empty list
+ * is legal and means "match nothing".
+ */
+function globListField(value: unknown, name: string): string[] {
+  return listField(value, name, (entry) => {
+    if (/[\r\n\u0000]/u.test(entry)) throw new PanelSettingsError('settings_invalid', `${name} entries must be single-line`)
+    if (entry.length > MAX_PATTERN_CHARS) throw new PanelSettingsError('settings_invalid', `${name} entries are too long`)
+  })
+}
+
+/** Validate a semantic-tag list (`denyTags`): identifiers only. */
+function tagListField(value: unknown, name: string): string[] {
+  return listField(value, name, (entry) => {
+    if (!TAG_PATTERN.test(entry)) {
+      throw new PanelSettingsError('settings_invalid', `${name} only accepts tag identifiers (letters, digits, _ . : -)`)
+    }
+  })
+}
+
+/** Shared list plumbing: array of strings → trimmed, de-duplicated, bounded. */
+function listField(value: unknown, name: string, check: (entry: string) => void): string[] {
+  if (!Array.isArray(value)) throw new PanelSettingsError('settings_invalid', `${name} must be an array`)
+  if (value.length > MAX_LIST_ENTRIES) {
+    throw new PanelSettingsError('settings_invalid', `${name} accepts at most ${MAX_LIST_ENTRIES} entries`)
+  }
+  const out: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') throw new PanelSettingsError('settings_invalid', `${name} entries must be strings`)
+    const trimmed = entry.trim()
+    if (trimmed.length === 0) continue
+    check(trimmed)
+    if (!out.includes(trimmed)) out.push(trimmed)
+  }
+  return out
+}
+
+/** Validate `tools.tagOverrides`: one `{ pattern, tags[] }` per entry, tags non-empty. */
+function tagOverridesField(value: unknown): { pattern: string; tags: string[] }[] {
+  if (!Array.isArray(value)) throw new PanelSettingsError('settings_invalid', 'lists.tagOverrides must be an array')
+  if (value.length > MAX_TAG_OVERRIDES) {
+    throw new PanelSettingsError('settings_invalid', `lists.tagOverrides accepts at most ${MAX_TAG_OVERRIDES} entries`)
+  }
+  const out: { pattern: string; tags: string[] }[] = []
+  for (const entry of value) {
+    if (entry === null || typeof entry !== 'object') {
+      throw new PanelSettingsError('settings_invalid', 'lists.tagOverrides entries need { pattern, tags }')
+    }
+    const record = entry as { pattern?: unknown; tags?: unknown }
+    if (typeof record.pattern !== 'string') {
+      throw new PanelSettingsError('settings_invalid', 'lists.tagOverrides[].pattern must be a string')
+    }
+    const pattern = record.pattern.trim()
+    if (pattern.length === 0 || pattern.length > MAX_PATTERN_CHARS || /[\r\n\u0000]/u.test(pattern)) {
+      throw new PanelSettingsError('settings_invalid', 'lists.tagOverrides[].pattern must be a non-empty single line')
+    }
+    const tags = tagListField(record.tags, 'lists.tagOverrides[].tags')
+    if (tags.length === 0) {
+      throw new PanelSettingsError('settings_invalid', 'lists.tagOverrides[].tags needs at least one tag')
+    }
+    if (tags.some((tag) => tag.length > MAX_TAG_CHARS)) {
+      throw new PanelSettingsError('settings_invalid', 'lists.tagOverrides[].tags entries are too long')
+    }
+    out.push({ pattern, tags })
+  }
+  return out
+}
+
+/** Validate `results.blockOn` against the closed category vocabulary. */
+function blockOnField(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new PanelSettingsError('settings_invalid', 'lists.blockOn must be an array')
+  const out: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !RESULT_CATEGORIES.includes(entry)) {
+      throw new PanelSettingsError('settings_invalid', `lists.blockOn only accepts ${RESULT_CATEGORIES.join(', ')}`)
+    }
+    if (!out.includes(entry)) out.push(entry)
+  }
+  return out
+}
+
+/**
+ * Validate a directory path (`rules.dir`).
+ *
+ * The plugin does not resolve or create it here — it only refuses what can never be
+ * a path (a newline, a NUL, or something absurdly long) so a bad paste is caught
+ * before the host rewrites the profile patch.
+ */
+function directoryField(value: unknown, name: string): string {
+  if (typeof value !== 'string') throw new PanelSettingsError('settings_invalid', `${name} must be a string`)
+  const trimmed = value.trim()
+  if (trimmed.length > MAX_DIR_CHARS) throw new PanelSettingsError('settings_invalid', `${name} is too long`)
+  if (/[\r\n\u0000]/u.test(trimmed)) throw new PanelSettingsError('settings_invalid', `${name} must be a single line`)
+  return trimmed
 }
 
 /**
@@ -552,6 +666,39 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       allowedTables: [...cfg.tools.sql.allowedTables],
     }
     const pii = { enabled: cfg.results.pii, classes: [...cfg.results.piiClasses] }
+    const lists = {
+      denyTools: [...cfg.tools.denyTools],
+      askTools: [...cfg.tools.askTools],
+      denyTags: [...cfg.tools.denyTags],
+      tagOverrides: cfg.tools.tagOverrides.map((item) => ({ pattern: item.pattern, tags: [...item.tags] })),
+      blockOn: [...cfg.results.blockOn],
+      allowOnce: [...cfg.approval.allowOnce],
+    }
+    const source = {
+      rulesDir: cfg.rules.dir,
+      rulesWatch: cfg.rules.watch,
+      patrolWindowMinutes: cfg.patrol.windowMinutes,
+      patrolFactor: cfg.patrol.factor,
+      patrolMinCount: cfg.patrol.minCount,
+    }
+    // Stage three: facts only. No credential crosses this block — notification
+    // destinations are reduced to their channel types.
+    const facts = {
+      engine: { kind: cfg.engine.kind, command: cfg.engine.command },
+      rules: { inlineRules: cfg.rules.inline.length, sources: runtime.engine.ruleset.sources.length },
+      audit: {
+        format: cfg.audit.format,
+        dir: cfg.audit.dir,
+        rotateMb: cfg.audit.rotateMb,
+        required: cfg.audit.required,
+        hashChain: cfg.audit.hashChain,
+      },
+      posture: { onLoad: cfg.posture.onLoad, failOn: [...cfg.posture.failOn] },
+      patrolNotify: {
+        channels: [...new Set(cfg.patrol.notify.map((channel) => channel.type))],
+        healthUrls: cfg.patrol.healthUrls.length,
+      },
+    }
     const custom = loadCustomProviders().map(({ credentialRef: _credentialRef, ...row }) => row)
     return {
       preset: cfg.preset,
@@ -559,6 +706,9 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       inputJudge,
       toolDetection,
       pii,
+      lists,
+      source,
+      facts,
       judge,
       draft,
       providers: await loadCatalog(llm),
@@ -594,6 +744,11 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     // they are collected the same way (a save that changes both must not drop one).
     const tools: Record<string, unknown> = {}
     const results: Record<string, unknown> = {}
+    // `approval`, `rules` and `patrol` gain list/number knobs in 1.13.0; they are
+    // collected the same way so a save cannot drop the mode it did not touch.
+    const approval: Record<string, unknown> = {}
+    const rules: Record<string, unknown> = {}
+    const patrol: Record<string, unknown> = {}
 
     if (patch.surfaces !== undefined && patch.surfaces !== null) {
       const surfaces = patch.surfaces
@@ -625,7 +780,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         if (surfaces.approval !== 'delegate' && surfaces.approval !== 'policy') {
           throw new PanelSettingsError('settings_invalid', 'surfaces.approval must be delegate or policy')
         }
-        update['approval'] = { mode: surfaces.approval }
+        approval['mode'] = surfaces.approval
       }
     }
 
@@ -735,10 +890,41 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       }
     }
 
+    if (patch.lists !== undefined && patch.lists !== null) {
+      const lists = patch.lists
+      if (lists.denyTools !== undefined) tools['denyTools'] = globListField(lists.denyTools, 'lists.denyTools')
+      if (lists.askTools !== undefined) tools['askTools'] = globListField(lists.askTools, 'lists.askTools')
+      if (lists.denyTags !== undefined) tools['denyTags'] = tagListField(lists.denyTags, 'lists.denyTags')
+      if (lists.tagOverrides !== undefined) tools['tagOverrides'] = tagOverridesField(lists.tagOverrides)
+      if (lists.blockOn !== undefined) results['blockOn'] = blockOnField(lists.blockOn)
+      if (lists.allowOnce !== undefined) approval['allowOnce'] = globListField(lists.allowOnce, 'lists.allowOnce')
+    }
+
+    if (patch.source !== undefined && patch.source !== null) {
+      const source = patch.source
+      if (source.rulesDir !== undefined) rules['dir'] = directoryField(source.rulesDir, 'source.rulesDir')
+      if (source.rulesWatch !== undefined) {
+        if (typeof source.rulesWatch !== 'boolean') throw new PanelSettingsError('settings_invalid', 'source.rulesWatch must be a boolean')
+        rules['watch'] = source.rulesWatch
+      }
+      if (source.patrolWindowMinutes !== undefined) {
+        patrol['windowMinutes'] = numberField(source.patrolWindowMinutes, 'source.patrolWindowMinutes', 1, MAX_PATROL_MINUTES)
+      }
+      if (source.patrolFactor !== undefined) {
+        patrol['factor'] = numberField(source.patrolFactor, 'source.patrolFactor', 1, MAX_PATROL_FACTOR)
+      }
+      if (source.patrolMinCount !== undefined) {
+        patrol['minCount'] = integerField(source.patrolMinCount, 'source.patrolMinCount', 0, MAX_PATROL_COUNT)
+      }
+    }
+
     if (Object.keys(input).length > 0) update['input'] = input
     if (Object.keys(output).length > 0) update['output'] = output
     if (Object.keys(tools).length > 0) update['tools'] = tools
     if (Object.keys(results).length > 0) update['results'] = results
+    if (Object.keys(approval).length > 0) update['approval'] = approval
+    if (Object.keys(rules).length > 0) update['rules'] = rules
+    if (Object.keys(patrol).length > 0) update['patrol'] = patrol
 
     if (Object.keys(update).length === 0) throw new PanelSettingsError('settings_invalid', 'no supported field was supplied')
 
