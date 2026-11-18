@@ -20,6 +20,10 @@ export const ReasonCode = {
   InputTooLong: 'input_truncated',
   /** The configured input engine could not judge (sidecar down / stale rules). */
   InputEngineUnavailable: 'input_engine_unavailable',
+  /** The input semantic judge classified the turn as an injection. */
+  InputJudgeBlocked: 'input_judge_blocked',
+  /** The input judge returned no usable verdict under the fail-closed policy. */
+  InputJudgeUnavailable: 'input_judge_unavailable',
   // tool surface
   ToolName: 'tool_denied_by_name',
   ToolTag: 'tool_denied_by_tag',

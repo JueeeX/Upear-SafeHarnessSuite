@@ -835,7 +835,8 @@ A：不能；它是只读参考。插件是独立 TS 重写。`SUMC/`、`example
 | 1.9.3 | 浏览器半侧新增 `plugins.bundle.config`（key=包名）与 `plugins.row.config`（key=`@upear/dsh-safeharness#safeharness`），`view: 'page'` 渲染五标签工作台；设置标签页保留 | 已真机确认：工作台出现在条目页 README **之后** |
 | 1.9.4 | 完整手册移到包根 `MANUAL.md`（章节号不变），`README.md` 收成 22 行门面，`MANUAL.md` 进 `files` 与发布白名单 | 已安装确认 |
 | 1.9.5 | README 再收短（16 行，只留简介/安装/面板入口/三条 GitHub 绝对链接）；新增 `plugins.detail.actions` 页头「完整文档」按钮，按 `subject.pkg.name` 只在本包页面渲染，`target="_blank"` 打开 MANUAL | 已安装确认（按钮真机点击待验） |
-| 1.10.0 | 设置页新增「防护面」开关：五面（输入/工具/结果/输出/审批桥）逐面 `mode` 下拉，保存走 `op: save`（`surfaces` 合并进同一个 `output`，revision CAS，审计只记 `surfaces: changed`）；概览四卡从等高网格改两列瀑布（`columns: 2` + `break-inside: avoid`，<700px 单列） | 已安装，**待重启验证** |
+| 1.10.0 | 设置页新增「防护面」开关：五面（输入/工具/结果/输出/审批桥）逐面 `mode` 下拉，保存走 `op: save`（`surfaces` 合并进同一个 `output`，revision CAS，审计只记 `surfaces: changed`）；概览四卡从等高网格改两列瀑布（`columns: 2` + `break-inside: avoid`，<700px 单列） | 已真机确认（1.10.0 状态：八个接缝 true、20 规则 / 3 链） |
+| 1.11.0 | 输入面与内核对齐：**归一化 + MODIFY**（NFKC / 零宽 / HTML 注释，`input.normalize` 默认开；清洗后放行以清洗文本进入模型）；**输入语义评审**（`input.judge: off/flagged/always`，默认 flagged；`input.judgeFailClosed` 默认 false，hardened 预设自动 true；复用 `output.judge` 路由；`block` → `input_judge_blocked`，无结论 + fail-closed → `input_judge_unavailable`，结构已拒时不调用）；面板「防护面」卡片加三档/两开关 | 已安装，**待重启验证**；公开仓 `b059801` / tag `v1.11.0`；47 文件 / 767 用例 |
 
 **宿主约束（重要，别再试）**：插件详情页的「包文档」是**纯 Markdown**——raw HTML（`<details>` 折叠、HTML 图片/布局）被丢弃，相对链接不可点，只有绝对 URL 可点。所以"页内展开完整 README"做不到；长文只能放外部链接 + 页头按钮。
 

@@ -47,6 +47,7 @@ import type {
   PanelApprovalMode,
   PanelMode,
   PanelSurfaceSettings,
+  PanelInputJudge,
 } from '../panel/protocol.js'
 import type { PanelFace } from './index.js'
 
@@ -157,6 +158,7 @@ interface SettingsData {
   readonly judge: JudgeForm
   readonly draft: DraftForm
   readonly surfaces: PanelSurfaceSettings
+  readonly inputJudge: PanelInputJudge
 }
 
 /** Settings tab load state. */
@@ -200,6 +202,13 @@ interface MutableJudgePatch {
 interface MutableDraftPatch {
   provider?: string
   model?: string
+}
+
+/** Mutable builder for the input judge patch. */
+interface MutableInputJudgePatch {
+  mode?: 'off' | 'flagged' | 'always'
+  failClosed?: boolean
+  normalize?: boolean
 }
 
 /** Mutable builder for the per-surface switchboard patch. */
@@ -308,7 +317,12 @@ function storeValue(key: string, value: string | null): void {
  * server still stands where it did when the draft was typed.
  */
 function baselineOf(value: PanelSettingsValue): string {
-  return JSON.stringify({ judge: value.judge, draft: value.draft, surfaces: value.surfaces })
+  return JSON.stringify({
+    judge: value.judge,
+    draft: value.draft,
+    surfaces: value.surfaces,
+    inputJudge: value.inputJudge,
+  })
 }
 
 /** A settings form draft kept across a Host remount. */
@@ -318,6 +332,8 @@ interface StoredSettingsDraft {
   readonly draft: DraftForm
   /** Absent drafts from 1.9.5 and earlier fall back to the loaded value. */
   readonly surfaces?: PanelSurfaceSettings
+  /** Absent drafts from 1.10.0 and earlier fall back to the loaded value. */
+  readonly inputJudge?: PanelInputJudge
 }
 
 /** Decision → human label. */
@@ -359,6 +375,8 @@ const REASON_LABELS: Record<string, string> = {
   input_sql_dangerous: '危险 SQL',
   input_truncated: '输入超长',
   input_engine_unavailable: '输入引擎不可用',
+  input_judge_blocked: '输入评审判定注入',
+  input_judge_unavailable: '输入评审不可用',
   tool_denied_by_name: '工具名黑名单',
   tool_denied_by_tag: '工具能力标签被禁',
   tool_denied_by_args: '参数命中危险模式',
@@ -1117,6 +1135,7 @@ function toSettingsData(value: PanelSettingsValue): SettingsData {
     },
     draft: { provider: value.draft.provider, model: value.draft.model },
     surfaces: { ...value.surfaces },
+    inputJudge: { ...value.inputJudge },
   }
 }
 
@@ -1126,6 +1145,7 @@ function buildPatch(
   judge: JudgeForm,
   draft: DraftForm,
   surfaces: PanelSurfaceSettings,
+  inputJudge: PanelInputJudge,
 ): PatchResult {
   const maxChars = positiveInt(judge.maxChars)
   const timeoutMs = positiveInt(judge.timeoutMs)
@@ -1147,10 +1167,15 @@ function buildPatch(
   if (surfaces.results !== value.surfaces.results) surfacePatch.results = surfaces.results
   if (surfaces.output !== value.surfaces.output) surfacePatch.output = surfaces.output
   if (surfaces.approval !== value.surfaces.approval) surfacePatch.approval = surfaces.approval
+  const inputJudgePatch: MutableInputJudgePatch = {}
+  if (inputJudge.mode !== value.inputJudge.mode) inputJudgePatch.mode = inputJudge.mode
+  if (inputJudge.failClosed !== value.inputJudge.failClosed) inputJudgePatch.failClosed = inputJudge.failClosed
+  if (inputJudge.normalize !== value.inputJudge.normalize) inputJudgePatch.normalize = inputJudge.normalize
   const hasJudge = Object.keys(judgePatch).length > 0
   const hasDraft = Object.keys(draftPatch).length > 0
   const hasSurfaces = Object.keys(surfacePatch).length > 0
-  if (!hasJudge && !hasDraft && !hasSurfaces) return { patch: undefined, invalid: null }
+  const hasInputJudge = Object.keys(inputJudgePatch).length > 0
+  if (!hasJudge && !hasDraft && !hasSurfaces && !hasInputJudge) return { patch: undefined, invalid: null }
   return {
     patch: {
       // Echo the revision this form was rendered at: the next save is refused as stale
@@ -1158,6 +1183,7 @@ function buildPatch(
       // made in the meantime. Null means the host exposes no revision.
       ...(value.revision === null ? {} : { expectedRevision: value.revision }),
       ...(hasSurfaces ? { surfaces: surfacePatch } : {}),
+      ...(hasInputJudge ? { inputJudge: inputJudgePatch } : {}),
       ...(hasJudge ? { judge: judgePatch } : {}),
       ...(hasDraft ? { draft: draftPatch } : {}),
     },
@@ -2361,7 +2387,13 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
           try {
             const parsed = JSON.parse(stored) as Partial<StoredSettingsDraft>
             if (parsed.baseline === baselineOf(value) && parsed.judge !== undefined && parsed.draft !== undefined) {
-              data = { value, judge: parsed.judge, draft: parsed.draft, surfaces: parsed.surfaces ?? base.surfaces }
+              data = {
+                value,
+                judge: parsed.judge,
+                draft: parsed.draft,
+                surfaces: parsed.surfaces ?? base.surfaces,
+                inputJudge: parsed.inputJudge ?? base.inputJudge,
+              }
             } else {
               storeValue(SETTINGS_DRAFT_KEY, null)
             }
@@ -2391,15 +2423,18 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const data = view.status === 'ready' ? view.data : undefined
   const patchResult = useMemo<PatchResult>(() => {
     if (data === undefined) return { patch: undefined, invalid: null }
-    return buildPatch(data.value, data.judge, data.draft, data.surfaces)
+    return buildPatch(data.value, data.judge, data.draft, data.surfaces, data.inputJudge)
   }, [data])
 
   // Keep an unsaved form across a remount; a clean form clears the draft.
   useEffect(() => {
     if (view.status !== 'ready') return
-    const { value, judge, draft, surfaces } = view.data
-    const dirty = buildPatch(value, judge, draft, surfaces).patch !== undefined
-    storeValue(SETTINGS_DRAFT_KEY, dirty ? JSON.stringify({ baseline: baselineOf(value), judge, draft, surfaces }) : null)
+    const { value, judge, draft, surfaces, inputJudge } = view.data
+    const dirty = buildPatch(value, judge, draft, surfaces, inputJudge).patch !== undefined
+    storeValue(
+      SETTINGS_DRAFT_KEY,
+      dirty ? JSON.stringify({ baseline: baselineOf(value), judge, draft, surfaces, inputJudge }) : null,
+    )
   }, [view])
 
   const updateJudge = useCallback((patch: Partial<JudgeForm>): void => {
@@ -2420,6 +2455,13 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const updateSurface = useCallback((patch: Partial<PanelSurfaceSettings>): void => {
     setView(current => current.status === 'ready'
       ? { status: 'ready', data: { ...current.data, surfaces: { ...current.data.surfaces, ...patch } } }
+      : current)
+    setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
+  }, [])
+
+  const updateInputJudge = useCallback((patch: Partial<PanelInputJudge>): void => {
+    setView(current => current.status === 'ready'
+      ? { status: 'ready', data: { ...current.data, inputJudge: { ...current.data.inputJudge, ...patch } } }
       : current)
     setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
   }, [])
@@ -2549,7 +2591,7 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
     return <div className="shp-stack"><Card title="设置"><Loading text="正在读取评审与起草路由…" /></Card></div>
   }
 
-  const { value, judge, draft, surfaces } = data
+  const { value, judge, draft, surfaces, inputJudge } = data
   const readOnly = !value.judge.configurable
   const saving = save.status === 'saving'
   const dirty = patchResult.patch !== undefined
@@ -2631,6 +2673,50 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
             options={APPROVAL_MODE_OPTIONS}
             hint="委派宿主 = 透传；插件策略 = 按本包的粗粒度规则裁决"
           />
+        </div>
+        <div className="shp-form-grid">
+          <SelectField
+            label="输入语义评审"
+            value={inputJudge.mode}
+            disabled={readOnly}
+            onChange={(next) => {
+              updateInputJudge({ mode: next === 'always' ? 'always' : next === 'off' ? 'off' : 'flagged' })
+            }}
+            options={[
+              { value: 'flagged', label: '仅结构命中时评审（默认）' },
+              { value: 'always', label: '每轮都评审（更贵）' },
+              { value: 'off', label: '关闭' },
+            ]}
+            hint="复用上面的评审路由；每次评审多一次模型调用"
+          />
+        </div>
+        <div className="shp-switch-row">
+          <label className="shp-switch-label">
+            <input
+              type="checkbox"
+              checked={inputJudge.failClosed}
+              disabled={readOnly}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                updateInputJudge({ failClosed: event.target.checked })
+              }}
+            />
+            评审无结论时拒绝（fail-closed）
+          </label>
+          <span className="shp-card-hint">关闭时保持结构规则的判定；开启后 judge 超时、空回复也会拒。</span>
+        </div>
+        <div className="shp-switch-row">
+          <label className="shp-switch-label">
+            <input
+              type="checkbox"
+              checked={inputJudge.normalize}
+              disabled={readOnly}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                updateInputJudge({ normalize: event.target.checked })
+              }}
+            />
+            匹配前清洗（NFKC / 零宽 / HTML 注释）
+          </label>
+          <span className="shp-card-hint">被清洗的输入在放行时会以清洗后的文本进入模型。</span>
         </div>
         <p className="shp-card-hint">
           这里的改动是逐字段覆盖：只写你动过的那几个字段，`preset` 保持原值；想整体切换用 profile 的 `preset`。

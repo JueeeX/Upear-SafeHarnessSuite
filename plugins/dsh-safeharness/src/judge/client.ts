@@ -143,10 +143,20 @@ const MAX_PROMPT_TOTAL = 16_384
  * today's text is well inside it and the recursion marker is at the very start,
  * so a clamp (if it ever triggered) would still leave the marker intact.
  */
-function instructionOf(): string {
-  return SYSTEM_PROMPT.length <= MAX_PROMPT_CHARS
-    ? SYSTEM_PROMPT
-    : SYSTEM_PROMPT.slice(0, MAX_PROMPT_CHARS)
+function instructionOf(prompt: string = SYSTEM_PROMPT): string {
+  return prompt.length <= MAX_PROMPT_CHARS
+    ? prompt
+    : prompt.slice(0, MAX_PROMPT_CHARS)
+}
+
+/** Knobs {@link createJudge} accepts; the output-review prompt is the default. */
+export interface JudgeSetup {
+  /** Test seam for time; production omits it. */
+  readonly now?: () => number
+  /** Instruction prefix; callers screening other content pass their own. */
+  readonly systemPrompt?: string
+  /** Reply parser; defaults to the allow/block JSON reader. */
+  readonly parseVerdict?: (raw: string) => JudgeVerdict | undefined
 }
 
 /**
@@ -242,10 +252,11 @@ function closeQuietly(iterator: AsyncIterator<JudgeChunkLike>): void {
  * @param deps - test seam for time; production omits it.
  * @returns a handle whose every method is safe to call on any input.
  */
-export function createJudge(call: JudgeCall | undefined, deps: { now?: () => number } = {}): Judge {
+export function createJudge(call: JudgeCall | undefined, deps: JudgeSetup = {}): Judge {
   const now = deps.now ?? Date.now
   const available = typeof call === 'function'
-  const systemPrompt = instructionOf()
+  const systemPrompt = instructionOf(deps.systemPrompt)
+  const readVerdict = deps.parseVerdict ?? parseVerdict
 
   return {
     available,
@@ -344,7 +355,7 @@ export function createJudge(call: JudgeCall | undefined, deps: { now?: () => num
             response_chars: response.length,
           })
         }
-        const verdict = parseVerdict(response)
+        const verdict = readVerdict(response)
         if (verdict === undefined) {
           return finish('bad_json', 'unknown', { ...baseLabels, reason: 'unparsable_model_reply' }, {
             response_chars: response.length,

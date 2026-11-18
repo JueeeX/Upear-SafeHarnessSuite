@@ -458,7 +458,18 @@ function draftCallOf(
  * @returns the call adapter, or `undefined` when this profile composes no `llm`
  *   service (the judge then reports `unavailable`, which §7 degrades by preset).
  */
-function judgeCallOf(ctx: Context, runtime: Runtime): ((prompt: string, options: { signal: AbortSignal; maxTokens: number }) => AsyncIterable<{ type: string; text?: string }>) | undefined {
+/**
+ * Adapter over `ctx.llm` for auxiliary calls (judge / drafting).
+ *
+ * Exported for the input judge (1.11.0): both surfaces must travel the exact
+ * route an operator configured, otherwise a probe or a switch would prove
+ * nothing about the deployment.
+ *
+ * @param ctx - plugin context.
+ * @param runtime - shared config (route can change on settings reload).
+ * @returns the call, or undefined when the profile composes no llm service.
+ */
+export function judgeCallOf(ctx: Context, runtime: Runtime): ((prompt: string, options: { signal: AbortSignal; maxTokens: number }) => AsyncIterable<{ type: string; text?: string }>) | undefined {
   const service = ctx.get('llm') as { stream?: (options: unknown) => AsyncIterable<StreamChunk> } | undefined
   const dispatch = service?.stream?.bind(service)
   if (dispatch === undefined) return undefined

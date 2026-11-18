@@ -474,10 +474,16 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       output: cfg.output.mode,
       approval: cfg.approval.mode,
     }
+    const inputJudge = {
+      mode: cfg.input.judge,
+      failClosed: cfg.input.judgeFailClosed,
+      normalize: cfg.input.normalize,
+    }
     const custom = loadCustomProviders().map(({ credentialRef: _credentialRef, ...row }) => row)
     return {
       preset: cfg.preset,
       surfaces,
+      inputJudge,
       judge,
       draft,
       providers: await loadCatalog(llm),
@@ -504,8 +510,10 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     }
     const cfg = runtime.config
     const update: Record<string, unknown> = {}
-    // `output` carries both the judge route and the surface mode; collect them in
+    // `input` carries both the surface mode and the judge knobs; collect them in
     // one object so a save that changes both does not drop either.
+    const input: Record<string, unknown> = {}
+    // `output` carries both the judge route and the surface mode; same reason.
     const output: Record<string, unknown> = {}
 
     if (patch.surfaces !== undefined && patch.surfaces !== null) {
@@ -514,7 +522,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         if (surfaces.input !== 'off' && surfaces.input !== 'warn' && surfaces.input !== 'enforce') {
           throw new PanelSettingsError('settings_invalid', 'surfaces.input must be off, warn or enforce')
         }
-        update['input'] = { mode: surfaces.input }
+        input['mode'] = surfaces.input
       }
       if (surfaces.tools !== undefined) {
         if (surfaces.tools !== 'off' && surfaces.tools !== 'warn' && surfaces.tools !== 'enforce') {
@@ -539,6 +547,28 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
           throw new PanelSettingsError('settings_invalid', 'surfaces.approval must be delegate or policy')
         }
         update['approval'] = { mode: surfaces.approval }
+      }
+    }
+
+    if (patch.inputJudge !== undefined && patch.inputJudge !== null) {
+      const knobs = patch.inputJudge
+      if (knobs.mode !== undefined) {
+        if (knobs.mode !== 'off' && knobs.mode !== 'flagged' && knobs.mode !== 'always') {
+          throw new PanelSettingsError('settings_invalid', 'inputJudge.mode must be off, flagged or always')
+        }
+        input['judge'] = knobs.mode
+      }
+      if (knobs.failClosed !== undefined) {
+        if (typeof knobs.failClosed !== 'boolean') {
+          throw new PanelSettingsError('settings_invalid', 'inputJudge.failClosed must be a boolean')
+        }
+        input['judgeFailClosed'] = knobs.failClosed
+      }
+      if (knobs.normalize !== undefined) {
+        if (typeof knobs.normalize !== 'boolean') {
+          throw new PanelSettingsError('settings_invalid', 'inputJudge.normalize must be a boolean')
+        }
+        input['normalize'] = knobs.normalize
       }
     }
 
@@ -578,6 +608,7 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       update['draft'] = next
     }
 
+    if (Object.keys(input).length > 0) update['input'] = input
     if (Object.keys(output).length > 0) update['output'] = output
 
     if (Object.keys(update).length === 0) throw new PanelSettingsError('settings_invalid', 'no supported field was supplied')

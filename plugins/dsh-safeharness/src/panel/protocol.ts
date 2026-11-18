@@ -230,11 +230,23 @@ export interface PanelDraftSettings {
   readonly model: string
 }
 
+/** Input-guard knobs the panel may change (normalization + semantic judge). */
+export interface PanelInputJudge {
+  /** `off`, `flagged` (only when a structural rule hit) or `always`. */
+  readonly mode: 'off' | 'flagged' | 'always'
+  /** Deny when the judge returns no usable verdict. */
+  readonly failClosed: boolean
+  /** Clean the text (NFKC / zero-width / HTML comments) before matching and rewrite it. */
+  readonly normalize: boolean
+}
+
 /** Everything the settings tab renders (one `settings` call). */
 export interface PanelSettingsValue {
   readonly preset: string
   /** Per-surface enforcement levels currently in force (after preset expansion). */
   readonly surfaces: PanelSurfaceSettings
+  /** Input normalization and semantic judge. */
+  readonly inputJudge: PanelInputJudge
   readonly judge: PanelJudgeSettings
   readonly draft: PanelDraftSettings
   /** Provider/model catalog for the two route pickers (bounded). */
@@ -290,6 +302,12 @@ export interface PanelSettingsPatch {
     readonly results?: PanelMode
     readonly output?: PanelOutputMode
     readonly approval?: PanelApprovalMode
+  }
+  /** Input normalization and judge knobs. */
+  readonly inputJudge?: {
+    readonly mode?: 'off' | 'flagged' | 'always'
+    readonly failClosed?: boolean
+    readonly normalize?: boolean
   }
   readonly judge?: {
     readonly enabled?: boolean

@@ -40,8 +40,44 @@ export function userInputText(messages: readonly Message[]): string {
   return parts.join('\n')
 }
 
-/** Session id of an agent, when it has one. */
-export function sessionIdOf(agent: { session?: { id?: unknown } } | undefined): string | undefined {
+/**
+ * Rewrite the text blocks of genuine end-user messages.
+ *
+ * The input guard's MODIFY path uses this after normalization: only user turns
+ * with `source.kind === 'user'` are rewritten (tool results are `role: 'user'`
+ * too and must not be touched here), and every untouched message is returned by
+ * reference.
+ *
+ * @param messages - the messages the step would enter.
+ * @param rewrite - pure text transform (normalization).
+ * @returns the new list plus whether anything actually changed.
+ */
+export function rewriteUserText<T extends Message>(
+  messages: readonly T[],
+  rewrite: (text: string) => string,
+): { readonly messages: T[]; readonly changed: boolean } {
+  let changed = false
+  const next = messages.map((message) => {
+    if (message.role !== 'user') return message
+    const source = message.source as { kind?: string } | undefined
+    if (source?.kind !== 'user') return message
+    if (!Array.isArray(message.content)) return message
+    let touched = false
+    const content = (message.content as readonly ContentBlock[]).map((block) => {
+      if (block.type !== 'text') return block
+      const text = rewrite(block.text)
+      if (text === block.text) return block
+      touched = true
+      return { ...block, text }
+    })
+    if (!touched) return message
+    changed = true
+    return { ...message, content } as T
+  })
+  return { messages: next, changed }
+}
+
+/** Session id of an agent, when it has one. */export function sessionIdOf(agent: { session?: { id?: unknown } } | undefined): string | undefined {
   const id = agent?.session?.id
   return typeof id === 'string' ? id : undefined
 }
