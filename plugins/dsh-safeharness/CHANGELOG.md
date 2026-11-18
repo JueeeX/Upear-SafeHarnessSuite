@@ -2,6 +2,18 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.13.0 — 2026-11-18
+
+面板阶段二余项 + 阶段三只读视图 + 档位对照（P2 第 7 项）。
+
+- **列表编辑器（阶段二）**：设置页新增「列表与匹配」卡片——`tools.denyTools` / `askTools` / `allowOnce` / `denyTags`（每行一个，glob 只认 `*`）、`tools.tagOverrides`（每行 `pattern: tag1, tag2`，`#` 注释）、`approval.allowOnce`、`results.blockOn`（凭据/注入/PII 三个类别勾选，这是 1.12.0 PII 拦截缺的最后一块拼图）、`rules.dir` / `rules.watch`、`patrol.windowMinutes` / `factor` / `minCount`。
+- **写前校验**：glob 必须单行且有界（≤200 字符、≤200 条），标签只接受标识符（`[A-Za-z0-9_.:-]`），`blockOn` 只接受三个已知类别，`tagOverrides` 每条至少一个标签，目录必须单行，数值有下限（窗口 ≥1 分钟、倍数 ≥1、最少拒绝数 ≥0）。任何一条不合法 → 整个保存被拒，一个字节都不写。
+- **合并语义**：`tools` / `results` / `approval` / `rules` / `patrol` 各自成对象，和同一面的 `mode` 一次保存不会互相覆盖；列表按**无序**比较，仅调整行序不会触发保存或重载。
+- **只读视图（阶段三）**：新增「只读配置」卡片——输入引擎（kind/command）、规则来源（内联条数 + 文件份数）、账本（format/目录/轮转/写入失败语义）、加载闸门（`posture.failOn`）、巡检通知（**仅通道类型与数量**，webhook / token 永不回显）+ profile patch 路径复制。这些值只能在 patch 里改，面板明说。
+- **档位对照（P2 第 7 项）**：MANUAL §5 增加内核 `demo / hardened / production` ↔ 插件 `observe / balanced / hardened` 的意图映射表，写清"三对三但 env 项不是一对一"（网关/健康探针/记忆守卫属内核服务端，插件不移植）。
+- **协议**：`PanelSettingsValue` 新增 `lists` / `source` / `facts`，`PanelSettingsPatch` 新增 `lists` / `source`；旧面板缺字段时按服务端返回渲染，草稿兼容 1.12.0 及更早（缺失字段回落到加载值）。
+- **测试**：新增 4 条（列表写入、source/patrol 写入、非法值拒绝、只读事实回读且不含凭据）；51 文件 / 825 用例。
+
 ## 1.12.0 — 2026-11-18
 
 检测面与 SafeHarness 内核对齐（P1）：**SQL 表白名单、工具描述符注入扫描、轨迹阈值、PII 10 类**，并把四组开关接到面板。

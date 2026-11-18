@@ -1,6 +1,6 @@
 # SafeHarness for DeepSeek Harness
 
-> 版本 `1.12.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
+> 版本 `1.13.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
 
 DSH 的智能体安全插件：输入防线、工具调用管控、工具结果守卫（凭据 / 注入 / PII）、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，以一个 profile 级 Cordis 插件包交付。
 

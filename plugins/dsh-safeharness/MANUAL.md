@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.12.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.13.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -134,7 +134,7 @@ pnpm test             # 752 个用例（45 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.12.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
+# -> dist/upear-dsh-safeharness-1.13.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -148,7 +148,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.12.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.13.0.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -646,6 +646,18 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 | DSH 版本不匹配 | WARN | WARN | 拒绝加载 |
 
 总原则：**执行面任何未知/异常 → deny；观察面任何异常 → 记录并继续**。绝不"出错即放行"。
+
+### 5.1 与内核姿态档位的对应关系（1.13.0）
+
+内核用三份 env 档位文件（`src/safeharness/posture_profiles/*.json`）描述部署姿态，插件用 `preset` 描述默认值组合。两者**按意图三对三对应**，但不是 env 项的一对一映射——网关、健康探针、记忆守卫、能力签名属于内核服务端形态，插件不移植（见 §8）。
+
+| 内核档位 | 内核语义 | 插件对应 | 实际差异 |
+|---|---|---|---|
+| `demo.json` | 全部守卫**默认关**，只做建议性报告（`strict:false`、`gate:false`、`report:false`） | `preset: observe` | 插件的 observe 仍**记录**（各面 warn、账本照写），比内核对 demo 的"全关"更保守一档 |
+| `hardened.json` | 守卫**全开**、报告开，但**不拦启动**（`strict:false`、`gate:false`） | `preset: balanced`（默认） | 一致：检测面 enforce、审计 `required`、`failOn` 为空（只报告） |
+| `production.json` | 守卫全开 + `strict:true` + `gate:true`：姿态出现任何 WARN/FAIL 即**拒绝启动** | `preset: hardened` | 一致：`failOn` 非空，姿态 FAIL 时 `apply()` 抛错拒绝加载 |
+
+**没有第四个档位**，也不新增：需要更细的差异时，逐个字段覆盖（`posture.failOn`、各面 `mode`、`results.blockOn` …），语义不会分叉。面板「设置」页顶部显示当前 `preset`，只读配置卡片显示 `failOn` 的实际取值。
 
 ---
 
