@@ -2,6 +2,17 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.15.1 — 2026-11-19
+
+安全修复：**模型把用户的中转站 key 直接打印到了回答里**（真实事故，`session-2242f394`）。三处缺口叠加，全部已修并用真实会话日志复放验证（复放只打印命中结果，不打印凭据）。
+
+- **结果面（根因）**：`credential_assignment` 匹配不到两种真实形状——JSON 引号键名 `"LLM_API_KEY": "…"`，以及长标识符后缀（`LLM_API_KEY` 里的 `API_KEY` 前有 `_`，`\b` 卡住）。一条 14 字符的真 key 因此整条漏过工具结果守卫，进了模型上下文。修法：允许键名后的引号、允许最多 32 字符的标识符前缀（保留键名便于阅读）、对引号值同样排除 `z.string()` / `process.env.X` 这类引用。
+- **输出面（为什么没拦）**：`evaluateOutput` 此前只跑 20 条注入规则，**完全没有凭据扫描**，所以回显 key 的回答被记为 `rule_ids: []`。现在复用同一份 `scanCredentialLeaks`，命中即 `deny`（`reason_code: credential_leak`），`enforce-buffer` 下整条替换为拒绝话术；`warn` 下记账为 WARN 而不是 allow。
+- **流内脱敏（`warn` 也生效）**：凭据形态值在交给 UI 之前替换为 `[REDACTED:credential]`。为了覆盖**跨 delta 拆分**的密钥，流保留 256 字符尾部窗口，并重写 `block-end` 的权威文本；普通文本逐字不变。账本记 `labels.redacted=credential` + `metrics.redacted_count`，所以"账本 allow"不再等于"屏幕上没出现"。
+- **性能**：新正则的标识符前缀加上界（32 字符）+ key-ish 词预筛。无界前缀曾让整套测试卡死数分钟（256 KiB 单一字母串），加界后 256 KiB 最坏 31.8ms；`tests/perf.test.ts` 新增对抗用例钉住。
+- **测试**：新增 `tests/credential-leak.test.ts` 8 条（JSON/后缀/引号形状、误报对照、三面检测、跨 delta 脱敏、普通文本不变、enforce-buffer 整条替换）；56 文件 / 869 用例。
+- **边界**：形态检测不是真值保证（MANUAL §11 第 22 条），自定义短 token、拼接字符串仍可能漏过。
+
 ## 1.15.0 — 2026-11-19
 
 两条与内核对齐的收尾：**部署期规则目录校验**（`rules_check.py` 的等价物）与**"明确不移植"文档**。没有新增检测面，也不改变任何判定口径。

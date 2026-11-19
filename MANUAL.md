@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.15.0` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.15.1` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -64,7 +64,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 | `ctx.tools.guard()` | 与 pre-execute 同源的**同步**判定；不能 await、不碰 IO，异常一律 deny | `string \| undefined`（返回即拒绝原因） |
 | `tools/post-execute` | 工具结果守卫：凭据形态（私钥/API key/高熵令牌）、注入标记（如工具结果里伪造的指令）、被拒重试压力；命中可整条替换或阻断 | accept / block |
 | `tools/result` | 只读观察工具结果，写账本，不改变结果 | — |
-| `llm/stream` | 输出复查：结构化复核 + 可选语义 judge（走宿主 `ctx.llm`）。`warn` 只记账；`enforce-buffer` 会缓冲整条回答后决定回放或替换 | 透传 / 替换 |
+| `llm/stream` | 输出复查：结构化复核 + 凭据扫描（1.15.1 起）+ 可选语义 judge（走宿主 `ctx.llm`）。`warn` 记账**并把凭据形态值在流里替换为 `[REDACTED:credential]`**；`enforce-buffer` 会缓冲整条回答后决定回放或替换 | 透传（已脱敏）/ 替换 |
 | `approval/request` | 审批桥粗粒度判定：`allowOnce` 一次性授予 → 复用 deny 列表 → 其余 delegate；`delegate` 也写审计对，供巡检对账 | 授予 / 拒绝 / 委托 |
 | 系统提示词 | 在工具引导区（`order: 190`）注入 ≤300 字符的部署约束条款，**不含**规则正文、数量、阈值 | — |
 | 只读工具 / 命令 | 4 个 `safeharness_*` 工具 + `/safeharness` 命令，供模型与操作者自查 | — |
@@ -96,8 +96,8 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 
 ### 2.3 输出面与语义 judge
 
-- `output.mode: warn`：只记录 `output_reviewed`，不改回答。
-- `output.mode: enforce-buffer`：缓冲整条回答后再决定回放还是替换——**代价是牺牲流式**，首字延迟等于整条生成时间；受 `bufferTimeoutMs`（默认 15000）与 `bufferMaxChars`（默认 512000）约束，超限**降级为透传**并在账本记 `labels.buffer=timeout|max_chars`，不会静默吞回答。
+- `output.mode: warn`：记录 `output_reviewed`，并且**在流里脱敏凭据**（1.15.1）。普通文本逐字透传；`sk-`、`Bearer`、私钥头、`api_key: "…"` 这类赋值、以及 40 字符以上高熵令牌会被替换成 `[REDACTED:credential]`。为了让**跨 delta 拆分**的密钥也能匹配，流会保留 `REDACT_TAIL_CHARS`（256）个字符的窗口——代价是首字延迟约这几百字符，普通文本内容不变。账本记 `labels.redacted=credential` 与 `metrics.redacted_count`。
+- `output.mode: enforce-buffer`：缓冲整条回答后再决定回放还是替换——**代价是牺牲流式**，首字延迟等于整条生成时间；受 `bufferTimeoutMs`（默认 15000）与 `bufferMaxChars`（默认 512000）约束，超限**降级为透传**并在账本记 `labels.buffer=timeout|max_chars`，不会静默吞回答。命中凭据或规则命中时整条替换为固定拒绝话术。
 - 可选 judge（默认关闭）：通过宿主 `ctx.llm` 做一次结构化复核，`scope: flagged` 只复核已被结构化规则命中的回答（省成本），`always` 每答必审。judge 不可用/超时/坏 JSON 时按预设降级：`hardened` 拒绝输出，`observe`/`balanced` 记 WARN 放行。judge 自己的模型调用带内部标记，**不会被再次复核**（递归防护）；只有 tool_calls、没有文本的回答不送 judge。
 
 ### 2.4 审计、姿态、巡检、预算
@@ -304,7 +304,8 @@ config:
 - `input.maxChars`：超长文本截断后匹配（只记 WARN）。
 - `tools.mode: warn`：判定与记录照常，但不拦截。
 - `results.blockOn`：只在 `results.mode: enforce` 时生效；命中即整条结果被替换（内容替换是保密边界，所以作用于整条结果）。
-- `output.mode: enforce-buffer`：牺牲流式，首字延迟 = 整条生成时间；超时/超长降级为透传并留痕。
+- `output.mode: warn`：记账 + 流内凭据脱敏（1.15.1）；普通文本不改，凭据形态值替换为 `[REDACTED:credential]`，代价是 256 字符的尾部窗口（首字延迟）。
+- `output.mode: enforce-buffer`：牺牲流式，首字延迟 = 整条生成时间；超时/超长降级为透传并留痕；命中凭据/规则时整条替换。
 - `output.judge`：不自建 HTTP 客户端，走宿主 `ctx.llm`；不可用时按预设降级（hardened 拒绝输出）。
 - `approval.mode: policy`：只做粗粒度判定；`approval/request` 不携带工具参数，**不要**把它当第二套策略引擎。`allowOnce` 与 deny 列表同时命中时**授予优先**（部署方不要同时写两边）。
 - `posture.failOn`：列出的 code 一旦 FAIL 即拒绝加载（建议只在 hardened 开启）。
@@ -875,6 +876,8 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 20. **面板是“可选 UI + 有限动作”，不是第二个真相源**：四个计数是**本进程**计数（重启归零）；事件来自账本尾部，会话来自“持久化元数据索引 ∪ 账本事件”，两者重启后可能对不上——面板把“本进程计数 / 历史会话”分开标注，不做归一；账本轮转后事件列表只显示当前文件里的记录。1.8.0 起面板的动作是：运行巡检（写 `patrol_report`、可能通知）、定时巡检（5–1440 分钟，状态写 `$DSH_HOME/safeharness/panel-state.json`）、AI 起草（一次辅助模型调用，返回草稿，**不写入不启用**）、重新加载规则（重读 rules 目录，失败保留旧规则集）、保存评审/起草路由（经宿主 `settings` 服务写 `cordis.patch.yml` 的 volatile 字段并热更新）、添加/删除自定义模型（写 `llm-pi-ai.providers.<id>`；Key 写宿主凭据服务，不写 profile、不回显、不进账本）、导出账本片段（返回账本已有的脱敏 NDJSON，浏览器保存）。它仍然**不做通用调度**，也不替代 `safeharness_status` 工具；**1.9.0 起它多了一条人发起的写路径**——把草稿写成 `rules.dir` 下的一个文件并热重载（文件名白名单、默认不覆盖、写前 loader 试编译、原子写、账本只记 `rules_written` 的元数据），但**绝不写安装包自带 `rules/`**，也没有模型可调用的对应工具。**会话标题来自宿主 `sessionTitle` 服务**（用户重命名或标题提供方建议），与工作区/创建时间一起写入 `$DSH_HOME/safeharness/sessions.json`（只有 `sessionId / workspace / createdAt / title / touchedAt`，无计数、trail、prompt、参数或输出）；标题只用于面板显示，不进账本、不进模型上下文，取不到时回落“项目 + 短会话 id”。样式跟随宿主主题（读 `documentElement` 的 `color-scheme`/`data-theme`），设置弹窗高度固定，面板内容较长时在弹窗内滚动。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。自定义路由只支持 pi-ai 的三种手写协议（OpenAI Completions / OpenAI Responses / Anthropic Messages），Bedrock/Vertex/Azure/Codex 需要各自环境与签名。插件顺序是“prepend 最佳努力 + guard 单调兜底”，不是绝对优先；详见 §4.8。
 
 21. **嵌套量词是加载门，不是风格建议（1.14.2）**：输入面在 `agent/pre-step` 里**同步**跑规则，JS 正则一旦开始回溯就无法中断——一条 `(a+)+` 不是"慢一点"，是**卡死整轮**（Python 侧的旧邮箱正则曾在 256 KiB 上跑 111 s，加长度上界才回到毫秒级）。所以 loader 现在对 `(a+)+` / `(.*)*` / `([a-z]+)*` 这类"组内已有无界量词、组外再套无界量词"的形状**直接拒绝**，`rules.dir` 手写文件与 `rules.inline` 都不例外。它是**形状启发式**：抓不住 `(a|aa)+` 这种交替爆炸，也不拒绝 `(\d{3}){2}` 这种有界嵌套（多项式，不是灾难）。被拒时改写法（拆成两条规则、用字符类、或加锚点/长度上界），不要试图绕过加载门。
+
+22. **凭据检测是"形态"不是"真值"（1.15.1）**：结果面/输出面/流内脱敏用的都是形态正则（`sk-`、`Bearer`、私钥头、`api_key: "…"` 赋值、40+ 字符高熵令牌）。它们覆盖了真实踩到的格式（JSON 引号名、`LLM_API_KEY` 这类长名后缀、跨 delta 拆分），但**不能保证**所有密钥格式：自定义厂商的短 token、被拆成多段拼接的字符串、或者写在自然语言里的片段仍可能漏过。流内脱敏另有 256 字符窗口：比这更长的令牌有极小的概率前半段已经透传。真正的边界是**不要在 prompt/工具结果里出现真实密钥**；检测是兜底，不是许可。2026-11-19 的教训：`"LLM_API_KEY": "…"` 因两个正则细节（`\b` 卡在 `_` 与 `A` 之间、键名后的引号）曾整条漏过，输出面当时也完全没有凭据扫描——三处都已修。
 
 ---
 

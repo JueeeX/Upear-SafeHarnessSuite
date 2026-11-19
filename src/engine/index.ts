@@ -7,7 +7,7 @@
 import type { ResolvedConfig } from '../config.js'
 import { evaluateInput } from './input.js'
 import { inspectSql } from './sql.js'
-import { evaluateToolCall, scanToolResult } from './tool.js'
+import { evaluateToolCall, scanCredentialLeaks, scanToolResult } from './tool.js'
 import type {
   Decision,
   ResultFinding,
@@ -127,14 +127,26 @@ export function createEngine(ruleset: RuleSet, config: ResolvedConfig): Engine {
           if (category === undefined) category = rule.category
         }
       }
+      // Credentials are scanned on the output face too, not just on tool results.
+      // 1.15.1: a model that had been shown a key (before the result gate learned
+      // JSON-quoted names) echoed it in its answer, and this review returned
+      // `rule_ids: []` because only the injection rule set was consulted.
+      const credentials = scanCredentialLeaks(text)
+      if (credentials.ruleIds.length > 0) {
+        for (const id of credentials.ruleIds) ruleIds.push(id)
+        severity = maxSeverity(severity, credentials.severity ?? 'high')
+        category ??= 'credential_leak'
+      }
       if (ruleIds.length === 0) return ALLOW
       return {
         kind: 'deny',
-        reasonCode: ReasonCode.OutputRule,
+        reasonCode: credentials.ruleIds.length > 0 ? ReasonCode.CredentialLeak : ReasonCode.OutputRule,
         ruleIds,
         severity,
         category,
-        reason: 'model output matched a deny rule',
+        reason: credentials.ruleIds.length > 0
+          ? 'model output carried a credential-shaped value'
+          : 'model output matched a deny rule',
       }
     },
 

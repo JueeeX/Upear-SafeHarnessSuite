@@ -153,6 +153,24 @@ describe('performance budgets', () => {
     expect(p99).toBeLessThan(40)
   })
 
+  it('credential patterns stay linear on adversarial 256 KB input', () => {
+    const ruleset = packagedRules()
+    const config = resolveConfig({ preset: 'balanced' })
+    // One long alphanumeric run is the worst case for the assignment pattern's
+    // identifier prefix: an unbounded prefix backtracked quadratically and hung the
+    // whole suite for minutes (2026-11-19) before it was capped at 32 chars.
+    const blob = 'A'.repeat(256 * 1024)
+    // The realistic shape: many JSON-quoted key names in one config dump.
+    const dense = '"LLM_API_KEY": "abcdefgh1234", '.repeat(4000)
+    for (const text of [blob, dense]) {
+      const p99 = bestP99(5, () => {
+        scanToolResult(ruleset, config.results, { name: 'read', text, valueText: '', isError: false })
+      }, 1)
+      console.log(`[perf] credential scan ${(text.length / 1024).toFixed(0)}KB p99=${p99.toFixed(3)}ms`)
+      expect(p99).toBeLessThan(300)
+    }
+  })
+
   it('output review of a 128 KB answer stays under 20 ms p99', () => {
     const { runtime } = createFakeHost({ config: { preset: 'observe' } })
     const text = 'the answer is 42. '.repeat(8000).slice(0, 128 * 1024)
