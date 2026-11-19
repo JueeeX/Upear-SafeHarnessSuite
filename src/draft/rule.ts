@@ -20,7 +20,7 @@
  *
  * @module
  */
-import { compileChain, compileRule } from '../engine/rules.js'
+import { NESTED_QUANTIFIER, compileChain, compileRule } from '../engine/rules.js'
 import { RuleLoadError } from '../engine/types.js'
 import type { RawChainRule, RawRule, Severity } from '../engine/types.js'
 
@@ -74,12 +74,9 @@ const CATEGORY = /^[a-z][a-z0-9-]{0,63}$/u
 /** The severity vocabulary, in lockstep with the engine. */
 const SEVERITIES: readonly Severity[] = ['critical', 'high', 'medium', 'low', 'info']
 
-/**
- * Conservative catastrophic-backtracking screen: a group whose body already
- * contains a quantifier, itself quantified (`(a+)+`, `(x*y*)*`). Real rules never
- * need this shape, and a ReDoS in the synchronous input guard would hang the agent.
- */
-const NESTED_QUANTIFIER = /\([^()]*[+*}][^()]*\)[+*{]/u
+// `NESTED_QUANTIFIER` lives in the loader (`engine/rules.ts`) so drafting and loading
+// reject the same shape with the same message; this path only adds its own extra
+// checks (length, control characters, shape warnings).
 
 /** Regex sources must stay on one line: YAML and the audit trail both hate embedded newlines. */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/u

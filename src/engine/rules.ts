@@ -16,6 +16,9 @@
  *   - Python-only regex syntax is a hard gate ({@link PYTHON_ONLY_REGEX_PATTERNS})
  *     plus a local gate for global inline flags (`(?i)`), per plan §8.2 item 3 —
  *     TS refuses what it cannot reproduce instead of relying on a divergence allowlist;
+ *   - a nested-quantifier shape (`(a+)+`) is a hard gate too
+ *     ({@link NESTED_QUANTIFIER}): input rules run synchronously and a JS regex
+ *     cannot be interrupted, so this is a hang vector, not a style nit;
  *   - `max_gap` must be a YAML integer (no `int("3")` coercion);
  *   - an install that yields no packaged rules, or no deny rules at all, cannot load:
  *     an "ok" empty rule set would make every detection surface inert.
@@ -72,6 +75,23 @@ const HASH_FORMAT = 'upear-safeharness-rules-v1'
  * message instead of a JS `SyntaxError` (digest §3.5 / §9.7).
  */
 const PYTHON_GLOBAL_INLINE_FLAG = /\(\?[aiLmsux-]+\)/
+
+/**
+ * Catastrophic-backtracking shape: a quantifier applied to a group that already
+ * contains one — `(a+)+`, `(.*)*`, `([a-z]+)*`. The input face evaluates rules
+ * **synchronously** on every turn, and a JS regex cannot be interrupted, so one such
+ * pattern hangs the agent for minutes on a single message (measured on the Python
+ * side: the old email regex took 111 s on 256 KiB before its length bound went in).
+ *
+ * Deliberately a *shape* heuristic, not a proof: it catches the classic nesting and
+ * cannot catch every exponential pattern (alternation blow-up such as `(a|aa)+` is
+ * left to review). Both quantifiers must be **unbounded** (`+`, `*`, `{n,}`): a
+ * bounded inner or outer quantifier (`(\d{3}){2}`, `(a+){2}`) is polynomial, not
+ * catastrophic, and rejecting it would refuse ordinary rules. It is the single
+ * definition shared with the drafting path, so a model-drafted rule and a hand-written
+ * rule are rejected by the same gate.
+ */
+export const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*(?:[+*]|\{\d+,\})(?:[^()\\]|\\.)*\)(?:[+*]|\{\d+,\})/u
 
 /** A rule source level, lowest precedence first. */
 type RuleLevel = 'packaged' | 'dir' | 'inline'
@@ -782,7 +802,9 @@ function readOptionalString(
  * 1. Python-only constructs listed in `PYTHON_ONLY_REGEX_PATTERNS` (plan §8.2 item 3:
  *    reject them outright, never allowlist a divergence);
  * 2. global inline flag groups (Python-only in JS, redundant under our `iu` flags);
- * 3. compilation under {@link RULE_REGEX_FLAGS}; JS is stricter than Python in a few
+ * 3. nested quantifiers ({@link NESTED_QUANTIFIER}): the input face evaluates rules
+ *    synchronously, so a catastrophic-backtracking pattern must never reach it;
+ * 4. compilation under {@link RULE_REGEX_FLAGS}; JS is stricter than Python in a few
  *    places (e.g. `\-` outside a class is invalid under `u`), and that is intentional:
  *    a pattern we cannot reproduce exactly is a pattern we must not pretend to run.
  */
@@ -802,6 +824,12 @@ function checkRegex(source: string, label: string, problems: string[]): RegExp |
   if (PYTHON_GLOBAL_INLINE_FLAG.test(source)) {
     problems.push(
       `${label}: pattern uses a global inline flag group such as (?i); the loader already applies the 'i' flag — remove it`,
+    )
+    return undefined
+  }
+  if (NESTED_QUANTIFIER.test(source)) {
+    problems.push(
+      `${label}: pattern repeats a group that already repeats (catastrophic backtracking risk); input rules run synchronously, so this shape is rejected`,
     )
     return undefined
   }
