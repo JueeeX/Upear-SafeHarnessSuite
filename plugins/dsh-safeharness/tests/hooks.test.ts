@@ -240,7 +240,7 @@ describe('llm/stream (T1.5)', () => {
     return chunks
   }
 
-  it('passes every chunk through unchanged and records the review', async () => {
+  it('streams the answer through the redaction window and records the review', async () => {
     const { host, runtime } = createFakeHost({ config: { preset: 'observe' } })
     installLlmHook(host.ctx as never, runtime)
     const chunks: StreamChunk[] = [
@@ -251,7 +251,16 @@ describe('llm/stream (T1.5)', () => {
     ]
     const result = await host.emitStream('llm/stream', { provider: 'p', model: 'm', messages: [] }, async function* () { for (const chunk of chunks) yield chunk })
     const output = await collect(result as AsyncIterable<StreamChunk>)
-    expect(output).toEqual(chunks)
+    // Chunk boundaries are no longer the provider's (a tail is held so a secret
+    // split across deltas still matches), but the text itself is unchanged when
+    // nothing credential-shaped was present, and the terminal order is kept.
+    const streamedText = output
+      .filter((chunk) => chunk.type === 'text-delta')
+      .map((chunk) => (chunk as { text: string }).text)
+      .join('')
+    expect(streamedText).toBe('hello world')
+    expect(output.filter((chunk) => chunk.type === 'usage')).toHaveLength(1)
+    expect(output.at(-1)?.type).toBe('finish')
     const ledger = await records(runtime)
     const reviewed = ledger.find((record) => record.kind === 'output_reviewed')
     expect(reviewed?.decision).toBe('allow')

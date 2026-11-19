@@ -723,16 +723,22 @@ const CREDENTIAL_PATTERNS: readonly CredentialPattern[] = [
   },
   // key=value / key: value assignments for credential-ish names.
   //
-  // The value must look like a literal secret: a quoted string, or an unquoted
-  // token that is not a dotted reference/type expression. Without the negative
-  // lookahead, source code such as `apiKey: z.string()` or
+  // Two shapes were missed in 1.15.0 and leaked a real 14-char relay key
+  // (2026-11-19, session-2242f394): a JSON-quoted name (`"LLM_API_KEY": "…"`) and a
+  // name that is the suffix of a longer identifier (`LLM_API_KEY` never matched
+  // because `\b` sits between `_` and `A`). The name is therefore not boundary-
+  // anchored at the start, and one closing quote is allowed before the separator.
+  //
+  // The value must still look like a literal secret: a quoted string, or an
+  // unquoted token that is not a dotted reference/type expression. Without the
+  // negative lookahead, source code such as `apiKey: z.string()` or
   // `token: process.env.TOKEN` matched and (under `results.mode: enforce`) whole
   // source/config files became unreadable — measured on the desktop profile.
   {
     id: 'credential_assignment',
     severity: 'high',
     regex:
-      /\b(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)\s*[=:]\s*(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}'|(?!z\.|process\.env|os\.environ|import\.meta|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b)[A-Za-z0-9._~+/=-]{8,})/i,
+      /[A-Za-z0-9_$-]{0,32}(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)["']?\s*[=:]\s*("(?!z\.|process\.env|os\.environ|import\.meta)[^"\r\n]{8,}"|'(?!z\.|process\.env|os\.environ|import\.meta)[^'\r\n]{8,}'|(?!z\.|process\.env|os\.environ|import\.meta|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b)[A-Za-z0-9._~+/=-]{8,})/i,
   },
 ]
 
@@ -811,6 +817,106 @@ function hasHighEntropyToken(text: string): boolean {
   return false
 }
 
+/** Credential-only scan result: rule ids in deterministic order + highest severity. */
+export interface CredentialScan {
+  /** Credential patterns that fired, sorted (empty = clean). */
+  readonly ruleIds: readonly string[]
+  /** Highest severity among the hits, when any. */
+  readonly severity?: Severity
+}/**
+ * Cheap pre-check for the assignment pattern: a text without any key-ish word
+ * cannot match it. Skipping the regex keeps a 256 KB scan near the pre-1.15.1 cost
+ * (the pattern is the expensive one, and most results contain no such word at all).
+ */
+const ASSIGNMENT_HINT_RE = /key|token|secret|password|passwd/i
+
+/**
+ * Scan text for credential-shaped values.
+ *
+ * Shared by the tool-result face and the output face. Before 1.15.1 only the
+ * result face ran these patterns: on 2026-11-19 the model echoed a relay key it
+ * had been shown and the finished answer was recorded as `rule_ids: []`, so the
+ * operator saw the key with a clean audit line — detection, not just policy, was
+ * missing on the output side.
+ *
+ * @param text - already length-bounded by the caller.
+ * @returns ids and severity; a matched value is never copied out.
+ */
+export function scanCredentialLeaks(text: string): CredentialScan {
+  const ids: string[] = []
+  let severity: Severity | undefined
+  for (const pattern of CREDENTIAL_PATTERNS) {
+    if (pattern.id === 'credential_assignment' && !ASSIGNMENT_HINT_RE.test(text)) continue
+    if (!testRegex(pattern.regex, text)) continue
+    ids.push(pattern.id)
+    if (severity === undefined || SEVERITY_RANK[pattern.severity] > SEVERITY_RANK[severity]) {
+      severity = pattern.severity
+    }
+  }
+  if (hasHighEntropyToken(text)) {
+    ids.push('credential_high_entropy')
+    if (severity === undefined) severity = 'high'
+  }
+  return { ruleIds: sortedIds(ids), severity }
+}
+
+/** Placeholder left in place of a credential-shaped value. Never contains the value. */
+export const CREDENTIAL_REDACTION = '[REDACTED:credential]'
+
+/**
+ * Replace credential-shaped values with {@link CREDENTIAL_REDACTION}.
+ *
+ * Why the output stream redacts instead of only recording: `output.mode: warn`
+ * cannot recall bytes the UI already painted, and 2026-11-19 that meant a real
+ * relay key reached the operator's screen while the ledger said `allow`. Detection
+ * alone is not a control. Redaction keeps streaming (no buffering, no loss of the
+ * rest of the answer) and only ever touches credential-shaped runs, so ordinary
+ * text is byte-identical.
+ *
+ * The caller must feed *windows*, not single chunks (see the tail buffer in
+ * `hooks/llm.ts`): a secret split across two deltas would otherwise pass through.
+ *
+ * @param text - a bounded slice of assistant text.
+ * @returns the redacted slice and how many values were replaced.
+ */
+export function redactCredentialValues(text: string): { readonly text: string; readonly count: number } {
+  let count = 0
+  let out = text
+
+  // Assignment first, and only the value: the key name is useful context and is
+  // not itself the secret (`"LLM_API_KEY": "[REDACTED:credential]"`).
+  const assignmentPattern = CREDENTIAL_PATTERNS.find((pattern) => pattern.id === 'credential_assignment')
+  if (assignmentPattern !== undefined && ASSIGNMENT_HINT_RE.test(text)) {
+    const assignment = new RegExp(assignmentPattern.regex.source, `${assignmentPattern.regex.flags}g`)
+    out = out.replace(assignment, (match: string, value: string) => {
+      count += 1
+      return match.slice(0, match.length - value.length) + CREDENTIAL_REDACTION
+    })
+  }
+
+  for (const pattern of CREDENTIAL_PATTERNS) {
+    if (pattern.id === 'credential_assignment') continue
+    const global = new RegExp(pattern.regex.source, `${pattern.regex.flags}g`)
+    const replacement = pattern.id === 'credential_openai_key'
+      ? `sk-${CREDENTIAL_REDACTION}`
+      : pattern.id === 'credential_bearer_token'
+        ? `Bearer ${CREDENTIAL_REDACTION}`
+        : CREDENTIAL_REDACTION
+    out = out.replace(global, () => {
+      count += 1
+      return replacement
+    })
+  }
+
+  // Long encoded secrets with no key name next to them.
+  out = out.replace(/[A-Za-z0-9+/_=-]{40,}/gu, (token) => {
+    if (!isCredentialShapedToken(token) || shannonEntropy(token) < ENTROPY_MIN_BITS_PER_CHAR) return token
+    count += 1
+    return CREDENTIAL_REDACTION
+  })
+  return { text: out, count }
+}
+
 /**
  * Scan one tool result for credential leaks, PII classes and injection markers.
  *
@@ -842,24 +948,12 @@ export function scanToolResult(
   const findings: ResultFinding[] = []
 
   // (a) credential leaks
-  const credentialIds: string[] = []
-  let credentialSeverity: Severity | undefined
-  for (const pattern of CREDENTIAL_PATTERNS) {
-    if (!testRegex(pattern.regex, scanned)) continue
-    credentialIds.push(pattern.id)
-    if (credentialSeverity === undefined || SEVERITY_RANK[pattern.severity] > SEVERITY_RANK[credentialSeverity]) {
-      credentialSeverity = pattern.severity
-    }
-  }
-  if (hasHighEntropyToken(scanned)) {
-    credentialIds.push('credential_high_entropy')
-    if (credentialSeverity === undefined) credentialSeverity = 'high'
-  }
-  if (credentialIds.length > 0) {
+  const credentials = scanCredentialLeaks(scanned)
+  if (credentials.ruleIds.length > 0) {
     findings.push({
       category: 'credential_leak',
-      ruleIds: sortedIds(credentialIds),
-      severity: credentialSeverity ?? 'high',
+      ruleIds: [...credentials.ruleIds],
+      severity: credentials.severity ?? 'high',
       detail: 'credential-shaped value in tool result (value never recorded)',
     })
   }

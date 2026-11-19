@@ -31,12 +31,34 @@ import type { Runtime } from '../runtime.js'
 import { foundSomething, OUTPUT_BLOCK_TEXT } from '../runtime.js'
 import { MAX_BUFFERED_OUTPUT_CHARS } from '../config.js'
 import { contentDigest } from '../util/hash.js'
+import { redactCredentialValues } from '../engine/tool.js'
 import { ReasonCode, type Decision } from '../engine/types.js'
 import { createJudge, JUDGE_REQUEST_MARK, type Judge, type JudgeResult, type JudgeStatus } from '../judge/client.js'
 import { createRuleDrafter, DRAFT_REQUEST_MARK, type RuleDrafter } from '../draft/rule.js'
 
 /** Characters of assistant text we keep for post-stream scanning. */
 export const MAX_OUTPUT_SCAN_CHARS = MAX_BUFFERED_OUTPUT_CHARS
+
+/**
+ * Text held back before streaming so a credential split across two deltas still
+ * matches. A provider emits a few characters per delta; without a window,
+ * `"LLM_API_KEY": "…"` arrives in pieces and no single delta matches. 256 chars
+ * covers every pattern here (a JWT is the longest common one) at the cost of a
+ * one-off delay of that many characters.
+ */
+export const REDACT_TAIL_CHARS = 256
+
+/** Per-text-block redaction state (held tail + what was already handed over). */
+interface RedactState {
+  /** Characters not yet emitted (the matching window's tail). */
+  pending: string
+  /** The redacted text emitted so far, used to rewrite `block-end`. */
+  emitted: string
+  /** How many values in this block were replaced. */
+  count: number
+  /** Whether the provider opened this block (then a synthetic `block-end` is due). */
+  opened: boolean
+}
 
 /**
  * Auxiliary model calls that must never be reviewed: compaction summaries and
@@ -118,6 +140,10 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
     const sessionId = typeof options.sessionId === 'string' ? options.sessionId : undefined
     const startedAt = Date.now()
     const held: StreamChunk[] = []
+    /** Per-block redaction state for the streaming (non-buffering) path. */
+    const redactStates = new Map<number, RedactState>()
+    /** How many credential values were replaced before the user saw them. */
+    let redactedCount = 0
     let chars = 0
     let text = ''
     let truncated = false
@@ -148,11 +174,73 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
       if (chunk.type === 'finish') finishKind = chunk.reason.kind
     }
 
+    /** Hand over one block's held tail, redacted (never the raw value). */
+    const flushBlock = (index: number, state: RedactState): StreamChunk[] => {
+      const tail = redactCredentialValues(state.pending)
+      state.pending = ''
+      state.count += tail.count
+      redactedCount += tail.count
+      state.emitted += tail.text
+      return tail.text.length > 0 ? [{ type: 'text-delta', index, text: tail.text }] : []
+    }
+
+    /** Hand over every held tail; closes blocks the provider opened but never closed. */
+    const flushAll = (): StreamChunk[] => {
+      const chunks: StreamChunk[] = []
+      for (const [index, state] of redactStates) {
+        chunks.push(...flushBlock(index, state))
+        if (state.opened) chunks.push({ type: 'block-end', index, block: { type: 'text', text: state.emitted } })
+      }
+      redactStates.clear()
+      return chunks
+    }
+
     try {
       for await (const chunk of next()) {
         observe(chunk)
         if (!buffering) {
-          // Observation must not alter timing or content semantics.
+          // Streaming path: ordinary text passes through byte-identically, but a
+          // credential-shaped value is replaced before the user can see it. The
+          // tail (REDACT_TAIL_CHARS) is held so a secret split across deltas still
+          // matches; `block-end` carries the authoritative text, so it is rewritten
+          // with the redacted version.
+          if (chunk.type === 'block-start') {
+            if (chunk.blockType === 'text') redactStates.set(chunk.index, { pending: '', emitted: '', count: 0, opened: true })
+            yield chunk
+            continue
+          }
+          if (chunk.type === 'text-delta') {
+            const state = redactStates.get(chunk.index) ?? { pending: '', emitted: '', count: 0, opened: false }
+            redactStates.set(chunk.index, state)
+            state.pending += chunk.text
+            if (state.pending.length > REDACT_TAIL_CHARS) {
+              const cut = state.pending.length - REDACT_TAIL_CHARS
+              const head = state.pending.slice(0, cut)
+              state.pending = state.pending.slice(cut)
+              const redacted = redactCredentialValues(head)
+              state.count += redacted.count
+              redactedCount += redacted.count
+              state.emitted += redacted.text
+              if (redacted.text.length > 0) yield { ...chunk, text: redacted.text }
+            }
+            continue
+          }
+          if (chunk.type === 'block-end') {
+            const state = redactStates.get(chunk.index)
+            if (state !== undefined) {
+              for (const flushed of flushBlock(chunk.index, state)) yield flushed
+              redactStates.delete(chunk.index)
+              const block = chunk.block
+              yield block.type === 'text' ? { ...chunk, block: { ...block, text: state.emitted } } : chunk
+              continue
+            }
+            yield chunk
+            continue
+          }
+          // A terminal or usage chunk while text is still held: hand the text over
+          // first, so the host sees the provider's order and nothing is lost when a
+          // provider ends without a `block-end`.
+          if (redactStates.size > 0) for (const flushed of flushAll()) yield flushed
           yield chunk
           continue
         }
@@ -182,6 +270,12 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
       if (!completed) held.length = 0
     }
     if (!completed) return
+
+    // Text still held when the provider ended without a `block-end`: hand it over
+    // (redacted) before reviewing, so nothing the model produced is silently lost.
+    if (!buffering && redactStates.size > 0) {
+      for (const flushed of flushAll()) yield flushed
+    }
 
     // ---- post-stream review -------------------------------------------------
     const reviewStartedAt = Date.now()
@@ -223,6 +317,7 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
     }
     if (judgeMs !== undefined) metrics.judge_ms = judgeMs
     if (degraded !== undefined) metrics.buffer_chars = chars
+    if (redactedCount > 0) metrics.redacted_count = redactedCount
 
     runtime.audit('output_reviewed', {
       ...runtime.sessionFields(sessionId),
@@ -234,6 +329,9 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
       detail_chars: digest.chars,
       labels: {
         ...outcome.labels,
+        // Streaming redaction happened before the answer was reviewed: record it so
+        // "the ledger says allow" can never be read as "the key was on screen".
+        ...(redactedCount > 0 ? { redacted: 'credential', redacted_count: String(redactedCount) } : {}),
         // Why a configured buffer did not hold: `timeout` or `max_chars`. Recorded
         // so "enforce-buffer was supposed to block this" stays answerable.
         ...(degraded === undefined ? {} : { buffer: degraded }),
