@@ -70,7 +70,7 @@ const SETTINGS_NS = 'safeharness' as unknown as SettingsNamespace
 /**
  * Host package versions this build has been verified against at RUNTIME — measured
  * from the RUNNING host, not from the profile tree: a DSH app resolves a plugin's
- * bare `@deepseek-ai/*` imports to its own bundled copies (0.2.2-rc.3 here), while
+ * bare `@deepseek-ai/*` imports to its own bundled copies (0.2.2-rc.5 here), while
  * the profile's node_modules is only the build-time type source (0.2.2-rc.1).
  * `engines.dsh` is the coarse gate; this table is the
  * per-package detail `safeharness_status.host` and the posture check report.
@@ -78,13 +78,38 @@ const SETTINGS_NS = 'safeharness' as unknown as SettingsNamespace
 export const PINNED_VERSIONS: Readonly<Record<string, string>> = {
   '@deepseek-ai/cordis': '4.1.0',
   '@deepseek-ai/schemastery': '3.19.0',
-  '@deepseek-ai/dsh-agent': '0.2.2-rc.3',
-  '@deepseek-ai/dsh-commands': '0.2.2-rc.3',
-  '@deepseek-ai/dsh-llm': '0.2.2-rc.3',
-  '@deepseek-ai/dsh-session': '0.2.2-rc.3',
-  '@deepseek-ai/dsh-settings': '0.2.2-rc.3',
-  '@deepseek-ai/dsh-system-prompt': '0.2.2-rc.3',
-  '@deepseek-ai/dsh-tools': '0.2.2-rc.3',
+  '@deepseek-ai/dsh-agent': '0.2.2-rc.5',
+  '@deepseek-ai/dsh-commands': '0.2.2-rc.5',
+  '@deepseek-ai/dsh-llm': '0.2.2-rc.5',
+  '@deepseek-ai/dsh-session': '0.2.2-rc.5',
+  '@deepseek-ai/dsh-settings': '0.2.2-rc.5',
+  '@deepseek-ai/dsh-system-prompt': '0.2.2-rc.5',
+  '@deepseek-ai/dsh-tools': '0.2.2-rc.5',
+}
+
+/**
+ * Host versions this build was verified against on an earlier DSH release and still
+ * accepts. DSH desktop updates arrive on the user's schedule, so a plugin release
+ * has to keep working on the host it shipped with: `1.14.0` was measured on
+ * `0.2.2-rc.3`, `1.14.1` on `0.2.2-rc.5`, and both stay supported. A version that
+ * was never measured belongs in neither table — that is what the posture check is
+ * for. Entries here are *added* only; dropping one is a breaking change.
+ */
+const PREVIOUSLY_VERIFIED_VERSIONS: Readonly<Record<string, readonly string[]>> = {
+  '@deepseek-ai/dsh-agent': ['0.2.2-rc.3'],
+  '@deepseek-ai/dsh-commands': ['0.2.2-rc.3'],
+  '@deepseek-ai/dsh-llm': ['0.2.2-rc.3'],
+  '@deepseek-ai/dsh-session': ['0.2.2-rc.3'],
+  '@deepseek-ai/dsh-settings': ['0.2.2-rc.3'],
+  '@deepseek-ai/dsh-system-prompt': ['0.2.2-rc.3'],
+  '@deepseek-ai/dsh-tools': ['0.2.2-rc.3'],
+}
+
+/** Every host version the posture check accepts for one package (pinned first). */
+function acceptableVersions(packageName: string): readonly string[] {
+  const pinned = PINNED_VERSIONS[packageName]
+  if (pinned === undefined) return []
+  return [pinned, ...(PREVIOUSLY_VERIFIED_VERSIONS[packageName] ?? [])]
 }
 
 /**
@@ -125,7 +150,7 @@ function summarizeOrigin(surface: Record<string, HostSurfaceEntry>): string {
   return 'mixed'
 }
 
-/** Human-readable surface list for the startup log (`dsh-tools=0.2.2-rc.3@app-bundle, …`). */
+/** Human-readable surface list for the startup log (`dsh-tools=0.2.2-rc.5@app-bundle, …`). */
 function describeSurface(surface: Record<string, HostSurfaceEntry>): string {
   return Object.entries(surface)
     .map(([packageName, entry]) => `${packageName.replace('@deepseek-ai/', '')}=${entry.version}@${entry.origin}`)
@@ -239,9 +264,10 @@ function detectVersionMismatch(): readonly string[] {
   const problems: string[] = []
   for (const [packageName, entry] of Object.entries(probeHostSurface())) {
     if (!VERSION_CRITICAL.has(packageName)) continue
-    const expected = PINNED_VERSIONS[packageName]
-    if (expected === undefined) continue
-    if (entry.version !== expected) problems.push(`${packageName} ${entry.version} != ${expected} (${entry.origin})`)
+    const acceptable = acceptableVersions(packageName)
+    if (acceptable.length === 0) continue
+    if (acceptable.includes(entry.version)) continue
+    problems.push(`${packageName} ${entry.version} != ${acceptable.join(' | ')} (${entry.origin})`)
   }
   return problems
 }
