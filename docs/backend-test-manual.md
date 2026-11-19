@@ -172,6 +172,58 @@ python -m pytest `
   src\backend\tests\test_safeharness_capability_read_model.py -q
 ```
 
+### 6.4 全量基线与"在册失败"（可复核）
+
+这是唯一一份**入库**的全量基线记录。原始 pytest 日志在本机 `F:\tmp\regression-p33-final.log`（`tmp/` 不入库），本节是它的逐条副本——引用基线时以本节为准，不要再指向"某份 tmp 报告"。
+
+**复跑命令**（conftest 形态，不是 `--noconftest`；9 个排除文件见下表）：
+
+```powershell
+$py = Join-Path $env:LOCALAPPDATA 'SUMC\product-demo\venv\Scripts\python.exe'
+cd F:\AgentSecurity\Upear\SUMC
+$env:PYTHONPATH='F:\AgentSecurity\Upear\SUMC\src\backend;F:\AgentSecurity\Upear\src;F:\AgentSecurity\Upear'
+$env:DATABASE_URL='sqlite:///:memory:'; $env:PYTHON_DOTENV_DISABLED='1'
+# 若 %TMP% 里的 pytest-current 报 WinError 5，先指到干净目录：
+# $env:TMP='F:\tmp\pytest-tmp'; $env:TEMP=$env:TMP
+& $py -m pytest -q src/backend/tests `
+  --ignore=src/backend/tests/skills/test_word_editor.py --ignore=src/backend/tests/skills/test_excel_cli.py `
+  --ignore=src/backend/tests/skills/test_pdf_cli.py --ignore=src/backend/tests/skills/test_office_pdf_create.py `
+  --ignore=src/backend/tests/content/test_extra_files.py --ignore=src/backend/tests/evolution/test_readiness_gate.py `
+  --ignore=src/backend/tests/skills/test_marketplace_service.py --ignore=src/backend/tests/skills/test_skill_deps_aggregator.py `
+  --ignore=src/backend/tests/ce_release/test_ce_release_regressions.py > F:\tmp\regression.log 2>&1
+```
+
+**P3.3 基线（2026-11-18）**：`24 failed, 1778 passed, 10 skipped, 18 warnings in 307.61s`（exit 1）。24 条逐条命中下表，**零新增**；其中 `inactivity_watchdog` 类满载偶发 flake 单跑即绿，不计回归。
+
+| 组 | 条数 | 失败用例 |
+|---|---|---|
+| Docker 卷 / 宿主存储（Windows 无对应卷语义） | 9 | `test_dingtalk_integration.py::test_creds_volume_degrades_without_host_storage`、`::test_creds_volume_rejects_bad_user_id`、`test_email_integration.py::test_creds_volume_degrades_without_host_storage`、`::test_creds_volume_rejects_bad_user_id`、`test_yida_integration.py::test_yida_volume_degrades_without_host_storage`、`::test_yida_volume_rejects_bad_user_id`、`::test_yida_workspace_mount_is_fixed`、`::test_cube_extract_yida_state_accepts_only_cache_json`、`::test_cube_extract_yida_state_rejects_symlink` |
+| script_runner 进程组（Windows 无 POSIX 进程组） | 3 | `test_script_runner_process_limits.py::test_container_profile_keeps_nproc_limit`、`::test_timeout_kills_the_whole_process_group`、`::test_success_uses_file_buffers_and_cleans_background_group` |
+| 应用注册序 / 插件装配 | 4 | `test_channel_bots.py::test_inbound_ingest_attachments_stores_artifact`、`test_plugin_system.py::test_app_registers_plugin_router`、`::test_feishu_plugin_app_routes_delegate_to_lark_service`、`::test_route_import_and_uninstall_e2e` |
+| local_* 本机形态（profile / subprocess / grant / memory） | 6 | `test_local_profile.py::test_ce_branding_repairs_persistent_page_config`、`::test_local_env_merges_loopback_hosts_into_no_proxy`、`test_local_subprocess.py::test_local_start_waits_for_ports_and_verifies_plugin_tools`、`test_local_grant_service.py::test_grants_and_policy_for_gate`、`::test_persistence_across_reload`、`test_local_memory_defaults.py::test_cli_reconfigures_redirected_gbk_stream_to_utf8` |
+| CE/EE 分支与默认插件引导 | 2 | `test_me_system.py::test_pricing_enabled_in_ee`、`test_default_plugin_bootstrap.py::test_ce_default_plugins_bootstrap_once_and_are_globally_available` |
+
+**排除的 9 个文件及原因**（排除是历史决定，不是"跑不过就跳过"）：
+
+| 文件 | 原因 |
+|---|---|
+| `skills/test_word_editor.py` | venv 缺 python-docx |
+| `skills/test_excel_cli.py`、`test_pdf_cli.py`、`test_office_pdf_create.py` | Windows 命令行 JSON 引号 |
+| `content/test_extra_files.py` | Windows 路径分隔符断言（3 条） |
+| `evolution/test_readiness_gate.py` | CE/enterprise 分支（3 条） |
+| `skills/test_marketplace_service.py` | 目录数据依赖（3 条） |
+| `skills/test_skill_deps_aggregator.py` | temp 目录（2 条） |
+| `ce_release/test_ce_release_regressions.py` | fixture 建表缺 `users_shadow`（2 errors，单跑复现） |
+
+其余两本账（改动安全面后必须跑的窄口）：
+
+| 账本 | 文件数 | 期望 | 命令要点 |
+|---|---|---|---|
+| focused SafeHarness | 24 | **271 passed**（2026-11-19 复跑 26.45s） | `--noconftest`；11-10 交接 §10 的 23 文件 + `orchestration/test_external_run_record.py` |
+| 框架全套 | 13 | **209 passed + 32 subtests** | 仓库根目录跑 `tests/`，`--noconftest` |
+
+> 24 条环境类失败**维持不治**（性价比结论在 `docs/work-plan-2026-10-20-pluginization.md` 的不做清单）。哪天要在 Linux CI 上复核，上表就是对照基线。
+
 ## 7. API 健康和认证检查
 
 启动 Demo 后，未认证请求必须被拒绝：
