@@ -37,6 +37,7 @@ import { statusTool, postureTool, auditQueryTool, patrolTool, draftRuleTool } fr
 import { registerPromptSection } from './surface/prompt.js'
 import { safeharnessCommand, JUDGE_PROBE_TEXT, type JudgeCommandTarget, type DraftCommandTarget } from './surface/commands.js'
 import { registerPanelRoute } from './panel/route.js'
+import { packagedRulesDir } from './util/packaged.js'
 import { createPanelSettingsHost } from './panel/settings.js'
 import { createRuleWriter } from './panel/rules-write.js'
 import { createRuleHistory } from './panel/rules-history.js'
@@ -124,11 +125,6 @@ const VERSION_CRITICAL: ReadonlySet<string> = new Set([
   '@deepseek-ai/schemastery',
   '@deepseek-ai/dsh-tools',
 ])
-
-/** Absolute path of the packaged `rules/` directory (sibling of `lib/`). */
-function packagedRulesDir(): string {
-  return fileURLToPath(new URL('../rules/', import.meta.url))
-}
 
 /** An empty rule set for the observe-preset degrade path. */
 function emptyRuleSet(reason: string): RuleSet {

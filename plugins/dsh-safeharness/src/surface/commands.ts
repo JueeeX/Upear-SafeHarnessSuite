@@ -5,7 +5,10 @@
  * @module
  */
 import type { CommandDefinition, CommandResult } from '@deepseek-ai/dsh-commands'
+import { existsSync, statSync } from 'node:fs'
 import type { Runtime } from '../runtime.js'
+import { tryLoadRuleSet } from '../engine/rules.js'
+import { packagedRulesDir } from '../util/packaged.js'
 import type { PostureReport } from '../posture/report.js'
 import type { PatrolReport } from '../patrol/index.js'
 import type { JudgeResult } from '../judge/client.js'
@@ -17,7 +20,7 @@ import { MAX_TRAIL } from '../state.js'
 export const COMMAND_NAME = 'safeharness'
 
 /** Subcommand help line shown for an unknown argument. */
-const USAGE = 'usage: /safeharness status | posture | rules | audit [n] | patrol [check...] | judge [probe] | draft <what to catch> [--chain]'
+const USAGE = 'usage: /safeharness status | posture | rules [check [dir]] | audit [n] | patrol [check...] | judge [probe] | draft <what to catch> [--chain]'
 
 /**
  * The canary text a `/safeharness judge probe` sends.
@@ -101,6 +104,58 @@ function formatPatrol(report: PatrolReport): string {
 }
 
 /**
+ * `/safeharness rules check [dir]` — run the *real* loader over a directory without
+ * touching the disk, the ledger or the live rule set.
+ *
+ * Why this exists (kernel parity, `rules_check.py`): the write paths only ever
+ * validate the one file they are about to write, so an operator who edits a rules
+ * directory by hand has no way to ask "would this load?" without a reload — and a
+ * failed reload keeps the old set, which makes the failure easy to miss. The check
+ * uses the same {@link tryLoadRuleSet} the reload path uses (packaged + `rules.dir` +
+ * `rules.inline`, same precedence, same gates), so a green check means the reload
+ * would succeed; nothing is applied either way.
+ *
+ * `dir` defaults to the configured `rules.dir`. A missing directory is an error, not
+ * an empty pass: "no rules here" must never read as "these rules are fine".
+ */
+function rulesCheckCommand(runtime: Runtime, target: string | undefined): CommandResult {
+  const configured = runtime.config.rules.dir.trim()
+  const given = target === undefined ? '' : target.trim()
+  const dir = given === '' ? configured : given
+  if (dir === '') {
+    return {
+      kind: 'error',
+      text: 'rules check: `rules.dir` is not configured — pass a directory: /safeharness rules check <dir>',
+    }
+  }
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+    return { kind: 'error', text: `rules check: failed (${dir}): directory not found` }
+  }
+  const result = tryLoadRuleSet({
+    packagedRulesDir: packagedRulesDir(),
+    dir,
+    inline: runtime.config.rules.inline,
+  })
+  const which = given === '' ? 'rules.dir' : 'given directory'
+  if (result.ok) {
+    return {
+      kind: 'success',
+      text: `rules check: ok (${which} ${dir}): ${result.ruleset.ruleCount} rules, ${result.ruleset.chainCount} chains (packaged + dir + inline)`,
+    }
+  }
+  const shown = result.error.problems.slice(0, 10)
+  const more = result.error.problems.length - shown.length
+  return {
+    kind: 'error',
+    text: [
+      `rules check: failed (${which} ${dir}): ${result.error.problems.length} problem(s); nothing was loaded or changed`,
+      ...shown.map((problem) => `  - ${problem}`),
+      ...(more > 0 ? [`  ... and ${more} more`] : []),
+    ].join('\n'),
+  }
+}
+
+/**
  * Build the command definition.
  *
  * @param runtime - shared runtime.
@@ -121,8 +176,8 @@ export function safeharnessCommand(
 ): CommandDefinition {
   return {
     name: COMMAND_NAME,
-    description: 'Inspect the security layer: status, posture, rules, audit tail, patrol, judge, draft.',
-    input: { hint: 'status | posture | rules | audit [n] | patrol [check...] | judge [probe] | draft <what to catch> [--chain]' },
+    description: 'Inspect the security layer: status, posture, rules (check), audit tail, patrol, judge, draft.',
+    input: { hint: 'status | posture | rules [check [dir]] | audit [n] | patrol [check...] | judge [probe] | draft <what to catch> [--chain]' },
     // Operator diagnostics, not model input: keep it out of the model transcript.
     recordInput: true,
     async handler(invocation): Promise<CommandResult> {
@@ -150,6 +205,7 @@ export function safeharnessCommand(
           case 'posture':
             return { kind: 'success', text: formatPosture(await runPosture()) }
           case 'rules': {
+            if (rest[0] === 'check') return rulesCheckCommand(runtime, rest[1])
             const ruleset = runtime.engine.ruleset
             const lines = ruleset.rules
               .slice()
