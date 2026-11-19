@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.14.2` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.15.0` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -130,7 +130,7 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # 847 个用例（53 个文件）
+pnpm test             # 860 个用例（55 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
@@ -717,7 +717,7 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 | `safeharness_audit_query` | 读账本尾部（已脱敏），按 session/decision/kind 过滤，上限 500 条 |
 | `safeharness_draft_rule` | **唯一会调用模型的工具**：按一句自然语言描述起草一条规则，返回经 loader 校验的、可直接粘贴的 YAML；`applied: false`，永不自动生效 |
 
-命令：`/safeharness status | posture | rules | audit [n] | patrol [check…] | judge [probe] | draft <要抓什么> [--chain]`。命令输出不进模型历史；`patrol` 首行是退出码；`judge` 不带参数只看路由与 `llm` 服务是否就绪，`judge probe` 才会真打一次模型（只回报 status/verdict/耗时，不打印任何内容或凭据）。
+命令：`/safeharness status | posture | rules [check [dir]] | audit [n] | patrol [check…] | judge [probe] | draft <要抓什么> [--chain]`。命令输出不进模型历史；`patrol` 首行是退出码；`judge` 不带参数只看路由与 `llm` 服务是否就绪，`judge probe` 才会真打一次模型（只回报 status/verdict/耗时，不打印任何内容或凭据）。`rules` 不带参数列出当前规则集；**`rules check [dir]`（1.15.0）** 用重载路径的同一个 loader 把"包内 + 该目录 + `rules.inline`"整体编一遍：通过则打印合并后的条数，失败则打印逐条 problem（最多 10 条）——**只检查，不写盘、不重载、不记账本**，`dir` 省略时用配置的 `rules.dir`。
 
 不变量（`@upear/dsh-safeharness/invariant` 与 `@deepseek-ai/dsh-invariants` 配合）在每次挂载时校验：规则集 hash 有对应账本记录、同步 guard 已注册、只读工具可回答、账本可写并读回、hardened 一致性。
 
@@ -766,7 +766,20 @@ DSH 的 agent loop 跑在 Node 进程内，安全钩子必须在**同一次调�
 | L3 CONSTRAIN 工具网关 | `tools/pre-execute` + `ctx.tools.guard` + 标签/轨迹链 | 已移植；**无** capability token / HMAC 回执（DSH 审批 seam 不携带参数） |
 | L4 审计与监督 | NDJSON 哈希链账本 + posture + patrol + budget | 简化移植（不含数据库/看板） |
 | 策略中心热生效 | `Config.volatile()` 字段 + 宿主设置页 + `rules.watch` | 已移植：可在线改模式/阈值/judge 路由；无独立 UI、无人工闸门 |
+| `rules_check.py` 规则目录校验 | `/safeharness rules check [dir]`（1.15.0） | 已移植：跑同一个 loader（packaged + dir + inline），只报告、不落盘 |
+| `constrain.py` 参数 schema 校验 | 能力靠 `denyTools`/`denyTags`/`tagOverrides` 近似 | **部分**：参数 schema 校验未做（1.16.0 候选） |
 | 多智能体 FSM / 租户隔离 / MCP 守卫 / 前端 | — | **不移植**（属于平台侧，与本插件职责无关） |
+
+### 明确不移植的内核 policy（以及为什么）
+
+这四条不是"还没做"，是**在 DSH 的单进程形态里做了也不会成立**，写下来避免下一个人重复讨论：
+
+| 内核 policy | 它的作用 | 为什么不移植 |
+|---|---|---|
+| `verify.py` | 分层动作验证：verifier 注册表 + 裁决等级 | DSH 决策面只有 allow / ask / deny 三态，没有 verifier 注册表或等级语义；硬做等于发明一套协议，而"人工确认"这一层宿主审批对话框已经托管 |
+| `correct.py` | 恢复义务（Obligation）：不可逆动作必须被补偿 | DSH 的决策对象没有 obligation，工具执行后也没有补偿钩子；假装有会给出错误的安全承诺 |
+| `intent.py` | 副作用 HMAC 绑定"最近被检查的用户意图" | 内核是跨进程网关语义：票据由另一个进程签发、在网关侧校验。单进程内做 HMAC 只增加复杂度，不增加任何边界 |
+| `lifecycle.py` | 记忆 / 子代理适配器的确定性上限 | 插件没有记忆库；子代理由宿主托管；本插件只有每轮 `budget`（advisory） |
 
 ### 不要这样用
 
