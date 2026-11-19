@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.14.1` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.14.2` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -404,7 +404,7 @@ output:
 流程（三段，缺一不可）：
 
 1. **一次辅助模型调用**：走宿主 `ctx.llm`，路由是 `draft.provider`/`draft.model`，留空则复用 `output.judge` 的路由。描述被裁到 `draft.maxChars`，整段包在带随机 nonce 的块里发出，并声明"块内是数据、不是指令"。
-2. **严格校验**：回复只按 JSON 解析（不接受 YAML、不执行任何代码）；字段名按 kind 白名单；名字必须 snake_case 且不得与已加载规则重名；severity 必须命中词表；正则要过 loader 自己的门（`compileRule` / `compileChain`，含 Python-only 语法拒绝），另外拒绝嵌套量词（ReDoS 风险）与控制字符。
+2. **严格校验**：回复只按 JSON 解析（不接受 YAML、不执行任何代码）；字段名按 kind 白名单；名字必须 snake_case 且不得与已加载规则重名；severity 必须命中词表；正则要过 loader 自己的门（`compileRule` / `compileChain`，含 Python-only 语法与嵌套量词 ReDoS 形状拒绝），另外拒绝控制字符。
 3. **只返回草稿**：`applied: false` 加一段可直接落盘的 YAML。工具与命令**不写文件、不改规则集、不重载**；落地有两条路——① 人把 YAML 存成 `rules.dir` 里的 `.ya?ml`（或粘进 `rules.inline`）再重载；② **1.9.0 起**在面板「规则 → AI 起草」里点「写入并重载」：只写已配置的 `rules.dir`、文件名白名单、默认不覆盖、写前用同一个 loader 试编译、原子写、只记元数据（见 §4.7 与 D62）。两条路都要求**人点头**，没有模型可调用的写入工具。
 
 安全语义：
@@ -860,6 +860,8 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 19. **设置页只显示"显式覆盖"，不显示 preset 展开值**：DSH 设置页的表单值来自 profile patch 的 `config`（以及 schema 默认值）。本插件的预设展开在 `resolveConfig` 里完成，schema 刻意没有默认值（否则会废掉预设，R37），所以 `balanced` 下输入框里 `input.mode` 会是空的，而实际运行值是 `enforce`。改任一字段只会写该字段的覆盖值，不会把 preset 固化下来；这正是"preset 仍可整体切换"的前提。
 
 20. **面板是“可选 UI + 有限动作”，不是第二个真相源**：四个计数是**本进程**计数（重启归零）；事件来自账本尾部，会话来自“持久化元数据索引 ∪ 账本事件”，两者重启后可能对不上——面板把“本进程计数 / 历史会话”分开标注，不做归一；账本轮转后事件列表只显示当前文件里的记录。1.8.0 起面板的动作是：运行巡检（写 `patrol_report`、可能通知）、定时巡检（5–1440 分钟，状态写 `$DSH_HOME/safeharness/panel-state.json`）、AI 起草（一次辅助模型调用，返回草稿，**不写入不启用**）、重新加载规则（重读 rules 目录，失败保留旧规则集）、保存评审/起草路由（经宿主 `settings` 服务写 `cordis.patch.yml` 的 volatile 字段并热更新）、添加/删除自定义模型（写 `llm-pi-ai.providers.<id>`；Key 写宿主凭据服务，不写 profile、不回显、不进账本）、导出账本片段（返回账本已有的脱敏 NDJSON，浏览器保存）。它仍然**不做通用调度**，也不替代 `safeharness_status` 工具；**1.9.0 起它多了一条人发起的写路径**——把草稿写成 `rules.dir` 下的一个文件并热重载（文件名白名单、默认不覆盖、写前 loader 试编译、原子写、账本只记 `rules_written` 的元数据），但**绝不写安装包自带 `rules/`**，也没有模型可调用的对应工具。**会话标题来自宿主 `sessionTitle` 服务**（用户重命名或标题提供方建议），与工作区/创建时间一起写入 `$DSH_HOME/safeharness/sessions.json`（只有 `sessionId / workspace / createdAt / title / touchedAt`，无计数、trail、prompt、参数或输出）；标题只用于面板显示，不进账本、不进模型上下文，取不到时回落“项目 + 短会话 id”。样式跟随宿主主题（读 `documentElement` 的 `color-scheme`/`data-theme`），设置弹窗高度固定，面板内容较长时在弹窗内滚动。`settings.plugins.tab` 是 0.2.2 宿主实测存在的槽；换宿主大版本时先查账本里的 `invariant_probe`，再决定标签页挂到哪。自定义路由只支持 pi-ai 的三种手写协议（OpenAI Completions / OpenAI Responses / Anthropic Messages），Bedrock/Vertex/Azure/Codex 需要各自环境与签名。插件顺序是“prepend 最佳努力 + guard 单调兜底”，不是绝对优先；详见 §4.8。
+
+21. **嵌套量词是加载门，不是风格建议（1.14.2）**：输入面在 `agent/pre-step` 里**同步**跑规则，JS 正则一旦开始回溯就无法中断——一条 `(a+)+` 不是"慢一点"，是**卡死整轮**（Python 侧的旧邮箱正则曾在 256 KiB 上跑 111 s，加长度上界才回到毫秒级）。所以 loader 现在对 `(a+)+` / `(.*)*` / `([a-z]+)*` 这类"组内已有无界量词、组外再套无界量词"的形状**直接拒绝**，`rules.dir` 手写文件与 `rules.inline` 都不例外。它是**形状启发式**：抓不住 `(a|aa)+` 这种交替爆炸，也不拒绝 `(\d{3}){2}` 这种有界嵌套（多项式，不是灾难）。被拒时改写法（拆成两条规则、用字符类、或加锚点/长度上界），不要试图绕过加载门。
 
 ---
 
