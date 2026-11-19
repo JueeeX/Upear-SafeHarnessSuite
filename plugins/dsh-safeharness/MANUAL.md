@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.14.0` · 宿主 DSH `0.2.2-rc.3` · Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.14.1` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -115,7 +115,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 
 | 依赖 | 要求 | 说明 |
 |---|---|---|
-| DSH | `0.2.2-rc.3` | 桌面应用自带 CLI：Windows 在 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`，其它平台同理 |
+| DSH | `0.2.2-rc.5`（兼容 `0.2.2-rc.3`） | 桌面应用自带 CLI：Windows 在 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`，其它平台同理 |
 | Node | ≥ 24 | 构建与测试；宿主机自带 24.21.0 |
 | pnpm | 9+ | 仅构建期使用 |
 | 宿主包 | 由 DSH 安装提供 | `@deepseek-ai/*` **不在公共 npm 上**，构建时用 `scripts/link-dsh.mjs` 链接本地安装 |
@@ -130,11 +130,11 @@ cd JueeeX-Upear-SafeHarnessSuite-dsh
 node scripts/link-dsh.mjs
 pnpm install
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # 752 个用例（45 个文件）
+pnpm test             # 847 个用例（53 个文件）
 
 # 产出可分发的 tarball
 pnpm pack --pack-destination ./dist
-# -> dist/upear-dsh-safeharness-1.14.0.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
+# -> dist/upear-dsh-safeharness-<ver>.tgz（lib + rules + cordis.patch.yml + sidecar 脚本 + README + MANUAL + LICENSE）
 ```
 
 `link-dsh.mjs` 默认从 `$DSH_HOME`（默认 `~/.dsh`）的 `profiles/node_modules` 找宿主包；如果你的 DSH 是桌面版，可显式指定：
@@ -148,7 +148,7 @@ node scripts/link-dsh.mjs
 
 ```powershell
 $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里的 dsh
-& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-1.14.0.tgz"
+& $dsh plugin --profile <profile> add "file:$PWD\dist\upear-dsh-safeharness-<ver>.tgz"
 ```
 
 开发期也可以直接从目录装（pnpm 会把包**复制**进 profile，不是软链）：
@@ -157,7 +157,7 @@ $dsh = '<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd'   # 或 PATH 里�
 & $dsh plugin --profile <profile> add 'file:<本仓库绝对路径>'
 ```
 
-> **不要用系统里的 pnpm 去装这个 profile。** profile 的 `node_modules` 必须由 **DSH 自带的那份 pnpm** 创建：桌面版 0.2.2-rc.3 自带 pnpm 11（store `…\store\v11`）。如果这个目录曾经被另一个主版本的 pnpm（比如系统里的 pnpm 10，store `…\store\v10`）写过，pnpm 会拒绝继续操作并报 `ERR_PNPM_UNEXPECTED_STORE`；安装脚本若先删掉了旧包，就会出现启动错误 `cannot resolve profile bundle "@upear/dsh-safeharness"`。修法是：**删掉 profile 的 `node_modules`，再用 `dsh plugin ... add`（或 `dsh plugin --profile <profile> install`）重装**，让自带的 pnpm 重建。仓库根目录的 `.npmrc` 若设置了 `store-dir`，手动 `pnpm install` 更容易踩这个坑——装 profile 一律走 `dsh` CLI。
+> **不要用系统里的 pnpm 去装这个 profile。** profile 的 `node_modules` 必须由 **DSH 自带的那份 pnpm** 创建：桌面版 0.2.2-rc.5 自带 pnpm 11.28.5（store `…\store\v11`）。如果这个目录曾经被另一个主版本的 pnpm（比如系统里的 pnpm 10，store `…\store\v10`）写过，pnpm 会拒绝继续操作并报 `ERR_PNPM_UNEXPECTED_STORE`；安装脚本若先删掉了旧包，就会出现启动错误 `cannot resolve profile bundle "@upear/dsh-safeharness"`。修法是：**删掉 profile 的 `node_modules`，再用 `dsh plugin ... add`（或 `dsh plugin --profile <profile> install`）重装**，让自带的 pnpm 重建。仓库根目录的 `.npmrc` 若设置了 `store-dir`，手动 `pnpm install` 更容易踩这个坑——装 profile 一律走 `dsh` CLI。
 
 **从 1.9.2 起，这个包装好就是"插件"，装完不需要再写 patch。** 包里带 `cordis.patch.yml` 并在 `package.json` 声明了 `dsh.bundle.patch`，所以它是一个 DSH **组合包（bundle）**：安装动作会把它写进 profile 的 `dsh.profile.bundles`，启动时由它自带的 patch 挂载 `safeharness` 这一行，「插件」页里也会出现它自己的条目页。
 
@@ -839,8 +839,8 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 
 ## 11. 已知限制
 
-1. **运行期宿主包版本以 host 实际解析为准**：本机实测插件的 `@deepseek-ai/*` 裸导入会解析到 DSH bundle 内的副本（1.8.2 实测 `dsh-tools`/`dsh-settings`/`dsh-*` 为 `0.2.2-rc.3`，`cordis`/`schemastery` 为 `4.1.0` / `3.19.0`），而不是 profile 里的构建期副本。因此本包不 import 任何可能漂移的具名导出；`safeharness_status.host` 会显示实际解析来源（`app-bundle` / `profile` / `mixed`）。
-2. **兼容门只有一个**：`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`。存在该字段时 DSH 只按它判断，不再逐条比对 peer 版本。
+1. **运行期宿主包版本以 host 实际解析为准**：本机实测插件的 `@deepseek-ai/*` 裸导入会解析到 DSH bundle 内的副本（`0.2.2-rc.3` 与 `0.2.2-rc.5` 两个桌面版实测 `dsh-tools`/`dsh-settings`/`dsh-*` 均随宿主整体移动，`cordis`/`schemastery` 为 `4.1.0` / `3.19.0`），而不是 profile 里的构建期副本。因此本包不 import 任何可能漂移的具名导出；`safeharness_status.host` 会显示实际解析来源（`app-bundle` / `profile` / `mixed`）。
+2. **兼容门有两个，分工不同**：粗门是 `engines.dsh: ">=0.2.2-rc.1 <0.3.0"`（存在该字段时 DSH 只按它判断，不再逐条比对 peer 版本）；细门是运行期验过的版本表——`PINNED_VERSIONS` 记当前钉住的版本，`PREVIOUSLY_VERIFIED_VERSIONS` 记**曾经实测过、仍按原样接受**的旧宿主版本（当前为 `0.2.2-rc.3`）。两个表都没有的版本会被 `plugin_version_mismatch` 判 WARN（balanced）/ FAIL（hardened，默认在 `posture.failOn` 里）。**只加不删**：删一项等于宣布不再支持那个宿主。
 3. **安装形态决定改代码后的动作**：pnpm 默认把包复制进 profile（`file:` / tarball），改代码后需 `remove` + `add`；`link:` 安装则直接指向源码。**HMR 重载已在 `link:` 安装 + 非空 `hmr.root` 下实测**：连续两次改 `lib/` 都触发重挂载，`plugin_loaded` → `posture_report ok` → `invariant_probe seams=…,guard,…` 全部重现（内部证据，未随仓库分发）。注意重挂载有约 15–30 ms 的空窗，且生产部署应当关闭 HMR（`hardened` 的 `hmr_enabled` 姿态门禁会直接拒绝加载）。
 4. **`enforce-buffer` 的代价**：牺牲流式；超过 `bufferTimeoutMs`/`bufferMaxChars` 会降级为透传（记账但不拦截）。完全停滞的流由宿主超时负责。
 5. **语义 judge 是"附加信号"不是"误报消除器"**：它能拦住结构化规则漏掉的语义风险，但**不会**把已命中的回答改判为通过；临界误报要靠自定义规则或后续面解决。
@@ -848,7 +848,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 7. **姿态 `approval_never`**：没有 session 时无法读取全局默认审批策略，会报 SKIP 而不是 OK；因此它不在 `hardened` 的默认 `failOn` 里（门禁永不触发比漏报更危险）。有 session 级探针时仍会 FAIL。
 8. **巡检对账是近似的**：用自家账本的 `tool_asked` vs `approval_decided`（不解析 DSH session log），偏差 >10% 才 WARN。
 9. **Code Mode（PTC 执行器）**：0.2.2-rc.1 已移除 `tools.mode`；Code Mode = 启用 `tool-executor-ptc` 并停用 `tool-executor-native`（每个 scope 只能有一个执行器）。子调用会经过 `tools/pre-execute` 并被拒绝；注意 Windows 上 `bash` 工具不存在，场景用 `pwsh`。
-10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。
+10. **hardened 的版本门**：`hardened.posture.failOn` 含 `plugin_version_mismatch`，严格比对插件运行期真正依赖的 `cordis`/`schemastery`/`dsh-tools`。当前接受 `0.2.2-rc.5`（钉住）与 `0.2.2-rc.3`（曾实测、仍接受）两个宿主；其它 rc 版本按"未实测"处理。**注意**：`1.0.0-rc.1` 修复了"schemastery 把缺失数组物化成 `[]` 从而废掉预设表"的问题；更早版本在真实 host 上 hardened 门禁实际未生效，升级后请复核。
 11. **桌面端命令面**：`/safeharness status` 与 `/safeharness judge probe` 已在桌面端输入框实测（2026-11-11，真实 judge 路由 `liao/gpt-6-luna`，`status=ok verdict=allow duration_ms=4347`）；`/safeharness patrol` 的 UI 触发仍只有处理器单测（`safeharness_patrol` 工具已在真实 host 跑通）。
 12. **通知通道**：飞书 / 钉钉 / 企业微信 / OneBot / 通用五种信封已实现，每种都有 payload 单测，并有一次本地真实 HTTP 五通道联调（`tests/notify.test.ts`）；飞书的完整投递路径另有真实 HTTP 验证（本地 sink，内部证据未随仓库分发）。**真实飞书 / 钉钉 / 企业微信机器人投递：待验证**（需要真实 webhook URL / access_token；信封与加签已按官方格式单测，并有本地真实 HTTP 五通道联调）。配好任意一个真实通道后，制造一次 FAIL 巡检即可确认。
 13. **高熵令牌启发式（1.8.1 收紧，1.8.4 加 SRI 豁免）**：只有同时含**小写、大写和数字**、**不是纯 hex**、**不是 Windows 路径**（`C:/...` / `file:///C:/...`）、且**不是 `sha1-` / `sha256-` / `sha384-` / `sha512-` 前缀的 SRI 摘要**的 ≥40 字符令牌才参与熵计算。纯十六进制摘要（`safeharness_status` 的 64 位 ruleset 哈希、`safeharness_audit_query` 的 sha256 链哈希、`git log` 的 40 位 commit id）、全小写路径片段（如 `@scope/pkg/lib/entry`）、Node 报错里的 `file:///C:/.../x.mjs`，以及 `pnpm-lock.yaml` 里的 `sha512-<base64>` 完整性摘要都不再误报 `credential_high_entropy`；`results.mode: enforce` 因此不会再拦掉插件自己的诊断结果、也不会把读 lockfile 整条替换。代价：全小写、无前缀的随机串不再由熵启发式兜底（仍可由 `credential_assignment` 等形态规则命中）。旧行为见 §12 R35，新决策见 R50。
