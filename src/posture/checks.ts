@@ -19,6 +19,7 @@ export const POSTURE_CODES = [
   'judge_unavailable',
   'plugin_version_mismatch',
   'engine_sidecar_unavailable',
+  'arg_schema_invalid',
 ] as const
 
 /** One known posture code. */
@@ -166,6 +167,26 @@ export function runPostureChecks(config: ResolvedConfig, env: PostureEnv): Postu
       'FAIL',
       `the configured python input engine is not ready (status=${env.engine.status}${stale})`,
     ))
+  }
+
+  // --- argument schemas --------------------------------------------------------
+  // A declared `tools.argSchemas` entry that did not compile is not a crash and not
+  // an empty pass: it is a control the operator asked for which is NOT running. The
+  // config refused to guess at the declaration, so the only honest report is a WARN
+  // naming how many entries were dropped. Hardened does not gate on it by default:
+  // gating would turn one typo into a refusal to load, and the schema is additive to
+  // the name/tag/SQL gates that already protect the same call.
+  //
+  // Read from the config, not from the probe: the compile happens inside
+  // `resolveConfig`, so every posture run has the answer without touching the host.
+  if (config.argSchemaProblems.length > 0) {
+    findings.push(finding(
+      'arg_schema_invalid',
+      'WARN',
+      `${config.argSchemaProblems.length} tools.argSchemas entr${config.argSchemaProblems.length === 1 ? 'y' : 'ies'} did not compile and are not enforced`,
+    ))
+  } else {
+    findings.push(finding('arg_schema_invalid', 'OK', 'every declared argument schema compiled'))
   }
 
   return findings

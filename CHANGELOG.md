@@ -2,6 +2,36 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.16.1 — 2026-11-20
+
+精度修复：**`credential_assignment` 不再把插件自己的源码当成密钥**。没有新增检测能力，只把一条会误伤的规则收窄，并写明一条此前没写清的边界。
+
+- **症状**：维护本插件时编辑 `src/config.ts`（里面有 `const secret = readField(entry.secret, …)` 这类字段声明）会触发结果面 block。因为 `results.mode: enforce` + `blockOn: ['credential_leak']`，**文件其实已经改好了**，模型拿到的却是拒绝话术；同一批 `read` / `grep` 也返回拒绝文本。等于"改插件的插件在拦改插件的人"。
+- **根因**：`credential_assignment` 的值分支只要看到"名字 = 八字符以上的一串"就算密钥。三种**自己人**的形状因此命中：① 源码里把函数返回值赋给名字（`const <name> = readField(…)`）；② 测试夹具里用模板占位符拼 key（花括号美元符号包住的变量名）；③ 插件自己写进流里的脱敏占位符（`[REDACTED` 开头的那种）。
+- **修法**（都在同一条正则里，三处收窄，零放宽）：
+  1. 非引号值加尾部否定前瞻——值后面紧跟 `(` 说明它是**被调用的标识符**，不是字面量；
+  2. 引号值排除**以模板占位符开头**的值（运行时才拼出真值）；
+  3. 引号值排除**以本插件脱敏占位符开头**的值（按定义不是秘密）。
+- **没有放宽的部分**：引号字面量、非引号字面量、以及"看起来像占位符但其实不是开头"的真令牌都仍然命中。`tests/credential-precision.test.ts` 8 条逐条钉住两侧。
+- **同批修掉的第二个问题（文档，不是代码）**：`results.blockOn` 的 `block` 跑在**工具执行之后**，对写工具是事后告警。MANUAL §11 新增第 25 条写清"哪些面真能拦"，§4.10 新增一张"想达到什么效果该配哪个字段"的对照表，§12 边界补一句"看接缝位置，不要看 mode 的名字"。
+- **新增两个只读诊断脚本**（`scripts/`，不进包）：`mask-lines.mjs`（把一行的字符串字面量替换成 `<长度>` 后再打印）与 `credential-shapes.mjs`（从 `src/engine/tool.ts` **抽取**正在生效的那条正则，对文件逐个匹配，只输出行号/键尾/分隔符/引号/值长度/字符类，**从不输出值本身**）。它们存在的理由很实际：一条把源码当密钥的规则，会让维护者看不到自己要改的那段代码，而"看不到"正是下一次误判的起点。
+- **测试**：60 文件 / 932 用例（1.16.0 是 59 / 924）。
+
+## 1.16.0 — 2026-11-20
+
+内核对齐的最后一项：**工具参数形状规则**（`policies/constrain.py` 的 argument-schema 那一半）。至此 `policies/` 下该对齐的都对齐了，剩下的四条（`verify` / `correct` / `intent` / `lifecycle`）在 MANUAL §8 里有"为什么在单进程形态里做了也不成立"的逐条说明。
+
+- **新增 `tools.argSchemas`**（非热更新，走 profile patch）：一条声明 = 一个工具名 glob + 若干参数的形状约束，命中即 `unauthorized_tool_argument`（category `tool_argument`）。六种原语，全部线性时间可判定：`pattern`（走**规则 loader 同一道 ReDoS 门**）、`enum`、`minBytes`/`maxBytes`（按 UTF-8 字节，不是 UTF-16 单元）、`pathPrefix`、`urlScheme`、`commandAllowlist`。
+- **这六个原语是"bound"，不是 JSON Schema**：宿主已经用它的 JSON Schema 子集校验每个工具的入参，插件再引一套等于对"这个参数合不合格"给出两个答案。不支持的写法会被**明确拒绝**（`regex:` 写错成 `pattern:` 的笔误必须报出来），而不是编译成一个什么都不检查的 schema。
+- **路径前缀为什么单独实现**：单纯的前缀匹配挡不住 `/workspace/../../etc/passwd`（归一化后是 `/etc/passwd`），也挡不住 `/workspace-evil/x`（文本上以 `/workspace` 开头但不是子目录）。所以：任何 `..` 段直接拒、按段比较、`\` 归一成 `/`。
+- **命令白名单为什么先查元字符**：`"git status; rm -rf /"` 的第一个 token 是允许列表里的 `git`，但整行会跑第二条命令。`; & | \` $ < > ( ) { }` 与换行命中即拒；`LD_PRELOAD=x git …` 这种前置赋值也拒。
+- **判定位置**：`tools/pre-execute`，排在 `denyTools` / `denyTags` / 参数字节上限 / SQL 之后、轨迹链之前。`denyTools` 与 SQL 先赢（操作者看到最直接的理由）；同一工具命中多条 schema 时第一条生效；只约束**实际传了**的参数（必填是工具自己参数 schema 的事）；声明的文本约束落到非字符串值上 → fail-closed 拒。
+- **编译失败只丢这一条，不拒载**：姿态新增第 11 项 `arg_schema_invalid`（WARN，`detail` 只给条数）。一个可选 schema 的笔误不该让整个插件起不来，但绝不静默；默认不进 `posture.failOn`（理由同上）。
+- **零回显**：拒绝理由只带 schema 名、参数**名**、约束种类；账本沿用 `args_sha256`/`args_chars`，不记参数原文。`tests/arg-schema.test.ts` 有一条用例专门钉住"密钥形状的参数值不会出现在 Decision 里"。
+- **性能**：schema 正则跑在每条调用上、面对最长 `tools.maxArgsBytes`（默认 64 KiB）的模型可控文本，所以和规则文件是同一个 ReDoS 面。`tests/perf.test.ts` 新增一条：2 条 schema + 16 KiB 匹配值，p99 门 5 ms（实测 0.03 ms）。**这条用例的规模是刻意压小的**：第一版跑 400×5 次 × 64 KiB，`maxBytes` 每次都要重新编码该值，整条用例分配约 128 MB，把 GC 停顿推给了它上面几行的 `scanToolResult` 预算（全量跑 4 次里 3 次失败；未改动的树上 4 次里 1 次失败）。预算用例不该干扰邻居，规模降到能证明线性即可。
+- **测试**：新增 `tests/arg-schema.test.ts` 39 条（编译期拒绝 / 六种原语的边界 / 路径穿越四种写法 / `file:` `javascript:` `169.254.169.254` / shell 元字符七种 / 与 `denyTools` 和 SQL 的优先级 / 首条生效 / 值不泄漏）；`tests/posture.test.ts` 加 2 条（WARN 与 OK 两侧）；`tests/perf.test.ts` 加 1 条。**59 文件 / 924 用例**。
+- **面板**：1.16.0 **只读**。面板编辑 `argSchemas` 需要复刻一套列表校验（照 `denyTools` 那套），单独一版做更稳。
+
 ## 1.15.2 — 2026-11-20
 
 修复：**设置页从 1.13.0 起一次也保存不了**——不是保存按钮坏了，是 `buildPatch` 从来拿不到 patch。症状与用户看到的一致：改了下拉/数字框，底部保存条仍显示"没有修改"，保存按钮一直灰着，而真正的拒绝理由（"巡检窗口必须是 ≥ 1 的分钟数"）渲染在保存条**下方**，很容易被当成面板没反应。

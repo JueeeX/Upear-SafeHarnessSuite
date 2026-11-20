@@ -39,6 +39,8 @@ export const ReasonCode = {
   ToolRepeatedAttempt: 'tool_repeated_attempts',
   /** A string argument is shaped like an encoded payload (kernel entropy threshold). */
   ToolHighEntropy: 'tool_high_entropy_payload',
+  /** An argument violates its declared `tools.argSchemas` bounds (1.16.0). */
+  ToolArgument: 'unauthorized_tool_argument',
   GuardInternal: 'guard_internal_error',
   // result surface
   CredentialLeak: 'credential_leak',

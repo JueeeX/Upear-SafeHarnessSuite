@@ -24,6 +24,7 @@
  * @module
  */
 import type { ResolvedConfig, SqlScanScope } from '../config.js'
+import { checkArgSchema } from './argschema.js'
 import { scanPii } from './pii.js'
 import { inspectSql } from './sql.js'
 import type {
@@ -493,9 +494,10 @@ function findChainDenial(
  *
  * Order: tool descriptor injection → explicit `denyTools` name → `denyTags` →
  * argument byte size → dangerous SQL / non-allowlisted table in any string
- * argument → chain rules over the trail → repeated failed attempts → high-entropy
- * argument → `askTools` → allow. The first match wins; the decision carries the
- * governing rule's severity where one exists.
+ * argument → declared argument shapes (`tools.argSchemas`) → chain rules over the
+ * trail → repeated failed attempts → high-entropy argument → `askTools` → allow.
+ * The first match wins; the decision carries the governing rule's severity where
+ * one exists.
  *
  * A descriptor hit in `warn` mode is the one ALLOW that still carries a finding
  * (`reasonCode` + `ruleIds`); the hook records it once per session and lets the
@@ -504,7 +506,9 @@ function findChainDenial(
  * Arguments are **never** rendered into the decision: the reason names the shape
  * (`dangerous SQL`, `statement kinds`), not the value, so a credential-shaped
  * argument cannot leak through an audit record. The high-entropy reason carries
- * only the argument index, its length and the entropy value.
+ * only the argument index, its length and the entropy value; an argument-schema
+ * refusal carries the schema id, the argument NAME and the constraint kind, never
+ * the offending value.
  *
  * @param ruleset - compiled rules (chains drive step 5).
  * @param cfg - `ResolvedConfig['tools']`.
@@ -638,10 +642,34 @@ export function evaluateToolCall(
     }
   }
 
+  // (4b) declared argument shapes (kernel `constrain.py`, argument-schema half;
+  // 1.16.0). Placed after the name/tag/size/SQL gates and before the trajectory
+  // checks: an operator who already refuses a tool by name or by statement shape
+  // should see that reason first, and a schema is a *shape* constraint on the same
+  // argument text, so it belongs with the other per-call argument gates.
+  //
+  // One schema per tool may match several globs; the first matching schema wins, so
+  // a later broad rule cannot weaken a specific one by being evaluated first. The
+  // refusal names the schema, the argument and the keyword — never the value.
+  if (cfg.argSchemas !== undefined && cfg.argSchemas.length > 0) {
+    for (const entry of cfg.argSchemas) {
+      if (!matchNamePattern(view.name, [entry.tool])) continue
+      const violation = checkArgSchema(entry, view.arguments)
+      if (violation === undefined) continue
+      return {
+        kind: 'deny',
+        reasonCode: ReasonCode.ToolArgument,
+        ruleIds: [violation.schema],
+        severity: 'high',
+        category: 'tool_argument',
+        reason: `argument '${violation.argument}' violates ${violation.constraint} in schema '${violation.schema}'`,
+      }
+    }
+  }
+
   // (5) trajectory chains over the session trail
   const chain = findChainDenial(ruleset.chains, view, session)
   if (chain !== undefined) return chain
-
   // (5b) repeated failed attempts on the same tool (kernel `trajectory.py`
   // `repeated_attempt_threshold`). A success resets the counter, so a tool that
   // failed five times, then worked, starts clean again.
@@ -738,7 +766,7 @@ const CREDENTIAL_PATTERNS: readonly CredentialPattern[] = [
     id: 'credential_assignment',
     severity: 'high',
     regex:
-      /[A-Za-z0-9_$-]{0,32}(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)["']?\s*[=:]\s*("(?!z\.|process\.env|os\.environ|import\.meta)[^"\r\n]{8,}"|'(?!z\.|process\.env|os\.environ|import\.meta)[^'\r\n]{8,}'|(?!z\.|process\.env|os\.environ|import\.meta|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b)[A-Za-z0-9._~+/=-]{8,})/i,
+      /[A-Za-z0-9_$-]{0,32}(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)["']?\s*[=:]\s*("(?!z\.|process\.env|os\.environ|import\.meta|\$\{|\[REDACTED)[^"\r\n]{8,}"|'(?!z\.|process\.env|os\.environ|import\.meta|\$\{|\[REDACTED)[^'\r\n]{8,}'|(?!z\.|process\.env|os\.environ|import\.meta|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b)[A-Za-z0-9._~+/=-]{8,}(?![A-Za-z0-9._~+/=(-]))/i,
   },
 ]
 

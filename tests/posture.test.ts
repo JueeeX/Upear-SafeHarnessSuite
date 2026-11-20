@@ -48,7 +48,44 @@ describe('runPostureChecks', () => {
       'judge_unavailable',
       'plugin_version_mismatch',
       'engine_sidecar_unavailable',
+      'arg_schema_invalid',
     ])
+  })
+
+  it('reports a dropped argument schema as WARN, never as a clean pass', () => {
+    const broken = resolveConfig({
+      preset: 'balanced',
+      tools: {
+        argSchemas: [
+          // `regex` is not a keyword this loader accepts: the declaration is dropped.
+          { name: 'fs_write_path', tool: 'fs_write*', args: { path: { regex: '^/workspace/.+' } } },
+        ],
+      } as never,
+    })
+    // The declaration itself is out of the type system's reach (it came from YAML),
+    // so the refusal has to come from the compiler, not from TypeScript.
+    expect(broken.argSchemaProblems.length).toBe(1)
+    expect(broken.tools.argSchemas).toEqual([])
+    const finding = runPostureChecks(broken, healthyEnv()).find((item) => item.code === 'arg_schema_invalid')
+    expect(finding?.severity).toBe('WARN')
+    // The message counts entries; it must not quote the mistyped key back verbatim
+    // beyond naming it (that is operator-authored config, never model input).
+    expect(finding?.detail).toContain('1 tools.argSchemas entry')
+  })
+
+  it('reports OK when every declared argument schema compiled', () => {
+    const good = resolveConfig({
+      preset: 'balanced',
+      tools: {
+        argSchemas: [
+          { name: 'fs_write_path', tool: 'fs_write*', args: { path: { pathPrefix: '/workspace' } } },
+        ],
+      } as never,
+    })
+    expect(good.argSchemaProblems).toEqual([])
+    expect(good.tools.argSchemas).toHaveLength(1)
+    const finding = runPostureChecks(good, healthyEnv()).find((item) => item.code === 'arg_schema_invalid')
+    expect(finding?.severity).toBe('OK')
   })
 
   it('danger-full-access is WARN in balanced and FAIL in hardened', () => {

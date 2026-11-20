@@ -21,6 +21,8 @@ import z from '@deepseek-ai/schemastery'
 import type { NotifyChannel, NotifyChannelType } from './notify/channels.js'
 import { POSTURE_CODES } from './posture/checks.js'
 import { PII_CLASS_NAMES } from './engine/pii.js'
+import { compileArgSchemas, type ArgSchemaDeclaration } from './engine/argschema.js'
+import type { CompiledArgSchema } from './engine/argschema.js'
 
 /** Deployment posture preset. */
 export type PresetId = 'observe' | 'balanced' | 'hardened'
@@ -176,6 +178,14 @@ export interface SafeHarnessConfig {
     trajectory?: boolean
     /** Tool-name pattern → semantic tags, for chain rules (`bash*` → `shell`). */
     tagOverrides?: { pattern: string; tags: string[] }[]
+    /**
+     * Per-tool argument shape rules (kernel `constrain.py`, argument-schema half;
+     * 1.16.0). Each entry names a tool glob and the bounds its arguments must
+     * satisfy. An unusable entry is dropped and reported by the posture check as
+     * `arg_schema_invalid` — it never refuses the whole load, because one typo in
+     * one schema must not switch every other schema off.
+     */
+    argSchemas?: ArgSchemaDeclaration[]
   }
   results?: {
     mode?: EnforcementMode
@@ -375,6 +385,8 @@ export const Config = z.object({
       pattern: z.string().description('Tool name glob.'),
       tags: keepAbsent(z.array(z.string())).description('Tags applied when the glob matches.'),
     }))).description('Tool name → semantic tag mapping.'),
+    argSchemas: keepAbsent(z.array(z.any()))
+      .description('Per-tool argument shape rules (kernel constrain.py, argument-schema half).'),
   }).description('Tool guard (pre-execute / guard).'),
 
   results: z.object({
@@ -497,6 +509,12 @@ export interface ResolvedConfig {
     readonly entropyMinLength: number
     readonly trajectory: boolean
     readonly tagOverrides: readonly { readonly pattern: string; readonly tags: readonly string[] }[]
+    /**
+     * Compiled `tools.argSchemas` (1.16.0). Empty when the operator declared none
+     * or when every declaration failed to compile — the reject messages live in
+     * {@link ResolvedConfig.argSchemaProblems} so the posture check can report them.
+     */
+    readonly argSchemas: readonly CompiledArgSchema[]
   }
   readonly results: {
     readonly mode: EnforcementMode
@@ -551,6 +569,15 @@ export interface ResolvedConfig {
     readonly timeoutMs: number
     readonly maxTokens: number
   }
+  /**
+   * Declarations in `tools.argSchemas` that could not be compiled (1.16.0).
+   *
+   * Kept next to the compiled entries rather than thrown: one unusable schema must
+   * not take the whole plugin down, but it must never be silent either — the
+   * posture check reports `arg_schema_invalid` for as long as this list is non-empty.
+   * Messages name the schema, the argument and the keyword; never a value.
+   */
+  readonly argSchemaProblems: readonly string[]
 }
 
 /**
@@ -638,6 +665,9 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
     entropyMinLength: 48,
     trajectory: true,
     tagOverrides: [],
+    // 1.16.0: no argument schema by default. A deployment opts in per tool; an
+    // empty list is "no shape constraint", exactly like `denyTools: []`.
+    argSchemas: [],
   },
   results: {
     mode: 'warn',
@@ -849,6 +879,13 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     }).map((item) => ({ pattern: item.pattern, tags: stringList(item.tags, 'tools.tagOverrides[].tags', problems) }))
     : (problems.push('tools.tagOverrides must be an array'), [])
 
+  // Compile the argument schemas. Their problems are NOT pushed into `problems`:
+  // an unusable schema drops itself (and is reported by the posture check), while a
+  // malformed config refuses the load. Conflating the two would let one typo in an
+  // optional schema block a deployment that is otherwise correctly configured.
+  const argSchemas = compileArgSchemas(
+    Array.isArray(tools.argSchemas) ? (tools.argSchemas as ArgSchemaDeclaration[]) : undefined,
+  )
   const engineKind = oneOf(engine.kind, ['builtin', 'sidecar'] as const, 'engine.kind', problems)
   const engineCommand = typeof engine.command === 'string' ? engine.command.trim() : ''
   // Refuse a half-configured engine at load time: `kind: sidecar` with no command
@@ -899,6 +936,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       entropyMinLength: positive(tools.entropyMinLength, 'tools.entropyMinLength', problems, 48),
       trajectory: typeof tools.trajectory === 'boolean' ? tools.trajectory : true,
       tagOverrides,
+      argSchemas: argSchemas.entries,
     },
     results: {
       mode: oneOf(results.mode, ['off', 'warn', 'enforce'] as const, 'results.mode', problems),
@@ -955,6 +993,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       timeoutMs: positive(draft.timeoutMs, 'draft.timeoutMs', problems, 20000),
       maxTokens: positive(draft.maxTokens, 'draft.maxTokens', problems, 400),
     },
+    argSchemaProblems: argSchemas.problems,
   }
 
   if (resolved.output.judge.enabled && (resolved.output.judge.provider === '' || resolved.output.judge.model === '')) {

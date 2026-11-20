@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.15.2` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.16.1` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -54,7 +54,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
              审批请求 ──► approval/request ► 审批桥（allowOnce / deny / delegate）
                     │
                     ▼
-        全程 ──► NDJSON 哈希链账本 ◄── 姿态自检（10 项）· 外部巡检（5 项）· 预算护栏
+        全程 ──► NDJSON 哈希链账本 ◄── 姿态自检（11 项）· 外部巡检（5 项）· 预算护栏
 ```
 
 | 接缝 | 能力 | 拦截语义 |
@@ -103,7 +103,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 ### 2.4 审计、姿态、巡检、预算
 
 - **审计**：单行 JSON、哈希链（`prev_sha256`）、按字段名脱敏、按大小轮转；只存哈希与长度，不存原文（详见 §6）。
-- **姿态**（10 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。
+- **姿态**（11 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`、`arg_schema_invalid`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。`arg_schema_invalid` 只报 WARN，默认不进 `failOn`（一个可选 schema 的笔误不该拒绝加载，理由见 §4.11）。
 - **巡检**（5 项）：`audit_rate`（拒绝速率异常）、`health_probe`（GET 探针）、`config_drift`（与上次姿态报告对比）、`ledger_reconcile`（`tool_asked` vs `approval_decided` 对账）、`notify`（可选，多个通道）。退出码 `0` 干净、`1` 有 FAIL、`2` 巡检自身出错；巡检函数**从不抛异常**。
 - **预算**：`budget.maxTokensPerTurn > 0` 时按轮累计，越限只 warn（一个回合只记一条）。
 
@@ -608,11 +608,75 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 
 **工具描述符为什么按"每次调用"强制**：宿主没有"从模型工具表里移除某个工具"的接缝（内核 `mcp_guard` 是在 `list_tools` 里下架）。插件的 `enforce` 因此是逐次拒绝；告警则按会话去重，避免模型反复调用同一个恶意工具时刷满账本。
 
+**`results.blockOn` 该放什么（1.16.1 补）**：结果面在宿主管线里跑在**工具执行之后**，所以它的 `block` 只能让"结果不进模型"，不能让"调用没发生"。据此分工：
+
+| 你想达到的效果 | 该配的字段 | 时机 |
+|---|---|---|
+| 这个工具根本别跑 | `tools.denyTools` | pre-execute（真拦） |
+| 这个工具跑之前先问人 | `tools.askTools` | pre-execute（真拦） |
+| 这个工具的参数必须是某种形状 | `tools.argSchemas` | pre-execute（真拦） |
+| 工具返回的内容里有凭据/PII/注入标记，**不要进模型** | `results.blockOn` | post-execute（内容层面有效） |
+| 回答里出现了不该出现的东西，**别让用户看到** | `output.mode: enforce-buffer` | 流式缓冲（替换整条回答） |
+
+把 `results.blockOn` 当"阻止写操作"用是配错了面：写已经发生，重试还会再写一次（§11 第 25 条）。维护本插件时踩过一次：编辑含 `const secret = …` 的源码，文件改好了但调用报 `isError`，模型还准备重试。
+
 **与内核的三处差异**：① 描述符扫描时机（调用前 vs 列举时）与去重口径；② SQL 白名单只在工具参数面算；③ PII 在内核是记忆写入的脱敏/拒绝，插件没有记忆库，落在工具结果面且默认不拦截。
 
 **面板**：新卡片「工具与结果检测」提供描述符三档、两个阈值、最短长度、SQL 白名单文本域（每行一个，`,` 也接受）与 PII 10 个类别勾选。保存仍走 `POST /safeharness/settings` 的 `op: save`（revision CAS、逐字段覆盖）：`tools` 与 `results` 各自合并，不与同一面的 `mode` 互相覆盖；审计只记 `tool_detection: changed` / `pii: changed`。
 
-### 4.11 规则快照与回滚（1.14.0）
+### 4.11 工具参数形状规则（1.16.0）
+
+把内核 `constrain.py` 里 `_schema.py#validate_arguments` 那一半搬过来：**某个工具的参数必须符合某种形状**，越界即拒。不搬的那一半是内核的 `ToolCatalog` 与 `CapabilityAuthority`（签名目录 + 能力授权），属跨进程世界，见 §8。
+
+```yaml
+tools:
+  argSchemas:
+    - name: workspace_write_only          # 账本里记的 rule_id（省略则 arg_schema_<序号>）
+      tool: 'fs_write*'                   # 工具名 glob，与 denyTools 同一语法
+      args:
+        path:
+          pathPrefix: '/workspace'        # 必须落在这个前缀下
+          maxBytes: 1024
+        mode:
+          enum: ['append', 'overwrite']
+    - name: https_egress_only
+      tool: 'http_*'
+      args:
+        url:
+          urlScheme: ['https']            # file:/javascript:/http(169.254.169.254) 一律拒
+    - name: git_and_ls_only
+      tool: 'sh_*'
+      args:
+        cmd:
+          commandAllowlist: ['git', 'ls']
+```
+
+**支持的六个原语**（每个都是线性时间可判定，**不是 JSON Schema**）：
+
+| 关键字 | 语义 |
+|---|---|
+| `pattern` | 整个值必须匹配这条正则。走**规则 loader 同一道门**：Python-only 构造、全局内联标志、无界嵌套量词（`(a+)+`）一律拒绝编译——它和规则文件跑在同一同步路径上，ReDoS 面相同 |
+| `enum` | 值必须是列表之一 |
+| `minBytes` / `maxBytes` | UTF-8 字节数上下界（长度按字节算，不是 UTF-16 单元） |
+| `pathPrefix` | 路径必须在该前缀之下。**任何 `..` 段直接拒**（前缀匹配单独用挡不住 `/workspace/../../etc/passwd`）；`/workspace-evil/x` 不算在 `/workspace` 下；`\` 归一成 `/` 后比较 |
+| `urlScheme` | URL 的 scheme 必须在列表里（小写、不带 `:`）。没有 scheme 的值直接拒 |
+| `commandAllowlist` | 命令行第一个 token 必须在列表里。**先查 shell 元字符**（`; & \| \` $ < > ( ) { }` 与换行），命中即拒；`VAR=x cmd` 形式也拒（否则 `LD_PRELOAD=x git …` 能过） |
+
+**判定语义**：
+
+- 位置：`tools/pre-execute`，排在 `denyTools` / `denyTags` / 参数字节上限 / SQL 之后，**轨迹链之前**（顺序见 §2.2）。`denyTools` 与 SQL 先赢，操作者看到的是最直接的那个理由。
+- 只约束**实际传了**的参数；schema 不会把参数变成必填（必填是工具自己参数 schema 的事）。
+- 同一工具命中多条 schema 时**第一条生效**，后面的不会覆盖前面。
+- 值类型不对（声明的文本约束落到对象/数组上）→ 拒，fail-closed。
+- 拒绝码 `unauthorized_tool_argument`（category `tool_argument`）；账本只记 `tool`、`rule_ids=[schema 名]`、`args_sha256`/`args_chars`，**从不记参数原文**。
+
+**编译失败怎么办**：某一条 schema 编不过（未知关键字、空的 `enum`、越界正则、`pathPrefix` 自身含 `..`）→ **只丢这一条**，并在姿态里报 `arg_schema_invalid`（WARN，`detail` 只给条数）。它不会拒绝加载——一个可选 schema 的笔误不该让整个插件起不来，但也绝不静默。写 `regex:` 而不是 `pattern:` 这种笔误一定会被报出来，而不是变成一个什么都不检查的 schema。
+
+**面板**：1.16.0 **只读**。改 `tools.argSchemas` 走 profile patch，面板保存会重载插件。
+
+**与内核的差异（诚实口径）**：① 只支持六种原语，不支持 JSON Schema 的 `additionalProperties` / `items` / `required`（宿主自己已经用它的 JSON Schema 子集校验每个工具的入参，插件再引一套等于对"这个参数合不合格"给出两个答案）；② 没有 `ToolCatalog`/`CapabilityAuthority`，所以没有 `unknown_tool` / 签名回执；③ 内核 `invalid_tool_arguments` 是 deny 且带 0.8 风险分，这里统一 `high`。
+
+### 4.12 规则快照与回滚（1.14.0）
 
 内核把热更新的规则版本存在数据库里（保留最近 10 版，`rules_loader.py`）。插件没有数据库，等价物是**目录快照**：
 
@@ -769,7 +833,7 @@ DSH 的 agent loop 跑在 Node 进程内，安全钩子必须在**同一次调�
 | L4 审计与监督 | NDJSON 哈希链账本 + posture + patrol + budget | 简化移植（不含数据库/看板） |
 | 策略中心热生效 | `Config.volatile()` 字段 + 宿主设置页 + `rules.watch` | 已移植：可在线改模式/阈值/judge 路由；无独立 UI、无人工闸门 |
 | `rules_check.py` 规则目录校验 | `/safeharness rules check [dir]`（1.15.0） | 已移植：跑同一个 loader（packaged + dir + inline），只报告、不落盘 |
-| `constrain.py` 参数 schema 校验 | 能力靠 `denyTools`/`denyTags`/`tagOverrides` 近似 | **部分**：参数 schema 校验未做（1.16.0 候选） |
+| `constrain.py` 参数 schema 校验 | `tools.argSchemas`（1.16.0） | **已对齐（参数 schema 部分）**：`validate_arguments` 那一半已移植为路径/URL/命令/正则/长度/枚举六种原语；目录与能力授权那一半仍由 `denyTools`/`denyTags`/`tagOverrides` 近似，`ToolCatalog`/`CapabilityAuthority` 不移植（§8） |
 | 多智能体 FSM / 租户隔离 / MCP 守卫 / 前端 | — | **不移植**（属于平台侧，与本插件职责无关） |
 
 ### 明确不移植的内核 policy（以及为什么）
@@ -803,7 +867,7 @@ plugins/dsh-safeharness/
 │  ├─ hooks/            DSH 事件薄层：input / tools / llm / approval / context
 │  ├─ judge/            语义 judge 内核（零依赖，超时/坏 JSON/空回答处理）
 │  ├─ patrol/           外部巡检（5 项，永不抛异常）
-│  ├─ posture/          姿态检查（10 项）
+│  ├─ posture/          姿态检查（11 项）
 │  ├─ audit/            账本：NDJSON 哈希链、脱敏、轮转、路径解析
 │  ├─ surface/          只读工具、命令、系统提示词条款
 │  ├─ budget.ts         每轮 token 预算
@@ -816,7 +880,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               752 个用例（45 个文件）
+├─ tests/               882 个用例（58 个文件，1.15.2）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -835,7 +899,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：45 个文件 / 752 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 42 文件 / 733（723 pass + 10 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts
+pnpm test             # vitest：58 个文件 / 882 个用例（1.15.2；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -880,6 +944,20 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 
 22. **凭据检测是"形态"不是"真值"（1.15.1）**：结果面/输出面/流内脱敏用的都是形态正则（`sk-`、`Bearer`、私钥头、`api_key: "…"` 赋值、40+ 字符高熵令牌）。它们覆盖了真实踩到的格式（JSON 引号名、`LLM_API_KEY` 这类长名后缀、跨 delta 拆分），但**不能保证**所有密钥格式：自定义厂商的短 token、被拆成多段拼接的字符串、或者写在自然语言里的片段仍可能漏过。流内脱敏另有 256 字符窗口：比这更长的令牌有极小的概率前半段已经透传。真正的边界是**不要在 prompt/工具结果里出现真实密钥**；检测是兜底，不是许可。2026-11-19 的教训：`"LLM_API_KEY": "…"` 因两个正则细节（`\b` 卡在 `_` 与 `A` 之间、键名后的引号）曾整条漏过，输出面当时也完全没有凭据扫描——三处都已修。
 
+23. **参数形状规则是"形状"不是"授权"（1.16.0）**：`tools.argSchemas` 只回答"这个参数长得对不对"，不回答"这个调用该不该被允许"。所以它**不能**替代内核的 `ToolCatalog` + `CapabilityAuthority`：没有工具签名比对、没有能力票据、没有 `unknown_tool` 判定。它也不做类型系统之外的事——`additionalProperties` / `items` / `required` 这类 JSON Schema 结构不在支持范围内，宿主自己的入参校验负责那一层。另外三条边界：① 只约束**实际出现**的参数（漏传由工具自己拒绝）；② 同一工具只认**第一条**匹配的 schema，写多条时后面那条不会叠加；③ `pattern` 走的是规则 loader 的同一道 ReDoS 门，但仍然是**你写的正则**——`(a|aa)+` 这种交替爆炸不在启发式覆盖范围内（同 §11 第 21 条）。
+
+24. **语义 judge 会返回"空回答"，而且短正文比长正文更容易（2026-11-20 只读取证）**：`scope: always` 下真实发生的是 `judge_status: empty / reason: empty_model_reply`——模型调用了、token 也计费了（`usage_output` 中位数 690，最大 11579），但**一个 `text-delta` 都没吐**，于是 `response_chars=0`，按失败矩阵降级成 `output_judge_unavailable`（balanced 记账放行，hardened 拒绝）。按账本现有的 30 条真实判官调用分组看：`ok` 组正文中位数 275 字符、prompt 中位数 510；`empty` 组正文中位数 **90** 字符、prompt 中位数 **325**、耗时中位数 **959 ms**；`timeout` 组正文中位数 3861 字符。**相关性很清楚：正文越短越容易空回**（最小的一条正文只有 18 字符），长正文则是另一种失败（超时）。19 条 `empty` 里有 5 条的 `usage_output` 超过了本插件给的 `maxTokens`（2048），说明这些回答把预算花在了**不产生 `text-delta` 的地方**（推理段或供应商侧的路由行为），而不是"回答被截断"。**行为是对的**：空回答被判为 `unavailable` 而不是 `allow`，balanced 只记账、hardened 会拒。**没做的事**：没有为此改动任何代码——把 `reasoning-delta` 也当作回答会改变判定语义（那正是要审的内容与推理过程混在一起），把空回答当 `allow` 则等于放宽；下一步应当是**换一个对短 prompt 稳定的判官路由**，或者给 `scope` 加一档"只审长回答"，两者都要先有更多样本再定。这条写在这里，是为了让下一个人不要把它当成一次偶发抖动。
+
+25. **结果面的 `block` 对写工具是"事后告警"，不是"事前阻断"（1.16.1 写明）**：宿主管线是 `tools/pre-execute` → 工具体真正执行 → `tools/post-execute`。结果面拦下的是一次**已经发生**的调用：插件的 `block` 把结果换成固定话术、把这次调用标成 `isError`，**副作用留在原地**。所以：
+
+    - 对**读类**工具（`read` / `grep` / `glob` / 网络抓取）结果面拦截是**真拦截**：内容不进模型上下文，等于没读到。
+    - 对**写类**工具（`edit` / `write` / `apply_patch` / 命令类）结果面拦截**只管通知**：文件已经写了、命令已经跑了。要事前拦住，唯一的位置是 `tools/pre-execute`（`denyTools` / `askTools` / `tools.argSchemas`）。
+    - **重试风险**：模型看到"被拦截"会再试一次。写工具第二次执行时，`edit` 的同类替换通常幂等，但 `write` / 追加 / 命令类**不是**——同一段内容可能被写两遍、命令可能跑两次。这是这条边界最贵的地方。
+
+    2026-11-20 真实验证（本仓库维护过程）：编辑 `src/config.ts`（里面有 `const secret = …` 这类字段声明）时，结果里出现了这条规则的形状，`results.mode: enforce` + `blockOn: ['credential_leak']` 直接 block；**文件已经改好了**，模型拿到的却是拒绝话术。同时 `read` / `grep` 同一批文件也返回拒绝文本，"改插件的插件在拦改插件的人"。1.16.1 修的是**误报那一半**（源码声明 / `${…}` 模板占位 / `[REDACTED:credential]` 自身占位不再算凭据）；"结果面对写工具不可撤销"这一半是宿主管线决定的，**改不了，只能写清楚**。
+
+    实践建议：要拦写动作，把工具放进 `tools.askTools` 或给它写 `tools.argSchemas`（都在 pre-execute，真的拦得住）；`results.blockOn` 只用于"内容不该进模型"的场景，别指望它撤销副作用。
+
 ---
 
 ## 12. 安全边界与许可
@@ -889,6 +967,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 - 本插件运行在 DSH 进程内，与模型、工具共享同一运行时。**能停用插件的操作者也能绕过它**；这是 DSH "无特权核心" 的固有属性。生产部署请把"插件是否加载、账本是否连续、巡检是否通过"当作**外部可观测事实**，而不是信任插件自证。
 - 账本只保证"记录脱敏且可校验完整"，不保证"记录不可删除"——删除账本文件本身就是一种可被巡检发现的信号。
 - 语义 judge 依赖宿主模型路由；judge 不可用时按预设降级，`hardened` 选择拒绝输出而不是放行。
+- **拦截时机与不可撤销性**（详见 §11 第 25 条）：`agent/pre-step` / `tools/pre-execute` 是**事前**拦截，能真正阻止；`tools/post-execute` 与 `llm/stream` 是**事后**处置，对被拦下的写工具副作用不可撤销。想知道"这个面能不能真拦住"，看接缝在宿主管线里的位置，不要看 `mode` 的名字。
 
 **密钥纪律**：配置里的 webhook / token 永不打印、永不写账本；账本只存哈希与长度；假模型脚本使用哨兵 key（`sk-fake-sentinel`），不是真实凭据。
 
