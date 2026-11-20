@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.15.1` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.15.2` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -537,6 +537,7 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 - **测试连接**：`op: probe` 发一次最小结构化请求，只回 `status / verdict / 耗时`，**不回模型回复文本**。
 - **写入路径**：`settings.update(entryId, patch)` → 宿主写 `cordis.patch.yml` → loader 热更新 → 本插件 `applyHotConfig`。只改 **volatile** 字段；字段校验（`maxChars` 500–200000、`timeoutMs` 500–60000、启用时 provider/model 必填）在写之前完成；**1.8.4 起带 revision CAS**：面板把读到时的 `revision` 作为 `expectedRevision` 回传，宿主发现配置已被别处改过就拒绝（`settings_conflict`），不再 last-writer-wins 覆盖。失败只回 `settings_invalid` / `settings_write_failed` / `settings_conflict` 等粗粒度码，不转发宿主原文；宿主异常的日志只记 **错误名 + 机器码 + 消息长度**（零回显）。每次保存写一条 `invariant_probe`（`reason_code: panel_settings`）。
 - **只读原因**：profile 没有 `settings` 服务、或找不到本插件的可编辑 entry 时，页面照常显示并说明“只读”，不假装能保存。
+- **“没有修改”却存不下来（1.13.0–1.15.1 的缺陷，1.15.2 修）**：巡检窗口/倍数与熵阈值共用一个数值解析器，而那个解析器把上界 `8` 硬编码在函数里——默认的 **10 分钟**直接判非法，`buildPatch` 每次都在构建 patch 前返回，于是保存按钮一直灰着、保存条一直显示“没有修改”，真正的理由渲染在条下方容易被忽略。**任何**字段都存不下去。1.15.2 起：上界改为按字段传入；非法值也算“有未保存的修改”、理由显示在**保存条内**、禁用按钮带 `title`；未保存草稿的基线只比对可编辑字段（`judge.available` 这类探针状态翻转不再清空草稿）。
 
 数据通路（两段）：
 

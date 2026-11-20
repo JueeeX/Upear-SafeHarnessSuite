@@ -396,10 +396,24 @@ function storeValue(key: string, value: string | null): void {
 /**
  * Identity of the loaded route values. A stored draft is replayed only while the
  * server still stands where it did when the draft was typed.
+ *
+ * Only the *editable* fields belong here. Status flags (`judge.available`,
+ * `judge.configurable`, `preset`) are part of the same payload but flip on their
+ * own — a probe or a preset expansion is not the operator changing the config —
+ * and including them threw away a draft that was still perfectly valid.
  */
-function baselineOf(value: PanelSettingsValue): string {
+export function baselineOf(value: PanelSettingsValue): string {
   return JSON.stringify({
-    judge: value.judge,
+    // Only the editable judge fields: `available` / `configurable` are live probe
+    // results, and a probe flipping false→true used to invalidate a valid draft.
+    judge: {
+      enabled: value.judge.enabled,
+      scope: value.judge.scope,
+      provider: value.judge.provider,
+      model: value.judge.model,
+      maxChars: value.judge.maxChars,
+      timeoutMs: value.judge.timeoutMs,
+    },
     draft: value.draft,
     surfaces: value.surfaces,
     inputJudge: value.inputJudge,
@@ -1203,12 +1217,22 @@ function nonNegativeInt(raw: string): number | undefined {
   return Number.isSafeInteger(value) ? value : undefined
 }
 
-/** A non-negative number within [0, 8] from a text field (the entropy threshold). */
-function nonNegativeNumber(raw: string): number | undefined {
+/**
+ * A non-negative number from a text field, optionally capped, or undefined when it
+ * is not one.
+ *
+ * The cap used to be hard-wired to `8` because the only caller was the entropy
+ * threshold. Patrol then started sharing the helper and every default
+ * (`patrolWindowMinutes: 10`) fell outside it: `buildPatch` answered "必须是 ≥ 1
+ * 的分钟数" for a value that *is* a valid minute count, no patch was ever
+ * produced, and the bar sat on "没有修改" no matter what the operator changed —
+ * settings could not be saved at all from 1.13.0 to 1.15.1.
+ */
+function nonNegativeNumber(raw: string, max = Number.POSITIVE_INFINITY): number | undefined {
   const trimmed = raw.trim()
   if (!/^\d+(?:\.\d+)?$/u.test(trimmed)) return undefined
   const value = Number(trimmed)
-  return Number.isFinite(value) && value >= 0 && value <= 8 ? value : undefined
+  return Number.isFinite(value) && value >= 0 && value <= max ? value : undefined
 }
 
 /** Error copy for one provider add/delete failure code. */
@@ -1264,7 +1288,7 @@ function downloadText(filename: string, content: string, mime: string): void {
 }
 
 /** Turn a loaded value into the editable form state. */
-function toSettingsData(value: PanelSettingsValue): SettingsData {
+export function toSettingsData(value: PanelSettingsValue): SettingsData {
   return {
     value,
     judge: {
@@ -1356,7 +1380,7 @@ function parseTagOverrides(text: string): { pattern: string; tags: string[] }[] 
 }
 
 /** Diff the editable form against the loaded value. */
-function buildPatch(value: PanelSettingsValue, form: SettingsForm): PatchResult {
+export function buildPatch(value: PanelSettingsValue, form: SettingsForm): PatchResult {
   const { judge, draft, surfaces, inputJudge, toolDetection, pii, lists, source } = form
   const maxChars = positiveInt(judge.maxChars)
   const timeoutMs = positiveInt(judge.timeoutMs)
@@ -1365,7 +1389,7 @@ function buildPatch(value: PanelSettingsValue, form: SettingsForm): PatchResult 
   // Tool-detection numbers: 0 is a legal value (it disables the check), so the
   // parser here only refuses negatives and non-integers beyond what the host accepts.
   const retry = nonNegativeInt(toolDetection.repeatedAttemptThreshold)
-  const entropy = nonNegativeNumber(toolDetection.entropyThreshold)
+  const entropy = nonNegativeNumber(toolDetection.entropyThreshold, 8)
   const entropyMin = positiveInt(toolDetection.entropyMinLength)
   if (retry === undefined) return { patch: undefined, invalid: '「重复失败阈值」必须是 0 或正整数。' }
   if (entropy === undefined) return { patch: undefined, invalid: '「熵阈值」必须是 0–8 之间的数字。' }
@@ -2781,8 +2805,14 @@ function PatrolTab({ payload, face, onRefresh }: {
   )
 }
 
-/** The settings tab: judge + drafting routes, save bar, judge probe. */
-function SettingsTab({ face, active, draftFact, onRefresh }: {
+/**
+ * The settings tab: judge + drafting routes, save bar, judge probe.
+ *
+ * Exported (1.15.2) so the save path can be exercised in a DOM test: every
+ * control must reach `buildPatch`, and the bar must stop saying "没有修改" the
+ * moment one of them moves.
+ */
+export function SettingsTab({ face, active, draftFact, onRefresh }: {
   readonly face: PanelFace
   readonly active: boolean
   readonly draftFact: PanelDraft
@@ -2864,7 +2894,8 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   useEffect(() => {
     if (view.status !== 'ready') return
     const { value, ...form } = view.data
-    const dirty = buildPatch(value, form).patch !== undefined
+    const result = buildPatch(value, form)
+    const dirty = result.patch !== undefined || result.invalid !== null
     storeValue(
       SETTINGS_DRAFT_KEY,
       dirty ? JSON.stringify({ baseline: baselineOf(value), ...form }) : null,
@@ -3056,7 +3087,9 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
   const { value, judge, draft, surfaces, inputJudge, toolDetection, pii, lists, source } = data
   const readOnly = !value.judge.configurable
   const saving = save.status === 'saving'
-  const dirty = patchResult.patch !== undefined
+  // An invalid value is still an unsaved change: the bar must not claim "没有修改"
+  // while a field is being refused, or the refusal reads as "there was nothing to do".
+  const dirty = patchResult.patch !== undefined || patchResult.invalid !== null
   const providerOptions = providerOptionsFor(value.providers, judge.provider, '（未设置）', '使用宿主默认路由')
   const modelOptions = modelOptionsFor(value.providers, judge.provider, judge.model, '（未设置）', '使用宿主默认模型')
   const draftProviderOptions = providerOptionsFor(value.providers, draft.provider, '（跟随评审路由）', '留空即复用评审路由')
@@ -3746,17 +3779,23 @@ function SettingsTab({ face, active, draftFact, onRefresh }: {
         <span className="shp-spacer" />
         {save.status === 'saved' ? <span className="shp-line-ok" role="status">已保存</span> : null}
         {save.status === 'error' ? <span className="shp-line-error" role="alert">{settingsErrorMessage(save.code)}</span> : null}
+        {/* The reason a save is refused belongs next to the button, not below the bar:
+            an invalid value used to render its alert under the fold and read as
+            "没有修改" with a save button that never lit up. */}
+        {patchResult.invalid === null ? null : <span className="shp-line-error" role="alert">{patchResult.invalid}</span>}
         <button type="button" className="shp-btn" onClick={resetForm} disabled={!dirty || saving}>还原</button>
         <button
           type="button"
           className="shp-btn shp-btn-primary"
           onClick={saveNow}
           disabled={!dirty || patchResult.invalid !== null || readOnly || saving}
+          title={readOnly
+            ? '本 profile 里配置是只读的'
+            : patchResult.invalid !== null ? '有字段不合法：先按提示修正' : undefined}
         >
           {saving ? '保存中…' : '保存'}
         </button>
       </div>
-      {patchResult.invalid === null ? null : <p className="shp-line-error" role="alert">{patchResult.invalid}</p>}
       {readOnly ? null : (
         <p className="shp-card-hint">
           保存写入 profile 配置{value.configPath === null ? '' : <>：<code className="shp-mono">{value.configPath}</code></>}
