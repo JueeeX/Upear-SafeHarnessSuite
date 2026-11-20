@@ -766,7 +766,7 @@ const CREDENTIAL_PATTERNS: readonly CredentialPattern[] = [
     id: 'credential_assignment',
     severity: 'high',
     regex:
-      /[A-Za-z0-9_$-]{0,32}(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)["']?\s*[=:]\s*("(?!z\.|process\.env|os\.environ|import\.meta)[^"\r\n]{8,}"|'(?!z\.|process\.env|os\.environ|import\.meta)[^'\r\n]{8,}'|(?!z\.|process\.env|os\.environ|import\.meta|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b)[A-Za-z0-9._~+/=-]{8,})/i,
+      /[A-Za-z0-9_$-]{0,32}(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)["']?\s*[=:]\s*("(?!z\.|process\.env|os\.environ|import\.meta|\$\{|\[REDACTED)[^"\r\n]{8,}"|'(?!z\.|process\.env|os\.environ|import\.meta|\$\{|\[REDACTED)[^'\r\n]{8,}'|(?!z\.|process\.env|os\.environ|import\.meta|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b)[A-Za-z0-9._~+/=-]{8,}(?![A-Za-z0-9._~+/=(-]))/i,
   },
 ]
 
