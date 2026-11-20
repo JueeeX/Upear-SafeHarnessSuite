@@ -256,4 +256,47 @@ describe('performance budgets', () => {
     console.log(`[perf] ledger append p99=${p99.toFixed(3)}ms`)
     expect(p99).toBeLessThan(10)
   })
+
+  /**
+   * Argument schemas (1.16.0) run inside the same synchronous tool pipeline, so a
+   * schema pattern is matched per call against up to `tools.maxArgsBytes` (64 KiB)
+   * of model-controlled text.
+   *
+   * Deliberately placed LAST and sized modestly. An earlier version of this case ran
+   * 400×5 iterations over a 64 KiB value; measuring `maxBytes` re-encodes that value
+   * on every call, so the case allocated ~128 MB and pushed a GC pause into the
+   * `scanToolResult` budget measured a few cases above (reproduced as 3 failures in
+   * 4 full-suite runs, against 1 in 4 on the untouched tree). A budget test that
+   * perturbs its neighbours is measuring the neighbourhood, not the code path.
+   *
+   * 16 KiB × 100 iterations is enough to prove the shape is linear (a quadratic
+   * regression at this size would be orders of magnitude over the ceiling) without
+   * turning the allocation into the experiment.
+   */
+  it('argument schema matching stays linear on a 16 KB argument', () => {
+    const ruleset = packagedRules()
+    const config = resolveConfig({
+      preset: 'balanced',
+      tools: {
+        argSchemas: [
+          // The value MATCHES both bounds: a value that fails the first constraint
+          // returns early and would measure nothing.
+          { name: 'perf_path', tool: 'read_file*', args: { path: { pattern: '^/workspace/[a-z/]+$' } } },
+          { name: 'perf_size', tool: 'read_file*', args: { path: { maxBytes: 1024 * 1024 } } },
+        ],
+      } as never,
+    })
+    const path = `/workspace/${'a'.repeat(16 * 1024 - 12)}`
+    const view: ToolView = {
+      name: 'read_file',
+      arguments: { path },
+      argsBytes: Buffer.byteLength(path, 'utf8'),
+      tags: ['fs'],
+    }
+    const p99 = bestP99(100, () => {
+      evaluateToolCall(ruleset, config.tools, view, emptySession())
+    }, 2)
+    console.log(`[perf] evaluateToolCall with 2 argSchemas, 16KB arg p99=${p99.toFixed(3)}ms`)
+    expect(p99).toBeLessThan(5)
+  })
 })

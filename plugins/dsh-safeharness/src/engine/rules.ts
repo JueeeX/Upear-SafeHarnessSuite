@@ -807,8 +807,18 @@ function readOptionalString(
  * 4. compilation under {@link RULE_REGEX_FLAGS}; JS is stricter than Python in a few
  *    places (e.g. `\-` outside a class is invalid under `u`), and that is intentional:
  *    a pattern we cannot reproduce exactly is a pattern we must not pretend to run.
+ *
+ * Exported because `tools.argSchemas` patterns run inside the same synchronous tool
+ * pipeline and need the identical gate: a schema pattern is operator-written regex
+ * matched against up to `tools.maxArgsBytes` of model-controlled text, so it is the
+ * same ReDoS surface as a rule file, not a milder one.
+ *
+ * @param source - the regex source as authored.
+ * @param label - prefix for the problem message.
+ * @param problems - collector; a `undefined` return means at least one was pushed.
+ * @returns the compiled regex, or `undefined` when the gate refused it.
  */
-function checkRegex(source: string, label: string, problems: string[]): RegExp | undefined {
+export function checkRegex(source: string, label: string, problems: string[]): RegExp | undefined {
   if (source === '') {
     problems.push(`${label}: pattern must not be empty`)
     return undefined
