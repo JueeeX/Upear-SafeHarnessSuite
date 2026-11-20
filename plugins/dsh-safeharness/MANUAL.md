@@ -816,7 +816,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               752 个用例（45 个文件）
+├─ tests/               882 个用例（58 个文件，1.15.2）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -835,7 +835,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：45 个文件 / 752 个用例（内部含黄金语料、sidecar 一致性、失败矩阵与面板契约）。公开树 42 文件 / 733（723 pass + 10 skip，缺内部语料时跳过）；CI 另剔除 tests/perf.test.ts
+pnpm test             # vitest：58 个文件 / 882 个用例（1.15.2；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
