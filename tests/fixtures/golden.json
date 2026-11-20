@@ -1,0 +1,257 @@
+{
+  "engine_note": "safeharness.policies.rules_loader.build_inform_policy(environ={}); built-in patterns only, no YAML/runtime rules; 20 compiled patterns",
+  "generated_at_utc": "2026-11-11T01:19:49Z",
+  "python": "3.13.5",
+  "suites": [
+    {
+      "attacks": [
+        {
+          "id": "idp-001",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 74,
+          "text_sha256": "6a1809dbf0af785638e2b9117ad10f15a1ddacf88a530a4d347bf97402aa6d27"
+        },
+        {
+          "id": "idp-002",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 21,
+          "text_sha256": "2cee98bf830119cada514affe4b55038b92757bdc16e94d3e3f593128758a3e8"
+        },
+        {
+          "id": "idp-003",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 13,
+          "text_sha256": "a5c5f07fb4020d41d255778e1de53d316ddc088754d0795c4bfabe4c6f3a715e"
+        },
+        {
+          "id": "idp-004",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 60,
+          "text_sha256": "99083c1167fc0ea83481d660f02290a898252658901183c84352258456b88788"
+        },
+        {
+          "id": "idp-005",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 38,
+          "text_sha256": "1478beb1863e9bcfe2ad5aaa49014c188a40e6934e578c6ba70a476659faf5f4"
+        },
+        {
+          "id": "idp-006",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 53,
+          "text_sha256": "3d4f47abe70028596bbc15b8a5e98ca4cf1db144da31cafbd5765a82d99fbe3a"
+        },
+        {
+          "id": "idp-007",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 27,
+          "text_sha256": "82f6c814ca2a495ee4e060b5afc6bfc513403cb9fa198b76332a83c27506bacf"
+        },
+        {
+          "id": "idp-008",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 17,
+          "text_sha256": "7deff1d92d7fca697673c4b8058516cb0078ccb5577dbce3442604c4e8a81914"
+        },
+        {
+          "id": "idp-009",
+          "inform_matched": true,
+          "reason_code": "prompt_injection_detected",
+          "sql_dangerous": false,
+          "text_chars": 16,
+          "text_sha256": "2cbd6a732404030bbbe4bb878eff90d81fab019471aa79be3e13b521463ef468"
+        },
+        {
+          "id": "idp-010",
+          "inform_matched": false,
+          "reason_code": null,
+          "sql_dangerous": false,
+          "text_chars": 71,
+          "text_sha256": "7e61c8a9b181c8b3907a5afa5dede7989dfb9fe03c42ceda76112bcb0b3f8144"
+        },
+        {
+          "id": "idp-011",
+          "inform_matched": false,
+          "reason_code": null,
+          "sql_dangerous": false,
+          "text_chars": 62,
+          "text_sha256": "419d7b5e3afe285918983b2eb792aa96aa7f77e1ec7f92d4eadf92fa2f97eebc"
+        },
+        {
+          "id": "idp-012",
+          "inform_matched": false,
+          "reason_code": null,
+          "sql_dangerous": false,
+          "text_chars": 31,
+          "text_sha256": "3f5a298e7c141208ebcad28a04d98917d8057d5d2ade504268bae17714dfd502"
+        },
+        {
+          "id": "idp-013",
+          "inform_matched": false,
+          "reason_code": null,
+          "sql_dangerous": false,
+          "text_chars": 81,
+          "text_sha256": "9418fbd0caebf797b0dae4ab1d12cc4a8b9e49b52287d4b5adf1e2da2fc63b68"
+        },
+        {
+          "id": "idp-014",
+          "inform_matched": false,
+          "reason_code": null,
+          "sql_dangerous": false,
+          "text_chars": 64,
+          "text_sha256": "4268dc905f3d6c062bbe8639f16b642aebc915535887da8efc6d042e86b7b3cc"
+        }
+      ],
+      "suite": "identity-impersonation"
+    },
+    {
+      "attacks": [
+        {
+          "id": "sql-001",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 34,
+          "text_sha256": "067921f39fbc0cb90bf67e4546002b37ab9bb480159a35ee548ee1971666dce5"
+        },
+        {
+          "id": "sql-002",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 28,
+          "text_sha256": "5d4f152f2c799cddbfe731dd5ecb14b254f1e025a8e0a89d4056e8b64ba919d9"
+        },
+        {
+          "id": "sql-003",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 31,
+          "text_sha256": "73dc5b51e8afe6ba2f405675bc7a94241e21c7788b2478faf99eab51754530ad"
+        },
+        {
+          "id": "sql-004",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 55,
+          "text_sha256": "6e4a9e61d807c338fbc784621e491be1bb41b8d1389527010d88d18c6543cfb0"
+        },
+        {
+          "id": "sql-005",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 58,
+          "text_sha256": "a1d44eff191663c950842ee78668c68ded508fc1780091462d8a41299eab842d"
+        },
+        {
+          "id": "sql-006",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 43,
+          "text_sha256": "4c024c70982def9d546e7bc34ddcfc0e17dd376faa0180f357b201c27c051d5a"
+        },
+        {
+          "id": "sql-007",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 18,
+          "text_sha256": "7b05ac0dfea03087390ea16dbfff7cb48af1fea93523dcdbb4df7c705163440e"
+        },
+        {
+          "id": "sql-008",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 53,
+          "text_sha256": "83882bea87961c782e84bc794562fdf63ef07c7c49dc8ff72e49acf849b23f50"
+        },
+        {
+          "id": "sql-009",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 68,
+          "text_sha256": "df85b51fa3263d14220fbee06e1e8882da622d815cf17442b2b723cea3e92c3c"
+        },
+        {
+          "id": "sql-010",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 39,
+          "text_sha256": "f6a5677cb82023da2906351b7175bb215709d7697be5578967f6354568e643aa"
+        },
+        {
+          "id": "sql-011",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 68,
+          "text_sha256": "f63a94801ee37187c03223c9b0ec325f4e6aba46f0f13140b988a5affc101baa"
+        },
+        {
+          "id": "sql-012",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 41,
+          "text_sha256": "136396fc024e934e140e45dd984c5e87fb0de003091b070465b98011393a508b"
+        },
+        {
+          "id": "sql-013",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 64,
+          "text_sha256": "4516a0005847a8664aba442bdde23628284a60d6c8f84fa941fdcbdcc8fbe594"
+        },
+        {
+          "id": "sql-014",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 49,
+          "text_sha256": "240797d2f5514dfed7d3855afd107f4c28ae4605c972443de55a3cfef4e7e68d"
+        },
+        {
+          "id": "sql-015",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 44,
+          "text_sha256": "3393481e78d82eb98ef0b766840b8dec0a39f4856d01fabecbf72b30f3ad96df"
+        },
+        {
+          "id": "sql-016",
+          "inform_matched": false,
+          "reason_code": "dangerous_sql_detected",
+          "sql_dangerous": true,
+          "text_chars": 47,
+          "text_sha256": "78ec3b5b4c5928352f108b626e9147af81ea8bbec35cc9a1565a6ae536a2fa58"
+        }
+      ],
+      "suite": "sql-dangerous"
+    }
+  ]
+}
