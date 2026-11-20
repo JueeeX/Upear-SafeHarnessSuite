@@ -934,6 +934,8 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 
 23. **参数形状规则是"形状"不是"授权"（1.16.0）**：`tools.argSchemas` 只回答"这个参数长得对不对"，不回答"这个调用该不该被允许"。所以它**不能**替代内核的 `ToolCatalog` + `CapabilityAuthority`：没有工具签名比对、没有能力票据、没有 `unknown_tool` 判定。它也不做类型系统之外的事——`additionalProperties` / `items` / `required` 这类 JSON Schema 结构不在支持范围内，宿主自己的入参校验负责那一层。另外三条边界：① 只约束**实际出现**的参数（漏传由工具自己拒绝）；② 同一工具只认**第一条**匹配的 schema，写多条时后面那条不会叠加；③ `pattern` 走的是规则 loader 的同一道 ReDoS 门，但仍然是**你写的正则**——`(a|aa)+` 这种交替爆炸不在启发式覆盖范围内（同 §11 第 21 条）。
 
+24. **语义 judge 会返回"空回答"，而且短正文比长正文更容易（2026-11-20 只读取证）**：`scope: always` 下真实发生的是 `judge_status: empty / reason: empty_model_reply`——模型调用了、token 也计费了（`usage_output` 中位数 690，最大 11579），但**一个 `text-delta` 都没吐**，于是 `response_chars=0`，按失败矩阵降级成 `output_judge_unavailable`（balanced 记账放行，hardened 拒绝）。按账本现有的 30 条真实判官调用分组看：`ok` 组正文中位数 275 字符、prompt 中位数 510；`empty` 组正文中位数 **90** 字符、prompt 中位数 **325**、耗时中位数 **959 ms**；`timeout` 组正文中位数 3861 字符。**相关性很清楚：正文越短越容易空回**（最小的一条正文只有 18 字符），长正文则是另一种失败（超时）。19 条 `empty` 里有 5 条的 `usage_output` 超过了本插件给的 `maxTokens`（2048），说明这些回答把预算花在了**不产生 `text-delta` 的地方**（推理段或供应商侧的路由行为），而不是"回答被截断"。**行为是对的**：空回答被判为 `unavailable` 而不是 `allow`，balanced 只记账、hardened 会拒。**没做的事**：没有为此改动任何代码——把 `reasoning-delta` 也当作回答会改变判定语义（那正是要审的内容与推理过程混在一起），把空回答当 `allow` 则等于放宽；下一步应当是**换一个对短 prompt 稳定的判官路由**，或者给 `scope` 加一档"只审长回答"，两者都要先有更多样本再定。这条写在这里，是为了让下一个人不要把它当成一次偶发抖动。
+
 ---
 
 ## 12. 安全边界与许可

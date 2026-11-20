@@ -18,7 +18,7 @@
 ## 0. 30 秒坐标
 
 - **是什么**：`@upear/dsh-safeharness`，DSH（DeepSeek Harness）的 profile 级 Cordis 插件（组合包形态），把 SafeHarness 内核的安全语义装进 DSH 的执行生命周期。TypeScript，**运行时零第三方依赖**，不 patch 宿主、不改内核（`src/safeharness/**` 是 Python 内核，插件不 import 它）。
-- **当前版本**：1.15.2（58 个测试文件 / 882 用例全绿）。宿主 DSH 桌面 `0.2.2-rc.5`，版本门两表同时接受 `rc.3`。
+- **当前版本**：1.16.0（59 个测试文件 / 924 用例全绿）。宿主 DSH 桌面 `0.2.2-rc.5`，版本门两表同时接受 `rc.3`。
 - **核心原则（改代码前默念）**：插件是内核的应用，不凌驾于内核——只移植内核**已实现**的能力；宿主已托管的（审批对话框、工具执行、OS 沙箱）不重造；内核没有的（记忆/租户/PG sink/网关回执/管理面/进化闸门）一律不做。
 - **第一大纪律：零回显**。账本/日志/错误消息/面板载荷只许出现哈希、长度、代码、配置名。凭据只在 `~/.dsh/.credentials.yaml`，profile 里只存 `apiKeyEnv` 引用名。
 
@@ -46,6 +46,7 @@
 | SQL 形状 + 表白名单 | `tools.sqlScan`、`tools.sql.allowedTables`（空=不限） | `engine/sql.ts` | `tests/sql*` | 白名单不匹配 → `unauthorized_sql_table`；`DEL/**/ETE` 注释剥离有回归钉 |
 | 轨迹阈值 | `tools.repeatedAttemptThreshold`、`entropyThreshold`、`entropyMinLength`（默认 0=关） | `engine/tool.ts` | 轨迹阈值测试 | 同工具连续失败达阈值拒（成功清零）；高熵串参数拒（只记 index/长度/熵值） |
 | 工具描述符扫描 | `tools.descriptorScan: off/warn/enforce`（默认 warn） | `engine/tool.ts`（`name`+`description` ≤8KiB） | 描述符测试 | warn 每会话每工具记一次；enforce=逐次拒（宿主无"下架工具"接缝，MANUAL §4.10） |
+| 参数形状规则（1.16.0） | `tools.argSchemas`（六种原语：pattern/enum/minBytes/maxBytes/pathPrefix/urlScheme/commandAllowlist） | `engine/argschema.ts`（编译+判定）+ `engine/tool.ts` 第 (4b) 步 | `tests/arg-schema.test.ts` | 内核 `constrain.py` 的 argument-schema 一半；编译失败只丢该条并报 `arg_schema_invalid`；**pattern 走规则 loader 同一道 ReDoS 门** |
 | PII 10 类 | `results.pii`、`results.piiClasses` | `engine/pii.ts` | `tests/pii*` | `id_card/phone_cn/email/bank_card/api_key/jwt/doc_no/gov_serial/customer_id/internal_url`，两条正则有长度上界（防 256KiB 回溯灾难，实测教训） |
 | 凭据形态（三面共用） | 结果/输出面自动 | 凭据扫描（`scanCredentialLeaks`，结果面与输出面同一份） | `tests/credential-leak.test.ts` | 1.15.1 真实事故修复：JSON 引号键名、`LLM_API_KEY` 长前缀形状、引用排除（`z.string()`/`process.env.X`）；**改这套正则前先读该版 CHANGELOG 的性能段**（无界前缀曾把测试卡死数分钟） |
 
@@ -140,7 +141,7 @@ shell 内二次命令、工具体执行后的副作用、网络副作用、技�
 1. **内核对齐**：新检测能力先查 `plan-2026-11-18.md` §1——内核没有的不做；内核有的按内核口径移植，差异点写进 MANUAL §4/§11。
 2. **零回显**：任何新账本字段/日志/错误消息，先问"这里面有没有内容、路径、凭据"。只有哈希/长度/代码/配置名可以出去。
 3. **fail 方向**：判定的 fail-open/fail-closed 语义是配置化的（默认看 preset），不许在代码里偷偷翻转；hardened 必须真 fail-closed。
-4. **测试账本只增不减**：当前 58 文件 / 882 用例是下限。新行为必须带用例；修 bug 先写复现用例。`tests/perf.test.ts` 有 p99 门（5ms），正则改动必须加对抗用例（1.15.1 教训：无界前缀 = 全套卡死数分钟）。
+4. **测试账本只增不减**：当前 59 文件 / 924 用例是下限。新行为必须带用例；修 bug 先写复现用例。`tests/perf.test.ts` 有 p99 门（5ms），正则改动必须加对抗用例（1.15.1 教训：无界前缀 = 全套卡死数分钟）；**新加的 perf 用例规模要克制**（见 §5 最后一行）。
 5. **面板写入**：走 revision CAS；`tools`/`results`/`approval`/`rules`/`patrol` 各自对象合并，不与同面 `mode` 互相覆盖；非法值**一个字节都不写**。客户端 dirty 判定见 §4 P0（1.15.2 已修，改之前先读 `tests/settings-form.test.ts` 与 `tests/panel-settings.test.tsx`）。
 6. **宿主版本门**：`PINNED_VERSIONS` / `PREVIOUSLY_VERIFIED_VERSIONS` 两表**只加不删**；删表项 = 宣布不再支持该宿主，需单独发版说明。
 7. **发布**：流程照 `docs/handoff-2026-11-18.md` §14（worktree、leak 检查、公开树测试口径、tag 不重写）。`docs/` 目录不入公开树。
@@ -161,9 +162,15 @@ shell 内二次命令、工具体执行后的副作用、网络副作用、技�
 3. 非法值原因移进保存条内、按钮禁用带 `title`、`dirty` 判据含 `invalid`。
 4. **真机验收已完成**：账本 `seq 13907 / ts 2026-11-20T03:11:09Z / plugin_version 1.15.2 / reason_code panel_settings / state settings_saved`。
 
-### P1 — 1.16.0 工具参数 schema 校验（内核对齐的最后一项）
+### P1 — 1.16.0 工具参数形状规则（**已完成，2026-11-20**）
 
-内核 `constrain.py` 对齐：按工具名/参数名做形状约束（路径、URL、SQL、命令行），宿主 tool-call 参数面执行。落地后把 MANUAL 能力对照表 `constrain.py` 从"部分对齐"改"已对齐"。设计约束照 §3 纪律 1/2/4。
+内核 `constrain.py` 的 argument-schema 那一半已落地：新增 `tools.argSchemas` + `engine/argschema.ts`，六种原语（`pattern` / `enum` / `minBytes` / `maxBytes` / `pathPrefix` / `urlScheme` / `commandAllowlist`），命中即 `unauthorized_tool_argument`；编译失败的条目只丢自己并在姿态报 `arg_schema_invalid`。MANUAL 能力对照表已把 `constrain.py` 改「已对齐（参数 schema 部分）」，§4.11 是用户文档，§11 第 23 条写边界，`tests/arg-schema.test.ts` 39 条钉行为。
+
+**没做的（下一版的候选，不是欠账）**：面板编辑 `argSchemas` 仍是只读（要复刻一套列表校验，照 `denyTools` 那套）；不支持 `items` / `required` / `additionalProperties`（宿主自己的入参校验负责那一层，插件再引一套等于给出两个答案）。
+
+### P1.5 — 判官"空回答"（只读取证已完成，**不改代码**）
+
+真实账本里 19 条 `judge_status: empty`：模型调用了、token 也计费（`usage_output` 中位数 690，最大 11579），但一个 `text-delta` 都没吐。按状态分组看相关性很清楚——`ok` 组正文中位数 275 字符，`empty` 组只有 **90** 字符（最小 18），`timeout` 组 3861 字符：**正文越短越容易空回，长正文则超时**。行为本身是对的（空回答记 `unavailable`，不是 `allow`）。下一步是换一条对短 prompt 稳定的判官路由，或给 `scope` 加一档"只审长回答"，两者都要更多样本再定。细节与不这么改的理由写在 MANUAL §11 第 24 条。
 
 ### P2 — 其余
 
@@ -182,8 +189,9 @@ shell 内二次命令、工具体执行后的副作用、网络副作用、技�
 | 面板改了"没生效" | 先看是不是 P0 回归（§4）；再确认字段 volatile 与否（只读卡片上的字段只能改 patch） |
 | 读 lockfile/含凭据文档被拦 | `results` 面按形状拦是特性；SRI 前缀已豁免；写文档用占位符 |
 | perf 测试偶发挂 | 满载 p99 抖动（5.2ms > 5ms），单独重跑通过即可 |
-| 测试口径 | 本机 58 文件/882 用例 ≥ 公开树口径（每版 CHANGELOG 记录），新增用例不减少 |
+| 测试口径 | 本机 59 文件/924 用例 ≥ 公开树口径（每版 CHANGELOG 记录），新增用例不减少 |
+| perf 用例写得太大 | 1.16.0 踩过：400×5 次 × 64 KiB 的新用例分配约 128 MB，把 GC 停顿推给它**上面几行**的 `scanToolResult` 预算（全量 4 次里 3 次失败；未改动的树 1/4）。预算用例要小、要放在最后，别干扰邻居 |
 
 ---
 
-*本文由主项目 Agent 于 2026-11-20 基于代码树、CHANGELOG（1.9.5–1.15.2）、plan 与 handoff 交叉核对写成；2026-11-20 晚随 1.15.2 收口更新（版本/用例数/P0 状态）。发现与代码不符时，以代码为准并把差异修进本文。*
+*本文由主项目 Agent 于 2026-11-20 基于代码树、CHANGELOG（1.9.5–1.16.0）、plan 与 handoff 交叉核对写成；同日两次更新：1.15.2 收口（版本/用例数/P0 状态）与 1.16.0 落地（参数形状规则、判官空回答取证、perf 用例规模教训）。发现与代码不符时，以代码为准并把差异修进本文。*
