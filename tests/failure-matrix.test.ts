@@ -114,7 +114,15 @@ function emptySession(sessionId = 'sess-1'): SessionView {
 /** A fully healthy posture environment (each row overrides what it probes). */
 function healthyEnv(overrides: Partial<PostureEnv> = {}): PostureEnv {
   return {
-    sandboxMode: 'workspace-write',
+    // One observed session at the same mode as the default: the sandbox check is
+    // only allowed to say OK once a session was actually resolved (1.16.2).
+    sandbox: {
+      defaultMode: 'workspace-write',
+      sessionMode: 'workspace-write',
+      observedSessions: 1,
+      unknownSessions: 0,
+      census: { 'read-only': 0, 'workspace-write': 1, 'danger-full-access': 0 },
+    },
     approvalPolicy: 'ask',
     hmrEnabled: false,
     versionMismatch: [],

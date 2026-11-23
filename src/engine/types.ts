@@ -234,6 +234,68 @@ export interface ResultFinding {
 /** Posture finding severity vocabulary (mirrors the Python patrol's FAIL/WARN/OK/SKIP). */
 export type PostureSeverity = 'FAIL' | 'WARN' | 'OK' | 'SKIP'
 
+/**
+ * The file-sandbox modes DSH can put a call in, most restrictive first.
+ *
+ * The order is load-bearing: posture asks "is anything unrestricted", so the
+ * answer is the **widest** mode in force, not the deployment default.
+ */
+export const SANDBOX_MODES = ['read-only', 'workspace-write', 'danger-full-access'] as const
+
+/** One {@link SANDBOX_MODES} value. */
+export type SandboxModeName = (typeof SANDBOX_MODES)[number]
+
+/** Narrow an untrusted value to a sandbox mode, or `undefined`. */
+export function asSandboxMode(value: unknown): SandboxModeName | undefined {
+  return typeof value === 'string' && (SANDBOX_MODES as readonly string[]).includes(value)
+    ? (value as SandboxModeName)
+    : undefined
+}
+
+/**
+ * The widest of two modes.
+ *
+ * `undefined` on one side means the other side is the only evidence there is, so
+ * it is returned as-is; `undefined` on both sides is "nothing is known", which is
+ * never read as "confined" — the caller decides that, and posture treats a fully
+ * unknown answer as SKIP/WARN rather than a pass.
+ */
+export function widerSandboxMode(
+  left: SandboxModeName | undefined,
+  right: SandboxModeName | undefined,
+): SandboxModeName | undefined {
+  if (left === undefined) return right
+  if (right === undefined) return left
+  return SANDBOX_MODES.indexOf(left) >= SANDBOX_MODES.indexOf(right) ? left : right
+}
+
+/**
+ * Everything posture knows about the sandbox at one moment.
+ *
+ * Why an object and not a single mode: DSH resolves the file-sandbox mode **per
+ * session** (a session's own `sandbox/mode` event outranks the deployment
+ * default), so a `read-only` profile can be running a `danger-full-access`
+ * conversation. Reporting the session-less default as "the mode" is how a
+ * deployment ends up claiming a confinement it does not have.
+ */
+export interface SandboxObservation {
+  /** What a session-less `resolve()` reports: the deployment default. */
+  readonly defaultMode?: SandboxModeName
+  /** The widest mode any observed session resolved to (unknowns excluded). */
+  readonly sessionMode?: SandboxModeName
+  /** Sessions this process has seen a sandbox answer for. */
+  readonly observedSessions: number
+  /** Observed sessions whose mode could not be read at all. */
+  readonly unknownSessions: number
+  /** How many observed sessions run at each mode. */
+  readonly census: Readonly<Record<SandboxModeName, number>>
+}
+
+/** The widest mode named anywhere in an observation, or `undefined`. */
+export function widestSandboxMode(observation: SandboxObservation): SandboxModeName | undefined {
+  return widerSandboxMode(observation.defaultMode, observation.sessionMode)
+}
+
 /** One posture check result (code vocabulary in `posture/checks.ts`). */
 export interface PostureFinding {
   readonly code: string
@@ -244,8 +306,11 @@ export interface PostureFinding {
 
 /** The environment posture checks inspect. Supplied by hooks, not read directly. */
 export interface PostureEnv {
-  /** Sandbox mode resolved by `ctx.sandboxPolicy`, when the service exists. */
-  readonly sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  /**
+   * The sandbox as it is actually in force: the deployment default **and** the
+   * per-session modes this process resolved. Absent means "not observed".
+   */
+  readonly sandbox?: SandboxObservation
   /** Approval policy in force (`ask` | `never`), when readable. */
   readonly approvalPolicy?: 'ask' | 'never'
   /** Whether the HMR plugin is composed into this profile. */

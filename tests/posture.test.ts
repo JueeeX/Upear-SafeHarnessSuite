@@ -7,10 +7,32 @@ import { resolveConfig } from '../src/config.js'
 import { failOnHits, runPostureChecks, summarize } from '../src/posture/checks.js'
 import type { PostureEnv } from '../src/engine/types.js'
 
+/**
+ * What posture sees for the sandbox: the deployment default plus the modes the
+ * sessions this process observed actually resolved to.
+ */
+function sandboxOf(
+  defaultMode: 'read-only' | 'workspace-write' | 'danger-full-access' | undefined,
+  sessionMode?: 'read-only' | 'workspace-write' | 'danger-full-access',
+  extra?: { unknownSessions?: number; census?: Partial<Record<'read-only' | 'workspace-write' | 'danger-full-access', number>> },
+) {
+  const census = { 'read-only': 0, 'workspace-write': 0, 'danger-full-access': 0, ...extra?.census }
+  if (sessionMode !== undefined) census[sessionMode] += 1
+  return {
+    defaultMode,
+    sessionMode,
+    observedSessions: census['read-only'] + census['workspace-write'] + census['danger-full-access'],
+    unknownSessions: extra?.unknownSessions ?? 0,
+    census,
+  }
+}
+
 /** A healthy environment: everything observable and clean. */
 function healthyEnv(): PostureEnv {
   return {
-    sandboxMode: 'workspace-write',
+    // One observed session matching the default: OK is only reachable once a
+    // session was actually resolved (a default on its own is SKIP, see §5.2).
+    sandbox: sandboxOf('workspace-write', 'workspace-write'),
     approvalPolicy: 'ask',
     hmrEnabled: false,
     versionMismatch: [],
@@ -89,14 +111,60 @@ describe('runPostureChecks', () => {
   })
 
   it('danger-full-access is WARN in balanced and FAIL in hardened', () => {
-    const env = { ...healthyEnv(), sandboxMode: 'danger-full-access' as const }
+    const env = { ...healthyEnv(), sandbox: sandboxOf('danger-full-access') }
     expect(find(env, 'balanced', 'sandbox_danger_full_access')?.severity).toBe('WARN')
     expect(find(env, 'hardened', 'sandbox_danger_full_access')?.severity).toBe('FAIL')
   })
 
+  it('a dangerous SESSION mode outranks a clean deployment default', () => {
+    // The regression this file exists for: the deployment default is
+    // `workspace-write`, but a live session resolved to `danger-full-access`.
+    // Asking `resolve()` without a session used to report the default and call
+    // the deployment clean while an unrestricted conversation was running.
+    const env = { ...healthyEnv(), sandbox: sandboxOf('workspace-write', 'danger-full-access') }
+    const balanced = find(env, 'balanced', 'sandbox_danger_full_access')
+    expect(balanced?.severity).toBe('WARN')
+    expect(balanced?.detail).toContain('danger-full-access')
+    // …and it gates hardened exactly like a dangerous default would.
+    expect(find(env, 'hardened', 'sandbox_danger_full_access')?.severity).toBe('FAIL')
+    expect(failOnHits(resolveConfig({ preset: 'hardened' }), runPostureChecks(resolveConfig({ preset: 'hardened' }), env)))
+      .toContain('sandbox_danger_full_access')
+  })
+
+  it('an unreadable session mode is never a clean pass', () => {
+    // A composed service that could not resolve one session is evidence of
+    // nothing: those sessions may be running unrestricted.
+    const env = { ...healthyEnv(), sandbox: sandboxOf('workspace-write', undefined, { unknownSessions: 2 }) }
+    const balanced = find(env, 'balanced', 'sandbox_danger_full_access')
+    expect(balanced?.severity).toBe('WARN')
+    expect(balanced?.detail).toContain('unverified')
+    expect(find(env, 'hardened', 'sandbox_danger_full_access')?.severity).toBe('FAIL')
+  })
+
   it('an unknown sandbox mode is SKIP, never OK', () => {
-    const env: PostureEnv = { ...healthyEnv(), sandboxMode: undefined }
+    const env: PostureEnv = { ...healthyEnv(), sandbox: undefined }
     expect(find(env, 'balanced', 'sandbox_danger_full_access')?.severity).toBe('SKIP')
+  })
+
+  it('a composed service that resolved nothing is SKIP, never OK', () => {
+    const env: PostureEnv = { ...healthyEnv(), sandbox: sandboxOf(undefined) }
+    const finding = find(env, 'balanced', 'sandbox_danger_full_access')
+    expect(finding?.severity).toBe('SKIP')
+    expect(finding?.detail).toContain('never resolved')
+  })
+
+  it('the deployment default alone is SKIP, never OK', () => {
+    // The load-time gate runs before any seam is wired, so it can only see the
+    // default. That is not evidence about the sessions which will run under it —
+    // reporting OK there is the same false assurance the per-session fix removed.
+    const env: PostureEnv = { ...healthyEnv(), sandbox: sandboxOf('workspace-write') }
+    const finding = find(env, 'balanced', 'sandbox_danger_full_access')
+    expect(finding?.severity).toBe('SKIP')
+    expect(finding?.detail).toContain('workspace-write')
+    expect(finding?.detail).toContain('no session has been observed')
+    // …and a default is not enough to gate hardened either.
+    expect(failOnHits(resolveConfig({ preset: 'hardened' }), runPostureChecks(resolveConfig({ preset: 'hardened' }), env)))
+      .toEqual([])
   })
 
   it('approval=never is WARN while delegating and FAIL when hardened still delegates', () => {
@@ -206,7 +274,7 @@ describe('runPostureChecks', () => {
 describe('failOnHits', () => {
   it('returns only codes that actually FAILed', () => {
     const config = resolveConfig({ preset: 'hardened' })
-    const env: PostureEnv = { ...healthyEnv(), sandboxMode: 'danger-full-access' }
+    const env: PostureEnv = { ...healthyEnv(), sandbox: sandboxOf('danger-full-access') }
     const findings = runPostureChecks(config, env)
     // HMR is off in a healthy env, so only the sandbox gate fires.
     expect(failOnHits(config, findings)).toEqual(['sandbox_danger_full_access'])
@@ -220,7 +288,7 @@ describe('failOnHits', () => {
 
   it('balanced has no gates by default', () => {
     const config = resolveConfig({ preset: 'balanced' })
-    const env: PostureEnv = { ...healthyEnv(), sandboxMode: 'danger-full-access' }
+    const env: PostureEnv = { ...healthyEnv(), sandbox: sandboxOf('danger-full-access') }
     expect(failOnHits(config, runPostureChecks(config, env))).toEqual([])
   })
 })

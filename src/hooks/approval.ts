@@ -25,6 +25,7 @@ import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { Runtime } from '../runtime.js'
 import { matchNamePattern, resolveTags } from '../engine/tool.js'
 import { sessionCreatedAtOf, sessionTitleOf, sessionWorkspaceOf } from './context.js'
+import { observeSessionSandbox } from './sandbox.js'
 
 /** Maximum remembered grants across all sessions (LRU-ish, insertion order). */
 export const MAX_GRANTS = 512
@@ -72,6 +73,13 @@ export function installApprovalHook(ctx: Context, runtime: Runtime): boolean {
         createdAt: sessionCreatedAtOf(agent),
         title: sessionTitleOf(ctx, agent),
       })
+      // An approval is a decision about one confined call, so the session's
+      // sandbox mode is part of the deployment picture posture must report.
+      try {
+        observeSessionSandbox(runtime, ctx, (request?.agent as { session?: unknown } | undefined)?.session)
+      } catch (error) {
+        runtime.internalError('approval:sandbox', error)
+      }
       if (mode === 'delegate') {
         // Audit pair first: the outcome is written below, after the answerer ran.
         runtime.audit('approval_asked', {

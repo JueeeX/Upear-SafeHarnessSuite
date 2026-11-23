@@ -6,6 +6,7 @@
  */
 import type { ResolvedConfig } from '../config.js'
 import type { PostureEnv, PostureFinding, PostureSeverity } from '../engine/types.js'
+import { SANDBOX_MODES, widestSandboxMode } from '../engine/types.js'
 
 /** Every posture code this version can emit; `posture.failOn` matches these. */
 export const POSTURE_CODES = [
@@ -45,16 +46,72 @@ export function runPostureChecks(config: ResolvedConfig, env: PostureEnv): Postu
   const findings: PostureFinding[] = []
 
   // --- sandbox -----------------------------------------------------------------
-  if (env.sandboxMode === undefined) {
-    findings.push(finding('sandbox_danger_full_access', 'SKIP', 'sandbox policy service not composed; mode unknown'))
-  } else if (env.sandboxMode === 'danger-full-access') {
+  //
+  // The mode is per **session** on DSH: `ctx.sandboxPolicy.resolve()` returns the
+  // deployment default when asked without a session, while every live session may
+  // run at its own mode (a `sandbox/mode` event outranks the default). Reporting the
+  // session-less default as "the mode" is how a deployment ends up claiming a
+  // confinement it does not have, so this check reads the widest mode actually in
+  // force and refuses to call an unreadable answer OK.
+  const sandbox = env.sandbox
+  if (sandbox === undefined) {
     findings.push(finding(
       'sandbox_danger_full_access',
-      hardened ? 'FAIL' : 'WARN',
-      'sandbox mode is danger-full-access: the file sandbox is disabled for this session',
+      'SKIP',
+      'sandbox policy service not composed; the file-sandbox mode is unknown',
     ))
   } else {
-    findings.push(finding('sandbox_danger_full_access', 'OK', `sandbox mode is ${env.sandboxMode}`))
+    const inForce = widestSandboxMode(sandbox)
+    // One clause naming where the answer came from, then the per-mode census.
+    // Codes, modes and counts only: no session id, no workspace path.
+    const parts: string[] = []
+    if (sandbox.defaultMode !== undefined) parts.push(`default ${sandbox.defaultMode}`)
+    if (sandbox.sessionMode !== undefined) parts.push(`sessions up to ${sandbox.sessionMode}`)
+    if (sandbox.observedSessions > 0) parts.push(`${sandbox.observedSessions} session(s) observed`)
+    if (sandbox.unknownSessions > 0) parts.push(`${sandbox.unknownSessions} unreadable`)
+    const census = SANDBOX_MODES
+      .filter((mode) => sandbox.census[mode] > 0)
+      .map((mode) => `${sandbox.census[mode]}×${mode}`)
+      .join(', ')
+    const detail = `${parts.join(', ') || 'nothing resolved'}${census.length > 0 ? ` [${census}]` : ''}`
+
+    if (inForce === 'danger-full-access') {
+      findings.push(finding(
+        'sandbox_danger_full_access',
+        hardened ? 'FAIL' : 'WARN',
+        `sandbox mode is danger-full-access: the file sandbox is disabled (${detail})`,
+      ))
+    } else if (sandbox.unknownSessions > 0) {
+      // An unreadable mode is not a pass: those sessions could be running
+      // unrestricted, and this check exists precisely to catch that.
+      findings.push(finding(
+        'sandbox_danger_full_access',
+        hardened ? 'FAIL' : 'WARN',
+        `sandbox mode is unverified for some sessions; the widest mode read is ${inForce ?? 'none'} (${detail})`,
+      ))
+    } else if (inForce === undefined) {
+      findings.push(finding(
+        'sandbox_danger_full_access',
+        'SKIP',
+        'sandbox policy service composed but never resolved a mode',
+      ))
+    } else if (sandbox.observedSessions === 0) {
+      // The load-time gate runs before any seam is wired, so at that moment there is
+      // no session to resolve for: only the deployment default is known. Calling
+      // that OK is the very false assurance this check exists to prevent — the
+      // default says nothing about the conversations that will run under it.
+      findings.push(finding(
+        'sandbox_danger_full_access',
+        'SKIP',
+        `deployment default is ${inForce}, but no session has been observed yet; per-session modes are unverified (${detail})`,
+      ))
+    } else {
+      findings.push(finding(
+        'sandbox_danger_full_access',
+        'OK',
+        `sandbox mode is ${inForce} (${detail})`,
+      ))
+    }
   }
 
   // --- approval ----------------------------------------------------------------

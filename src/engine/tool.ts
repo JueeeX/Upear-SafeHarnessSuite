@@ -648,9 +648,11 @@ export function evaluateToolCall(
   // should see that reason first, and a schema is a *shape* constraint on the same
   // argument text, so it belongs with the other per-call argument gates.
   //
-  // One schema per tool may match several globs; the first matching schema wins, so
-  // a later broad rule cannot weaken a specific one by being evaluated first. The
-  // refusal names the schema, the argument and the keyword — never the value.
+  // Every schema whose tool glob matches applies (AND, not "first match wins"):
+  // adding a declaration can only ever narrow a call, never widen one, and an
+  // operator who writes two schemas for one tool gets both enforced. The refusal
+  // reports the FIRST violation in declaration order, and names only the schema,
+  // the argument and the keyword — never the value.
   if (cfg.argSchemas !== undefined && cfg.argSchemas.length > 0) {
     for (const entry of cfg.argSchemas) {
       if (!matchNamePattern(view.name, [entry.tool])) continue
@@ -770,7 +772,16 @@ const CREDENTIAL_PATTERNS: readonly CredentialPattern[] = [
   },
 ]
 
-/** Token splitter for the entropy heuristic: everything that is not base64-ish. */
+/**
+ * The character class of one base64-ish run; the text is split on its complement.
+ *
+ * Why not match the long runs directly: measured 2026-11-23, a `{40,}` walk over the
+ * same 61 KB input costs 0.51 ms median against 0.15 ms for `split()` — the bounded
+ * quantifier has to try a match at every position, while the split does one linear
+ * pass. The split's allocation is real but cheaper than the scan it replaces, so the
+ * simpler implementation wins. (The scan's own p99 variance comes from the machine,
+ * not from this line: see the `perf` project in `vitest.config.ts`.)
+ */
 const ENTROPY_TOKEN_SEPARATOR_RE = /[^A-Za-z0-9+/_=-]+/
 /** Minimum token length for the entropy heuristic (T1.2: >= 40 chars). */
 const ENTROPY_MIN_CHARS = 40
@@ -859,6 +870,21 @@ export interface CredentialScan {
 const ASSIGNMENT_HINT_RE = /key|token|secret|password|passwd/i
 
 /**
+ * Cheap pre-check #2: the assignment pattern requires a `=` or `:` separator.
+ *
+ * The hint above is not enough on its own, because ordinary prose contains those
+ * words: the perf file's own fixture is `'plain log line without secrets'` repeated,
+ * which passes the hint and then runs the heaviest regex in the file over 61 KB of
+ * text that has no separator at all. Measured 2026-11-23: 0.80 ms with the hint
+ * word present versus 0.20 ms without it — a 4× difference caused by one preposition.
+ *
+ * A `[=:]` test is a single linear scan with no allocation, and it is a *necessary*
+ * condition of the pattern (`\s*[=:]\s*` is mandatory in it), so skipping when it
+ * fails cannot change a verdict — only the cost.
+ */
+const ASSIGNMENT_SEPARATOR_RE = /[=:]/
+
+/**
  * Scan text for credential-shaped values.
  *
  * Shared by the tool-result face and the output face. Before 1.15.1 only the
@@ -873,8 +899,11 @@ const ASSIGNMENT_HINT_RE = /key|token|secret|password|passwd/i
 export function scanCredentialLeaks(text: string): CredentialScan {
   const ids: string[] = []
   let severity: Severity | undefined
+  // Both hints are necessary conditions of the assignment pattern, so testing them
+  // first cannot change a verdict — it only skips a regex that would have failed.
+  const assignmentRelevant = ASSIGNMENT_HINT_RE.test(text) && ASSIGNMENT_SEPARATOR_RE.test(text)
   for (const pattern of CREDENTIAL_PATTERNS) {
-    if (pattern.id === 'credential_assignment' && !ASSIGNMENT_HINT_RE.test(text)) continue
+    if (pattern.id === 'credential_assignment' && !assignmentRelevant) continue
     if (!testRegex(pattern.regex, text)) continue
     ids.push(pattern.id)
     if (severity === undefined || SEVERITY_RANK[pattern.severity] > SEVERITY_RANK[severity]) {
@@ -913,8 +942,16 @@ export function redactCredentialValues(text: string): { readonly text: string; r
 
   // Assignment first, and only the value: the key name is useful context and is
   // not itself the secret (`"LLM_API_KEY": "[REDACTED:credential]"`).
+  //
+  // Same two necessary-condition hints as the scanner: without a key-ish word AND a
+  // `=`/`:` separator the pattern cannot match, and both tests are one linear pass
+  // against a regex that dominates the cost of this function.
   const assignmentPattern = CREDENTIAL_PATTERNS.find((pattern) => pattern.id === 'credential_assignment')
-  if (assignmentPattern !== undefined && ASSIGNMENT_HINT_RE.test(text)) {
+  if (
+    assignmentPattern !== undefined
+    && ASSIGNMENT_HINT_RE.test(text)
+    && ASSIGNMENT_SEPARATOR_RE.test(text)
+  ) {
     const assignment = new RegExp(assignmentPattern.regex.source, `${assignmentPattern.regex.flags}g`)
     out = out.replace(assignment, (match: string, value: string) => {
       count += 1
