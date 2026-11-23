@@ -7,7 +7,8 @@
 >
 > | 文档 | 回答的问题 |
 > |---|---|
-> | `docs/handoff-2026-11-18.md` | 现状、环境、runbook、发布流程、坑清单（**接手先读它 §1–§4**） |
+> | **`docs/handoff-2026-11-23.md`** | **当前真相**：现状、环境、发布流程、坑清单、内核对比、欠账、后续计划（**接手先读它 §1–§5**） |
+> | `docs/handoff-2026-11-18.md` | 1.14.0 时代的环境/架构初版（其 §4.2 的发布步骤是**旧版**，已被 11-23 §4.2 取代） |
 > | `docs/plan-2026-11-18.md` | 内核能力对照表、移植计划、剩余任务（§16 前后的热修与 1.16.0） |
 > | `MANUAL.md` | 面向使用者的权威配置手册（§4 配置 / §5 预设 / §11 已知限制） |
 > | `CHANGELOG.md` | 逐版变更与理由（每版"为什么这么改"都在） |
@@ -144,7 +145,7 @@ shell 内二次命令、工具体执行后的副作用、网络副作用、技�
 4. **测试账本只增不减**：当前 60 文件 / 932 用例是下限。新行为必须带用例；修 bug 先写复现用例。`tests/perf.test.ts` 有 p99 门（5ms），正则改动必须加对抗用例（1.15.1 教训：无界前缀 = 全套卡死数分钟）；**新加的 perf 用例规模要克制**（见 §5 最后一行）。
 5. **面板写入**：走 revision CAS；`tools`/`results`/`approval`/`rules`/`patrol` 各自对象合并，不与同面 `mode` 互相覆盖；非法值**一个字节都不写**。客户端 dirty 判定见 §4 P0（1.15.2 已修，改之前先读 `tests/settings-form.test.ts` 与 `tests/panel-settings.test.tsx`）。
 6. **宿主版本门**：`PINNED_VERSIONS` / `PREVIOUSLY_VERIFIED_VERSIONS` 两表**只加不删**；删表项 = 宣布不再支持该宿主，需单独发版说明。
-7. **发布**：流程照 `docs/handoff-2026-11-18.md` §14（worktree、leak 检查、公开树测试口径、tag 不重写）。`docs/` 目录不入公开树。
+7. **发布**：流程照 `docs/handoff-2026-11-23.md` §4.2（worktree + **必须走 `scripts/publish-public.mjs`**、leak 检查、公开树测试口径、tag 不重写）。`docs/` 目录不入公开树。**不要手工 robocopy 同步**——1.15.2 就是这样把攻击语料泄漏到公开仓的。
 8. **写文档/注释别带凭据样例**（`key = "真实形状"`）：1.15.1 起三面都会拦，读者会看不到那段文字。用占位符形状。
 9. **本机构建**：pnpm 是坏的（全局 packageManager 冲突），用 `node node_modules/typescript/bin/tsc`、`node node_modules/vitest/vitest.mjs` 直调；构建三步 + `npm pack`（handoff §14 有完整命令）。
 

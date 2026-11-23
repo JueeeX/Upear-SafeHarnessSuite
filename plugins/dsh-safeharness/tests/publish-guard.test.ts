@@ -53,6 +53,8 @@ describe('public tree plan: still contains what a stranger needs', () => {
       'CHANGELOG.md',
       'LICENSE',
       'tsconfig.json',
+      'tsconfig.client.json',
+      'vitest.config.ts',
       'pnpm-lock.yaml',
       'src/index.ts',
       'src/engine/rules.ts',

@@ -45,6 +45,7 @@ export const PUBLISH_TOP = [
   'cordis.patch.yml',
   'tsconfig.json',
   'tsconfig.client.json',
+  'vitest.config.ts',
   '.npmrc',
   '.gitignore',
   '.gitattributes',
