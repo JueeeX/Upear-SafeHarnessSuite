@@ -12,7 +12,12 @@ import { VERSION } from '../version.js'
 
 /** Environment sources the report needs; each probe may return `undefined`. */
 export interface PostureProbe {
-  sandboxMode?(): 'read-only' | 'workspace-write' | 'danger-full-access' | undefined
+  /**
+   * The sandbox as actually in force. Reads both the deployment default and the
+   * per-session modes this process has resolved (DSH resolves the mode per
+   * session, so the session-less default alone can understate the exposure).
+   */
+  sandbox?(): PostureEnv['sandbox']
   approvalPolicy?(): 'ask' | 'never' | undefined
   hmrEnabled?(): boolean | undefined
   /** DSH package versions that disagree with our pinned peers (empty = match). */
@@ -53,7 +58,7 @@ async function collectEnv(runtime: Runtime, probe: PostureProbe): Promise<Postur
   }
 
   const env: PostureEnv = {
-    sandboxMode: safe('sandbox', probe.sandboxMode),
+    sandbox: safe('sandbox', probe.sandbox),
     approvalPolicy: safe('approval', probe.approvalPolicy),
     hmrEnabled: safe('hmr', probe.hmrEnabled),
     versionMismatch: safe('version', probe.versionMismatch),

@@ -58,6 +58,8 @@ describe('public tree plan: still contains what a stranger needs', () => {
       'pnpm-lock.yaml',
       'src/index.ts',
       'src/engine/rules.ts',
+      'src/hooks/sandbox.ts',
+      'tests/sandbox-observe.test.ts',
       'rules/inform.yaml',
       'rules/chains.yaml',
       'examples/cordis.patch.example.yml',

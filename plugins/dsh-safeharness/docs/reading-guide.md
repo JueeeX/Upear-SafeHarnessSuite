@@ -19,7 +19,7 @@
 ## 0. 30 秒坐标
 
 - **是什么**：`@upear/dsh-safeharness`，DSH（DeepSeek Harness）的 profile 级 Cordis 插件（组合包形态），把 SafeHarness 内核的安全语义装进 DSH 的执行生命周期。TypeScript，**运行时零第三方依赖**，不 patch 宿主、不改内核（`src/safeharness/**` 是 Python 内核，插件不 import 它）。
-- **当前版本**：1.16.1（60 个测试文件 / 932 用例全绿）。宿主 DSH 桌面 `0.2.2-rc.5`，版本门两表同时接受 `rc.3`。
+- **当前版本**：1.16.2（61 个测试文件 / 958 用例全绿）。宿主 DSH 桌面 `0.2.2-rc.5`，版本门两表同时接受 `rc.3`。
 - **核心原则（改代码前默念）**：插件是内核的应用，不凌驾于内核——只移植内核**已实现**的能力；宿主已托管的（审批对话框、工具执行、OS 沙箱）不重造；内核没有的（记忆/租户/PG sink/网关回执/管理面/进化闸门）一律不做。
 - **第一大纪律：零回显**。账本/日志/错误消息/面板载荷只许出现哈希、长度、代码、配置名。凭据只在 `~/.dsh/.credentials.yaml`，profile 里只存 `apiKeyEnv` 引用名。
 
@@ -73,7 +73,7 @@
 | 能力 | 配置/入口 | 代码 | 说明 |
 |---|---|---|---|
 | 审计账本 | `$DSH_HOME/safeharness/audit/ledger.ndjson` | `audit/ledger.ts`、`redact.ts`、`paths.ts`、`types.ts`（`AUDIT_KINDS` 单一来源，加种类只改这里） | NDJSON sha256 链；脱敏（content→sha256、敏感键、16KB 截断）；轮转 |
-| 姿态自检 10 项 | `safeharness_posture`；`posture.failOn` 加载门 | `posture/` | failOn 命中 = 任何接缝注册前抛错（拒绝加载=完全没生效） |
+| 姿态自检 11 项 | `safeharness_posture`；`posture.failOn` 加载门 | `posture/` | failOn 命中 = 任何接缝注册前抛错（拒绝加载=完全没生效） |
 | 巡检 5 项 + 通知 | `safeharness_patrol`；`patrol.windowMinutes/factor/minCount`、`patrol.notify`（凭据永不回显） | `patrol/`、`notify/`、`panel/patrol-runner.ts` | 飞书/钉钉/企微/OneBot/generic |
 | 每轮 token 预算 | `budget.maxTokensPerTurn` | `budget.ts` | 插件独有（内核无此模块） |
 | 会话元数据索引 | `sessions.json` | `state.ts` | 只存显示字段（sessionId/workspace/标题/时间）；tmp+rename、750ms 合并、损坏忽略 |
@@ -89,7 +89,7 @@
 
 ### 1.7 与宿主的边界（如实告知，别写成"已防护"）
 
-shell 内二次命令、工具体执行后的副作用、网络副作用、技能正文、模型推理流（reasoning-delta）、MCP server 自身、更早第三方监听器的拦截——**不在覆盖范围**。插件顺序只有 prepend 最佳努力 + guard 单调兜底，没有绝对第一。侦察命令（whoami 等）不拦是明确决策。完整清单：MANUAL §11（22 条）。
+shell 内二次命令、工具体执行后的副作用、网络副作用、技能正文、模型推理流（reasoning-delta）、MCP server 自身、更早第三方监听器的拦截——**不在覆盖范围**。插件顺序只有 prepend 最佳努力 + guard 单调兜底，没有绝对第一。侦察命令（whoami 等）不拦是明确决策。完整清单：MANUAL §11（26 条）。
 
 ---
 
@@ -142,7 +142,7 @@ shell 内二次命令、工具体执行后的副作用、网络副作用、技�
 1. **内核对齐**：新检测能力先查 `plan-2026-11-18.md` §1——内核没有的不做；内核有的按内核口径移植，差异点写进 MANUAL §4/§11。
 2. **零回显**：任何新账本字段/日志/错误消息，先问"这里面有没有内容、路径、凭据"。只有哈希/长度/代码/配置名可以出去。
 3. **fail 方向**：判定的 fail-open/fail-closed 语义是配置化的（默认看 preset），不许在代码里偷偷翻转；hardened 必须真 fail-closed。
-4. **测试账本只增不减**：当前 60 文件 / 932 用例是下限。新行为必须带用例；修 bug 先写复现用例。`tests/perf.test.ts` 有 p99 门（5ms），正则改动必须加对抗用例（1.15.1 教训：无界前缀 = 全套卡死数分钟）；**新加的 perf 用例规模要克制**（见 §5 最后一行）。
+4. **测试账本只增不减**：当前 61 文件 / 958 用例是下限。新行为必须带用例；修 bug 先写复现用例。`tests/perf.test.ts` 有 p99 门（5ms），正则改动必须加对抗用例（1.15.1 教训：无界前缀 = 全套卡死数分钟）；**新加的 perf 用例规模要克制**（见 §5 最后一行）。
 5. **面板写入**：走 revision CAS；`tools`/`results`/`approval`/`rules`/`patrol` 各自对象合并，不与同面 `mode` 互相覆盖；非法值**一个字节都不写**。客户端 dirty 判定见 §4 P0（1.15.2 已修，改之前先读 `tests/settings-form.test.ts` 与 `tests/panel-settings.test.tsx`）。
 6. **宿主版本门**：`PINNED_VERSIONS` / `PREVIOUSLY_VERIFIED_VERSIONS` 两表**只加不删**；删表项 = 宣布不再支持该宿主，需单独发版说明。
 7. **发布**：流程照 `docs/handoff-2026-11-23.md` §4.2（worktree + **必须走 `scripts/publish-public.mjs`**、leak 检查、公开树测试口径、tag 不重写）。`docs/` 目录不入公开树。**不要手工 robocopy 同步**——1.15.2 就是这样把攻击语料泄漏到公开仓的。
@@ -173,11 +173,22 @@ shell 内二次命令、工具体执行后的副作用、网络副作用、技�
 
 `credential_assignment` 不再把插件自己的源码当密钥：源码里的调用赋值、测试夹具的模板占位、插件自己的 `[REDACTED…]` 占位符都不再命中；引号字面量、裸字面量、真令牌仍命中（`tests/credential-precision.test.ts` 8 条两侧都钉）。同批把「结果面 `block` 对写工具是事后告警、重试会二次执行」写进 MANUAL §11.25 / §4.10 / §12。
 
-**部署状态**：1.16.1 已装进 desktop profile（`backup-1.16.0` / `backup-1.16.1` 备份目录已建），**但宿主进程里跑的还是 1.15.2**——要重启 DSH 桌面版（含托盘退出）才生效。**公开仓 `v1.16.x` 仍未发布**（建议 1.16.0 与 1.16.1 合并成一次 `v1.16.1`）。
+**部署状态**：1.16.1 已装进 desktop profile 并重启生效；1.16.2（本文）尚未打包安装——升级时同样要**完全退出 DSH 桌面版（含托盘）再启动**，否则进程里还是旧版本。
 
 ### P1.5 — 判官"空回答"（只读取证已完成，**不改代码**）
 
 真实账本里 19 条 `judge_status: empty`：模型调用了、token 也计费（`usage_output` 中位数 690，最大 11579），但一个 `text-delta` 都没吐。按状态分组看相关性很清楚——`ok` 组正文中位数 275 字符，`empty` 组只有 **90** 字符（最小 18），`timeout` 组 3861 字符：**正文越短越容易空回，长正文则超时**。行为本身是对的（空回答记 `unavailable`，不是 `allow`）。下一步是换一条对短 prompt 稳定的判官路由，或给 `scope` 加一档"只审长回答"，两者都要更多样本再定。细节与不这么改的理由写在 MANUAL §11 第 24 条。
+
+### P1.7 — 1.16.2 姿态沙箱假 OK（**已完成，2026-11-23**）
+
+`sandbox_danger_full_access` 过去问的是 `sandboxPolicy.resolve()`（**不带 session**），拿到的是部署默认值，与任何真实会话无关；2026-11-23 本机实测：会话实际跑在 `danger-full-access`，姿态却报 `OK / "sandbox mode is workspace-write"`，`hardened` 的这道加载门禁因此等于不存在。1.16.2 改为「部署默认 ∪ 所有已观察会话里最宽的那个」，读不到模式的会话按 WARN 计；**只有默认值、一条会话都没观察到时是 `SKIP`**（加载门禁跑在任何接缝接线之前，那一刻必然只有默认值——在这里报 OK 就是同一个假 OK 换个位置）；LRU 淘汰掉的会话仍以最宽模式/未知计数计入，读不到的默认值也算未知。新增 `src/hooks/sandbox.ts`，采集点在 `agent/pre-step` / `tools/pre-execute` / `approval/request` 与会话的 `sandbox/mode` 事件。测试 `tests/sandbox-observe.test.ts` 17 条 + `tests/posture.test.ts` 3 条回归。**口径变成 61 文件 / 958 用例。**
+
+**边界（已写进 MANUAL §11 第 26 条）**：只能为插件见过的会话作答；加载前就存在、此后无事件的会话不在观测范围内。
+
+### P1.8 — 1.16.2 `argSchemas` 两处欠账（**已完成，2026-11-23**）
+
+1. **`pathPrefix` 对相对路径 fail-open**：`pathSegments()` 滤掉开头的空段，`/workspace` 被编成 `"workspace"`，于是 `workspace/a`、`./workspace/a` 都算"在 `/workspace` 下"。现在按 **（根, 段）** 比较：相对前缀在编译期被拒，相对值在判定期被拒，`C:\work\ws` 与 `/work/ws` 互不相容，`C:ws` 不算绝对，UNC 以 `//server/share` 为根。`tests/arg-schema.test.ts` +5 条。
+2. **"只认第一条匹配的 schema"文档与代码相反**：代码一直是 AND，文档/注释写的是 first-match。统一到 AND（更严），补"第一条通过、第二条拒绝"的用例——这是原用例集的唯一盲区。
 
 ### P2 — 其余
 
@@ -196,7 +207,8 @@ shell 内二次命令、工具体执行后的副作用、网络副作用、技�
 | 面板改了"没生效" | 先看是不是 P0 回归（§4）；再确认字段 volatile 与否（只读卡片上的字段只能改 patch） |
 | 读 lockfile/含凭据文档被拦 | `results` 面按形状拦是特性；SRI 前缀已豁免；写文档用占位符 |
 | perf 测试偶发挂 | 满载 p99 抖动（5.2ms > 5ms），单独重跑通过即可 |
-| 测试口径 | 本机 60 文件/932 用例 ≥ 公开树口径（每版 CHANGELOG 记录），新增用例不减少 |
+| 测试口径 | 本机 61 文件/958 用例 ≥ 公开树口径（每版 CHANGELOG 记录），新增用例不减少 |
+| perf 门怎么跑 | 1.16.2 起 `vitest.config.ts` 拆成 `unit` / `perf` 两个 project，perf 单文件串行；`npx vitest run` 自动两个都跑。手工只跑单元用例用 `--project unit` |
 | perf 用例写得太大 | 1.16.0 踩过：400×5 次 × 64 KiB 的新用例分配约 128 MB，把 GC 停顿推给它**上面几行**的 `scanToolResult` 预算（全量 4 次里 3 次失败；未改动的树 1/4）。预算用例要小、要放在最后，别干扰邻居 |
 
 ---

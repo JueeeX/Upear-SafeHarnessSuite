@@ -37,6 +37,7 @@ import { judgeCallOf } from './llm.js'
 import {
   agentIdOf, rewriteUserText, sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf, userInputText,
 } from './context.js'
+import { observeSessionSandbox } from './sandbox.js'
 
 /** Decision used when the hardened preset cannot get input judged at all. */
 const ENGINE_UNAVAILABLE_DECISION: Decision = {
@@ -101,6 +102,14 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
   ctx.on('agent/pre-step', async (payload, next): Promise<PreStepDecision> => {
     const sessionId = sessionIdOf(payload.agent)
     const agentId = agentIdOf(payload.agent)
+    // Posture must answer for the sessions that actually run, and this is the
+    // first seam of every turn: resolve the session's sandbox mode here once, so
+    // a conversation that starts after the plugin loaded is still counted.
+    try {
+      observeSessionSandbox(runtime, ctx, payload.agent?.session)
+    } catch (error) {
+      runtime.internalError('input:sandbox', error)
+    }
     // Runs before the mode gate: the panel's session view should know a
     // conversation's project even when the input guard is off.
     runtime.state.describe(sessionId, {

@@ -9,6 +9,8 @@
  * @module
  */
 import type { SessionView, ToolTrailEntry, ToolView } from './engine/types.js'
+import type { SandboxModeName } from './engine/types.js'
+import { widerSandboxMode } from './engine/types.js'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
@@ -96,6 +98,27 @@ export interface SessionState {
    */
   title?: string
   /**
+   * The file-sandbox mode in force for this session, as the host resolved it.
+   *
+   * Recorded because the sandbox mode is per **session**, not per deployment: a
+   * session's own `sandbox/mode` event outranks the profile default, and a
+   * deployment whose default is `read-only` can still be running one
+   * `danger-full-access` conversation. Posture must answer for the sessions that
+   * actually exist, so this value is read from the host's resolver at every seam
+   * that carries a live session and folded into the deployment-wide answer by
+   * {@link SessionStateStore.sandboxSummary}.
+   *
+   * Memory only, never persisted: it is live host state, not durable history.
+   */
+  sandboxMode?: SandboxModeName
+  /**
+   * True once this session's sandbox mode was actually probed (whatever the
+   * answer). Distinguishes "observed but unreadable" from "never observed": only
+   * the former makes a posture claim unsound, and only the former must not be
+   * probed again (the resolver folds the whole event log per call).
+   */
+  sandboxProbed?: boolean
+  /**
    * True for a row restored from the persisted index that this process has not
    * touched yet. Its counters/trail start at zero because they are per process,
    * while the workspace/title are durable display metadata.
@@ -140,6 +163,21 @@ export interface SessionEventLike {
  */
 export class SessionStateStore {
   private readonly sessions = new Map<string, SessionState>()
+  /**
+   * The widest sandbox mode of any session that was **evicted** from {@link sessions}.
+   *
+   * Why: `MAX_SESSIONS` is an LRU cap that exists so a busy machine cannot grow this
+   * store without bound. But eviction deletes a live session's `sandboxMode`, and a
+   * session that ran one tool at `danger-full-access` before being pushed out would
+   * then vanish from the posture answer — turning a real finding back into a clean
+   * pass. A session whose mode is no longer observable contributes its last known
+   * mode as a floor instead (evidence is kept; only the per-session detail is
+   * dropped).
+   */
+  private sandboxEvictedPeak: SandboxModeName | undefined
+  /** How many evicted sessions had been probed but never answered with a mode. */
+  private sandboxEvictedUnknown = 0
+
   private readonly path: string | undefined
   private readonly logger: SessionIndexLogger | undefined
   private readonly persistDelayMs: number
@@ -248,6 +286,103 @@ export class SessionStateStore {
   count(sessionId: string | undefined, outcome: 'allow' | 'deny' | 'ask' | 'warn'): void {
     const state = this.of(sessionId)
     state.counters[outcome] += 1
+  }
+
+  /**
+   * Record the file-sandbox mode the host resolved for one session.
+   *
+   * Posture cannot ask "is this deployment confined?" from the deployment
+   * default alone: DSH resolves the mode per session (a session's own
+   * `sandbox/mode` event outranks the profile default), so a `read-only` profile
+   * can still be running a `danger-full-access` conversation. Callers pass what
+   * the host's own resolver returned for a specific live session.
+   *
+   * `undefined` is meaningful: it records that this session was **observed** but
+   * its mode could not be read. That must never be folded into "confined" — an
+   * unreadable mode is evidence of nothing, and claiming otherwise is precisely
+   * the failure this method exists to prevent.
+   *
+   * Memory only: this is live host state, not the durable session index.
+   *
+   * @param sessionId - the session the mode applies to.
+   * @param mode - the resolved mode, or `undefined` when the host exposed none.
+   */
+  recordSandboxMode(sessionId: string | undefined, mode: SandboxModeName | undefined): void {
+    const state = this.of(sessionId)
+    // Latest wins: a session may switch modes at runtime, and the mode in force
+    // now is the one posture must report. A later successful resolution clears a
+    // previous "unknown".
+    state.sandboxMode = mode
+    state.sandboxProbed = true
+  }
+
+  /**
+   * The sandbox mode recorded for one session, or `undefined` when this process
+   * has not resolved it yet.
+   *
+   * @param sessionId - the session to read.
+   * @returns the recorded mode, when there is one.
+   */
+  knownSandboxMode(sessionId: string | undefined): SandboxModeName | undefined {
+    if (sessionId === undefined || sessionId.length === 0) return undefined
+    return this.sessions.get(sessionId)?.sandboxMode
+  }
+
+  /**
+   * Whether one session's sandbox mode was already probed (readable or not).
+   *
+   * The resolver folds the session's whole event log, so callers must ask this
+   * before resolving again: an unreadable answer is still an answer, and retrying
+   * it on every event would make a long conversation quadratic.
+   *
+   * @param sessionId - the session to read.
+   * @returns true once a probe was recorded, whatever it found.
+   */
+  hasSandboxProbe(sessionId: string | undefined): boolean {
+    if (sessionId === undefined || sessionId.length === 0) return false
+    return this.sessions.get(sessionId)?.sandboxProbed === true
+  }
+
+  /**
+   * The widest sandbox mode observed across tracked sessions, plus how much is
+   * still unknown.
+   *
+   * Posture is a statement about the whole deployment, so the mode is the weakest
+   * link: if any session runs unrestricted, "the sandbox confines the deployment"
+   * is false. `unknown` counts sessions whose mode was never readable; a caller
+   * that gets `unknown > 0` must not report a clean pass, because the remaining
+   * sessions could be running at any mode. Sessions already evicted by the
+   * {@link MAX_SESSIONS} cap still contribute their widest mode (and their
+   * unreadable count), so an LRU eviction cannot launder a finding.
+   *
+   * @returns the widest known mode (or `undefined`), the unknown-session count,
+   *   and a mode census for the operator-facing detail.
+   */
+  sandboxSummary(): {
+    readonly mode: SandboxModeName | undefined
+    readonly unknown: number
+    readonly census: Readonly<Record<SandboxModeName, number>>
+  } {
+    let widest: SandboxModeName | undefined
+    let unknown = 0
+    const census: Record<SandboxModeName, number> = { 'read-only': 0, 'workspace-write': 0, 'danger-full-access': 0 }
+    for (const state of this.sessions.values()) {
+      if (state.sandboxMode === undefined) {
+        // Only sessions that were actually probed count as unknown; a session the
+        // plugin never saw a sandbox seam for is "not observed", not "unreadable".
+        if (state.sandboxProbed === true) unknown += 1
+        continue
+      }
+      census[state.sandboxMode] += 1
+      widest = widerSandboxMode(widest, state.sandboxMode)
+    }
+    // Sessions evicted by the LRU cap still count: their evidence must not expire
+    // just because the per-session row did (see `sandboxEvictedPeak`).
+    return {
+      mode: widerSandboxMode(widest, this.sandboxEvictedPeak),
+      unknown: unknown + this.sandboxEvictedUnknown,
+      census,
+    }
   }
 
   /**
@@ -461,6 +596,14 @@ export class SessionStateStore {
     while (this.sessions.size > MAX_SESSIONS) {
       const oldest = this.sessions.keys().next()
       if (oldest.done === true) return
+      // Keep the sandbox evidence before the row goes away: an evicted session's
+      // `danger-full-access` must not turn into a clean posture pass. Anything that
+      // was probed but unreadable stays "unreadable" for the same reason.
+      const row = this.sessions.get(oldest.value)
+      if (row !== undefined && row.sandboxProbed === true) {
+        if (row.sandboxMode === undefined) this.sandboxEvictedUnknown += 1
+        else this.sandboxEvictedPeak = widerSandboxMode(this.sandboxEvictedPeak, row.sandboxMode)
+      }
       this.sessions.delete(oldest.value)
     }
   }

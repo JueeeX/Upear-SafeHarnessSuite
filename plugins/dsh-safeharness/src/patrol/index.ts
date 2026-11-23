@@ -25,6 +25,7 @@
  * @module
  */
 import type { LedgerRecord } from '../audit/types.js'
+import type { PostureEnv } from '../engine/types.js'
 import type { Runtime } from '../runtime.js'
 import { deliverNotifications, summarizeDelivery, type NotifyResult } from '../notify/channels.js'
 
@@ -81,7 +82,8 @@ export interface PatrolReport {
 
 /** Injected seams; absent probes degrade to SKIP (or the default implementation). */
 export interface PatrolProbe {
-  sandboxMode?(): 'read-only' | 'workspace-write' | 'danger-full-access' | undefined
+  /** The sandbox as actually in force (deployment default ∪ per-session modes). */
+  sandbox?(): PostureEnv['sandbox']
   approvalPolicy?(): 'ask' | 'never' | undefined
   /** Current posture; the drift check compares it with the last recorded report. */
   posture?(): Promise<{ findings: readonly { code: string; severity: string }[] }>

@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.16.1` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.16.2` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -103,7 +103,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 ### 2.4 审计、姿态、巡检、预算
 
 - **审计**：单行 JSON、哈希链（`prev_sha256`）、按字段名脱敏、按大小轮转；只存哈希与长度，不存原文（详见 §6）。
-- **姿态**（11 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`、`arg_schema_invalid`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。`arg_schema_invalid` 只报 WARN，默认不进 `failOn`（一个可选 schema 的笔误不该拒绝加载，理由见 §4.11）。
+- **姿态**（11 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`、`arg_schema_invalid`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。`arg_schema_invalid` 只报 WARN，默认不进 `failOn`（一个可选 schema 的笔误不该拒绝加载，理由见 §4.11）。**`sandbox_danger_full_access` 判定的是"实际在跑的会话"**：DSH 按会话解析沙箱模式，1.16.2 起这一项取部署默认与所有已观察会话中最宽的那个，读不到模式的会话按 WARN 计（详见 §5.2）。
 - **巡检**（5 项）：`audit_rate`（拒绝速率异常）、`health_probe`（GET 探针）、`config_drift`（与上次姿态报告对比）、`ledger_reconcile`（`tool_asked` vs `approval_decided` 对账）、`notify`（可选，多个通道）。退出码 `0` 干净、`1` 有 FAIL、`2` 巡检自身出错；巡检函数**从不抛异常**。
 - **预算**：`budget.maxTokensPerTurn > 0` 时按轮累计，越限只 warn（一个回合只记一条）。
 
@@ -658,7 +658,7 @@ tools:
 | `pattern` | 整个值必须匹配这条正则。走**规则 loader 同一道门**：Python-only 构造、全局内联标志、无界嵌套量词（`(a+)+`）一律拒绝编译——它和规则文件跑在同一同步路径上，ReDoS 面相同 |
 | `enum` | 值必须是列表之一 |
 | `minBytes` / `maxBytes` | UTF-8 字节数上下界（长度按字节算，不是 UTF-16 单元） |
-| `pathPrefix` | 路径必须在该前缀之下。**任何 `..` 段直接拒**（前缀匹配单独用挡不住 `/workspace/../../etc/passwd`）；`/workspace-evil/x` 不算在 `/workspace` 下；`\` 归一成 `/` 后比较 |
+| `pathPrefix` | 路径必须在该前缀之下。**任何 `..` 段直接拒**（前缀匹配单独用挡不住 `/workspace/../../etc/passwd`）；`/workspace-evil/x` 不算在 `/workspace` 下；**相对路径一律拒**（`workspace/a` 不等于 `/workspace/a`，见下）；`\` 归一成 `/` 后比较 |
 | `urlScheme` | URL 的 scheme 必须在列表里（小写、不带 `:`）。没有 scheme 的值直接拒 |
 | `commandAllowlist` | 命令行第一个 token 必须在列表里。**先查 shell 元字符**（`; & \| \` $ < > ( ) { }` 与换行），命中即拒；`VAR=x cmd` 形式也拒（否则 `LD_PRELOAD=x git …` 能过） |
 
@@ -666,9 +666,25 @@ tools:
 
 - 位置：`tools/pre-execute`，排在 `denyTools` / `denyTags` / 参数字节上限 / SQL 之后，**轨迹链之前**（顺序见 §2.2）。`denyTools` 与 SQL 先赢，操作者看到的是最直接的那个理由。
 - 只约束**实际传了**的参数；schema 不会把参数变成必填（必填是工具自己参数 schema 的事）。
-- 同一工具命中多条 schema 时**第一条生效**，后面的不会覆盖前面。
+- 同一工具命中多条 schema 时**全部生效（AND）**：每条匹配的 schema 都必须通过，加一条声明只会更严、不会更松；拒绝理由取**声明顺序里第一条**违规的，`rule_ids` 就是它。（1.16.0 的文档写的是"第一条生效"，与当时的代码不符——代码一直是 AND，只是先用例只覆盖了"第一条就拒"的情形；1.16.2 把两边统一到 AND。）
 - 值类型不对（声明的文本约束落到对象/数组上）→ 拒，fail-closed。
 - 拒绝码 `unauthorized_tool_argument`（category `tool_argument`）；账本只记 `tool`、`rule_ids=[schema 名]`、`args_sha256`/`args_chars`，**从不记参数原文**。
+
+**`pathPrefix` 的比较规则（1.16.2 收严）**：路径按 **（根, 段）** 比较，不按字符串前缀比较。
+
+| 写法 | 根 | 段 |
+|---|---|---|
+| `/workspace/a` | `/` | `workspace, a` |
+| `workspace/a` | *（相对）* | `workspace, a` |
+| `C:\work\ws\a.md` | `c:` | `work, ws, a.md` |
+| `C:ws\a` | *（驱动器相对）* | `C:ws, a` |
+| `\\srv\share\ws\a` | `//srv/share` | `ws, a` |
+
+由此得到四条：① **前缀必须是绝对路径**（`pathPrefix: workspace` 会在编译期被拒，理由写进 `arg_schema_invalid`）；② **相对路径的值一律拒**——`workspace/a` 和 `/workspace/a` 段一样，但前者解析到进程 cwd，那正是要拦住的东西；③ 根不同即拒，所以 `/work/ws/a` 不会因为段相同而通过 `C:\work\ws`；④ Windows 根（盘符 / UNC）大小写不敏感，POSIX 根大小写敏感。`C:ws`（驱动器相对）不算绝对路径。
+
+**两个已知的"拒得比必要更严"**（都是 fail-closed，不会放行）：① 以 `//` 开头的值优先按 UNC 解析，所以 POSIX 前缀 `/workspace` 下写 `//workspace/a` 会被拒（它不是常见写法，但如果你的工具会产出这种路径，改成单斜杠即可）；② 单前导反斜杠的 Windows 驱动器相对路径（`\work\ws\a`，即"当前盘的根"）也按相对处理而被拒——要写就写完整盘符。
+
+1.16.1 及以前这里有个洞：`pathSegments()` 把开头的空段滤掉了，`/workspace` 被编成 `prefix: "workspace"`，于是 `workspace/a`、`./workspace/a` 都被判为在 `/workspace` 下。
 
 **编译失败怎么办**：某一条 schema 编不过（未知关键字、空的 `enum`、越界正则、`pathPrefix` 自身含 `..`）→ **只丢这一条**，并在姿态里报 `arg_schema_invalid`（WARN，`detail` 只给条数）。它不会拒绝加载——一个可选 schema 的笔误不该让整个插件起不来，但也绝不静默。写 `regex:` 而不是 `pattern:` 这种笔误一定会被报出来，而不是变成一个什么都不检查的 schema。
 
@@ -752,6 +768,32 @@ tools:
 
 **没有第四个档位**，也不新增：需要更细的差异时，逐个字段覆盖（`posture.failOn`、各面 `mode`、`results.blockOn` …），语义不会分叉。面板「设置」页顶部显示当前 `preset`，只读配置卡片显示 `failOn` 的实际取值。
 
+### 5.2 姿态里的沙箱一项怎么算（1.16.2 修正）
+
+DSH 的文件沙箱模式是**按会话**解析的：`ctx.sandboxPolicy.resolve({ session })` 会把该会话自己的 `sandbox/mode` 事件折在部署默认值之上；**不带 session** 的 `resolve()` 只返回部署默认值。这两者不是同一个问题。
+
+所以在 1.16.1 及以前，姿态问的是后者，`detail` 写着 "sandbox mode is workspace-write" —— 而当时的会话实际可能跑在 `danger-full-access`。后果不只是报告不准：`hardened.posture.failOn` 里有 `sandbox_danger_full_access`，而那一条永远报 OK，**这道加载门禁等于不存在**。
+
+1.16.2 起，这一项按下面的规则给结论（`detail` 里只出现模式名与计数，不出现会话 id 或路径）：
+
+| 观察到的情况 | 结论 |
+|---|---|
+| 任一在跑会话（或部署默认）解析为 `danger-full-access` | `WARN`（`hardened` 为 `FAIL`，并触发加载门禁） |
+| 有会话被探测过但**读不到**模式 | `WARN`（`hardened` 为 `FAIL`）——读不到不等于安全 |
+| 有会话读得到，但**部署默认值读不到** | `WARN`（`hardened` 为 `FAIL`）——新会话会落到一个没人读过的默认值上 |
+| 只有 `read-only` / `workspace-write`，且没有读不到的值 | `OK` |
+| 只有部署默认值、**一条会话都没观察到** | `SKIP`——默认值说明不了将要跑在它下面的会话 |
+| profile 没组合 `sandboxPolicy` 服务 | `SKIP` |
+| 服务在、但从没解析出任何模式 | `SKIP` |
+
+**为什么"只有默认值"是 SKIP 而不是 OK**：加载门禁（`posture.onLoad`）**故意跑在任何接缝接线之前**——拒绝加载要意味着"我们的东西一个都没活着"，所以那一刻必然还不可能观察到会话。在那里报 `OK` 就是把 1.16.1 的假 OK 换个位置复现：默认值干净、会话不干净，正是这次要修的形态。因此 hardened 的这道门禁现在拦的是"**部署默认值本身危险**"；"某个会话切宽了"这件事只能在会话出现之后由 `safeharness_posture` / 巡检报出来（那时是 `FAIL`，但插件已经在跑了）。这个时间差是接缝顺序的物理限制，不是可以被配置绕过的选择。
+
+**两个"证据不该过期"的补充**：① 会话表有 `MAX_SESSIONS`（256）的 LRU 上限，被淘汰的会话仍把它**最宽的模式**与"探测过但读不到"的计数计入汇总——否则一个跑过一次 `danger-full-access` 的会话被挤出后，姿态会重新变干净；② 已观察会话都读得到、但会话无关的 `resolve()` 读不到时，多出的那一个 unknown 也计入（新会话的默认值没人读过）。
+
+采集点有三处，都是"这次调用真的会发生"的位置：`agent/pre-step`（每轮第一个接缝）、`tools/pre-execute`（工具绑定沙箱的时刻）、`approval/request`（审批问的就是一次受限调用）；会话自己的 `sandbox/mode` 事件另外直接更新记录。**每个会话只解析一次**（`resolve()` 要折整份事件日志，按事件重复解析会让长对话变成二次方），之后的模式切换靠事件更新。
+
+一个诚实的边界：插件只能为**它见过的会话**作答。进程启动前就存在、且此后没有任何事件的会话不会被计入——那种情况下报告反映的是"观察到的最宽模式"，不是"数学上所有会话的并集"。要把这条也收严，需要宿主暴露"列出所有活动会话 + 其沙箱模式"的接口，当前没有。
+
 ---
 
 ## 6. 审计账本与隐私
@@ -778,7 +820,7 @@ tools:
 | 工具 | 作用 |
 |---|---|
 | `safeharness_status` | 加载状态、preset、规则 hash/条数、账本健康、决策计数、各面 mode、宿主包解析来源、judge 路由、预算上限 |
-| `safeharness_posture` | 立即跑姿态检查（10 个 code，FAIL/WARN/OK/SKIP） |
+| `safeharness_posture` | 立即跑姿态检查（11 个 code，FAIL/WARN/OK/SKIP） |
 | `safeharness_patrol` | 立即跑巡检（5 项），返回 findings、summary 与退出码 0/1/2 |
 | `safeharness_audit_query` | 读账本尾部（已脱敏），按 session/decision/kind 过滤，上限 500 条 |
 | `safeharness_draft_rule` | **唯一会调用模型的工具**：按一句自然语言描述起草一条规则，返回经 loader 校验的、可直接粘贴的 YAML；`applied: false`，永不自动生效 |
@@ -880,7 +922,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               932 个用例（60 个文件，1.16.1）
+├─ tests/               958 个用例（61 个文件，1.16.2）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -899,7 +941,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：60 个文件 / 932 个用例（1.16.1；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
+pnpm test             # vitest：61 个文件 / 958 个用例（1.16.2；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
@@ -944,7 +986,7 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
 
 22. **凭据检测是"形态"不是"真值"（1.15.1）**：结果面/输出面/流内脱敏用的都是形态正则（`sk-`、`Bearer`、私钥头、`api_key: "…"` 赋值、40+ 字符高熵令牌）。它们覆盖了真实踩到的格式（JSON 引号名、`LLM_API_KEY` 这类长名后缀、跨 delta 拆分），但**不能保证**所有密钥格式：自定义厂商的短 token、被拆成多段拼接的字符串、或者写在自然语言里的片段仍可能漏过。流内脱敏另有 256 字符窗口：比这更长的令牌有极小的概率前半段已经透传。真正的边界是**不要在 prompt/工具结果里出现真实密钥**；检测是兜底，不是许可。2026-11-19 的教训：`"LLM_API_KEY": "…"` 因两个正则细节（`\b` 卡在 `_` 与 `A` 之间、键名后的引号）曾整条漏过，输出面当时也完全没有凭据扫描——三处都已修。
 
-23. **参数形状规则是"形状"不是"授权"（1.16.0）**：`tools.argSchemas` 只回答"这个参数长得对不对"，不回答"这个调用该不该被允许"。所以它**不能**替代内核的 `ToolCatalog` + `CapabilityAuthority`：没有工具签名比对、没有能力票据、没有 `unknown_tool` 判定。它也不做类型系统之外的事——`additionalProperties` / `items` / `required` 这类 JSON Schema 结构不在支持范围内，宿主自己的入参校验负责那一层。另外三条边界：① 只约束**实际出现**的参数（漏传由工具自己拒绝）；② 同一工具只认**第一条**匹配的 schema，写多条时后面那条不会叠加；③ `pattern` 走的是规则 loader 的同一道 ReDoS 门，但仍然是**你写的正则**——`(a|aa)+` 这种交替爆炸不在启发式覆盖范围内（同 §11 第 21 条）。
+23. **参数形状规则是"形状"不是"授权"（1.16.0）**：`tools.argSchemas` 只回答"这个参数长得对不对"，不回答"这个调用该不该被允许"。所以它**不能**替代内核的 `ToolCatalog` + `CapabilityAuthority`：没有工具签名比对、没有能力票据、没有 `unknown_tool` 判定。它也不做类型系统之外的事——`additionalProperties` / `items` / `required` 这类 JSON Schema 结构不在支持范围内，宿主自己的入参校验负责那一层。另外三条边界：① 只约束**实际出现**的参数（漏传由工具自己拒绝）；② 同一工具命中多条 schema 时**全部生效（AND）**，拒绝理由取声明顺序里第一条违规的（1.16.2 起文档与代码一致，见 §4.11）；③ `pattern` 走的是规则 loader 的同一道 ReDoS 门，但仍然是**你写的正则**——`(a|aa)+` 这种交替爆炸不在启发式覆盖范围内（同 §11 第 21 条）。
 
 24. **语义 judge 会返回"空回答"，而且短正文比长正文更容易（2026-11-20 只读取证）**：`scope: always` 下真实发生的是 `judge_status: empty / reason: empty_model_reply`——模型调用了、token 也计费了（`usage_output` 中位数 690，最大 11579），但**一个 `text-delta` 都没吐**，于是 `response_chars=0`，按失败矩阵降级成 `output_judge_unavailable`（balanced 记账放行，hardened 拒绝）。按账本现有的 30 条真实判官调用分组看：`ok` 组正文中位数 275 字符、prompt 中位数 510；`empty` 组正文中位数 **90** 字符、prompt 中位数 **325**、耗时中位数 **959 ms**；`timeout` 组正文中位数 3861 字符。**相关性很清楚：正文越短越容易空回**（最小的一条正文只有 18 字符），长正文则是另一种失败（超时）。19 条 `empty` 里有 5 条的 `usage_output` 超过了本插件给的 `maxTokens`（2048），说明这些回答把预算花在了**不产生 `text-delta` 的地方**（推理段或供应商侧的路由行为），而不是"回答被截断"。**行为是对的**：空回答被判为 `unavailable` 而不是 `allow`，balanced 只记账、hardened 会拒。**没做的事**：没有为此改动任何代码——把 `reasoning-delta` 也当作回答会改变判定语义（那正是要审的内容与推理过程混在一起），把空回答当 `allow` 则等于放宽；下一步应当是**换一个对短 prompt 稳定的判官路由**，或者给 `scope` 加一档"只审长回答"，两者都要先有更多样本再定。这条写在这里，是为了让下一个人不要把它当成一次偶发抖动。
 
@@ -957,6 +999,8 @@ node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DS
     2026-11-20 真实验证（本仓库维护过程）：编辑 `src/config.ts`（里面有 `const secret = …` 这类字段声明）时，结果里出现了这条规则的形状，`results.mode: enforce` + `blockOn: ['credential_leak']` 直接 block；**文件已经改好了**，模型拿到的却是拒绝话术。同时 `read` / `grep` 同一批文件也返回拒绝文本，"改插件的插件在拦改插件的人"。1.16.1 修的是**误报那一半**（源码声明 / `${…}` 模板占位 / `[REDACTED:credential]` 自身占位不再算凭据）；"结果面对写工具不可撤销"这一半是宿主管线决定的，**改不了，只能写清楚**。
 
     实践建议：要拦写动作，把工具放进 `tools.askTools` 或给它写 `tools.argSchemas`（都在 pre-execute，真的拦得住）；`results.blockOn` 只用于"内容不该进模型"的场景，别指望它撤销副作用。
+
+26. **沙箱姿态只为"见过的会话"作答（1.16.2）**：`sandbox_danger_full_access` 现在取的是部署默认值与**本进程观察到的所有会话**中最宽的那个（§5.2）。它能抓到"profile 默认是 workspace-write，但这个对话被切到 danger-full-access"，因为采集点是 `agent/pre-step` / `tools/pre-execute` / `approval/request` 三个真实执行点，加上会话自己的 `sandbox/mode` 事件。它抓不到的是：**插件加载之前就已存在、此后没有任何事件**的会话——那种会话没有进过任何一个接缝，插件没有关于它的任何观测。所以这条的准确措辞是"没有观察到宽模式"，而不是"所有会话都受限"。要收严这条，需要宿主提供"列出所有活动会话及其沙箱模式"的接口；当前没有，插件不假装有。另外三点：① 模式读不到的会话按 WARN 计（`hardened` 为 FAIL），**读不到不等于安全**；② **加载那一刻只有默认值可读，这一项是 `SKIP` 而不是 `OK`**——门禁跑在任何接缝接线之前，那是顺序决定的，不是可以配掉的；所以 hardened 的门禁实际拦的是"部署默认值本身危险"，会话切宽只能在会话出现后由 `safeharness_posture` / 巡检报 `FAIL`（此时插件已经在跑）。③ 结构性只读的模型侧展示仍以 `detail` 里的模式名为准，别把 `hardened` 的 FAIL 当成"沙箱已生效"——它是"沙箱确实没生效，所以拒绝加载"。
 
 ---
 

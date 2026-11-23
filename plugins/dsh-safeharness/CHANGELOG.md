@@ -2,6 +2,26 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.16.2 — 2026-11-23
+
+修复：**姿态的沙箱一项给过假 OK**——部署实际跑在 `danger-full-access` 却报 `sandbox mode is workspace-write`，连带 `hardened` 的 `sandbox_danger_full_access` 加载门禁等于不存在。
+
+- **症状**：2026-11-23 本机取证，会话的文件策略是 `danger-full-access`（会话策略明示，且工作区外的写入确实成功），但 `safeharness_posture` 第 1 项报 `OK / "sandbox mode is workspace-write"`。`hardened.posture.failOn` 里含 `sandbox_danger_full_access`，判定只认 FAIL，所以这道门从来没可能拦住任何部署。
+- **根因**：DSH 的文件沙箱模式是**按会话**解析的。`sandboxPolicy.resolve({ session })` 把该会话自己的 `sandbox/mode` 事件折在部署默认值之上，**不带 session** 的 `resolve()` 只返回部署默认值。插件在 1.16.1 及以前问的是后者（还多传了一个 `{}`），拿到的永远是 profile 默认值，与任何真实会话无关。
+- **修法**（不新增配置项，不改判定顺序）：
+  1. 新增 `src/hooks/sandbox.ts`：`resolveSandboxMode(ctx, session)` 带会话向宿主求解；`observeSessionSandbox` 在 `agent/pre-step` / `tools/pre-execute` / `approval/request` 首次见到会话时解析并记录；`recordSandboxSwitch` 直接应用 `sandbox/mode` 会话事件（事件是宿主侧的权威，enforcement 也是折它）。
+  2. `PostureEnv.sandboxMode` 换成 `PostureEnv.sandbox`（`SandboxObservation`）：部署默认 ∪ 所有已观察会话里**最宽**的那个，外加逐模式计数与"探测过但读不到"的会话数。安全断言是整个部署的，答案取最弱的一环，不取默认值。
+  3. 判定：最宽为 `danger-full-access` → `WARN`（hardened `FAIL`）；有会话读不到模式 → 同样 `WARN`/`FAIL`（**读不到不等于安全**）；**一条会话都没观察到、只有部署默认值 → `SKIP`**（默认值说明不了将要跑在它下面的会话，这条尤其重要：加载门禁在任何接缝接线之前跑，门禁那一刻必然只有默认值）；有会话且都读得到、都不是 `danger-full-access` 才 `OK`；服务没组合 → `SKIP`。
+  4. 两个"证据不该过期"的补充：**LRU 淘汰不还债**——`MAX_SESSIONS`（256）淘汰掉的会话，其最宽模式与"探测过但读不到"的计数仍作为下限计入（否则一个跑过一次 `danger-full-access` 的会话被挤出后，姿态会重新变干净）；**读不到的部署默认值也算未知**——已观察会话都读得到、但会话无关的 `resolve()` 读不到时，新增的会话会落到一个没人读过的默认值上，因此计入 `unknownSessions`。
+  5. `detail` 只出现模式名、会话计数与逐模式计数，**不出现会话 id、不出现路径**（沿用零回显纪律）。
+- **性能**：每个会话只解析一次（`resolve()` 要折整份事件日志，按事件重复解析会让长对话变成二次方）；未探测过的会话反复出现也只探测一次，失败结果同样记下。
+- **测试**：新增 `tests/sandbox-observe.test.ts` 17 条（不带 session 调用时必须带 session；缺失/抛异常服务 → unknown 而非 confined；跨会话取最宽；探测失败与会话未观察分开计数；每会话只解析一次；事件更新模式；未观察会话时门禁报 SKIP 而非 OK；LRU 淘汰后最宽模式与未知计数不丢；读不到的默认值算未知；账本里只有 code、不含路径）。`tests/posture.test.ts` 26 条（新增"危险会话压过干净默认值"、"读不到不等于干净"、"只有默认值时是 SKIP"三条回归）。`tests/failure-matrix.test.ts` 的 `healthyEnv()` 同步到新的 `PostureEnv.sandbox` 形态（此前它还在写已删的 `sandboxMode` 字段，靠 TS 只检查 `src/` 才没被拦住；见 §13 的新坑）。
+- **同批修掉的两处 `tools.argSchemas` 欠账**：
+  1. **`pathPrefix` 对相对路径 fail-open**。`pathSegments()` 把开头的空段滤掉了，`pathPrefix: '/workspace'` 被编成 `prefix: "workspace"`，于是 `workspace/a`、`./workspace/a` 都被判为"在 `/workspace` 下"——而相对路径解析到进程 cwd，正是要拦住的东西。现在按**（根, 段）**比较：前缀必须是绝对路径（相对前缀在编译期被拒）；值里的相对路径一律拒；`/workspace-evil/x` 仍拒；`C:\work\ws` 与 `/work/ws` 互不相容（根不同）；`C:ws`（驱动器相对）不算绝对；Windows 根大小写不敏感、POSIX 根敏感；UNC 按 `//server/share` 作根，`\\srv\share\ws` 只接受同 share 下的路径。`tests/arg-schema.test.ts` 新增 5 条钉住两侧。
+  2. **"同一工具只认第一条匹配的 schema"文档与代码相反**。代码一直是 AND（第一条通过时后面继续判），文档与注释写的是"第一条生效"。加为 AND（更严、不会更松），改文档与注释，并补一条"第一条通过、第二条拒绝"的用例——这是原用例集唯一的盲区。
+- **测试口径**：61 文件 / **958** 用例（1.16.1 是 60 / 932）。
+- **文档**：MANUAL §5.2 新增"姿态里的沙箱一项怎么算"，§2.4 与 §5 的措辞同步；§4.11 补 `pathPrefix` 的（根, 段）比较表与四条推论、改写顺序语义；§11 第 26 条写清"只能为见过的会话作答"这条边界。
+
 ## 1.16.1 — 2026-11-20
 
 精度修复：**`credential_assignment` 不再把插件自己的源码当成密钥**。没有新增检测能力，只把一条会误伤的规则收窄，并写明一条此前没写清的边界。

@@ -28,6 +28,7 @@ import { createRuntime, type LoggerLike, type Runtime } from './runtime.js'
 import { SessionStateStore } from './state.js'
 import { installInputHook } from './hooks/input.js'
 import { sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf } from './hooks/context.js'
+import { observeSandbox, observeSessionSandbox, recordSandboxSwitch } from './hooks/sandbox.js'
 import { installToolHooks } from './hooks/tools.js'
 import { installLlmHook, createJudgeFor, createDrafterFor } from './hooks/llm.js'
 import { installApprovalHook } from './hooks/approval.js'
@@ -296,18 +297,6 @@ function llmServiceOf(ctx: Context): { stream?: (options: unknown) => AsyncItera
   return service
 }
 
-/** Current sandbox mode from the policy service, when composed. */
-function detectSandboxMode(ctx: Context): 'read-only' | 'workspace-write' | 'danger-full-access' | undefined {  const service = ctx.get('sandboxPolicy') as { resolve?: (request?: object) => { mode?: unknown } } | undefined
-  if (service === undefined || typeof service.resolve !== 'function') return undefined
-  try {
-    const mode = service.resolve({}).mode
-    if (mode === 'read-only' || mode === 'workspace-write' || mode === 'danger-full-access') return mode
-  } catch {
-    /* not composed in a usable way — reported as SKIP by the check */
-  }
-  return undefined
-}
-
 /**
  * Wire the plugin.
  *
@@ -419,7 +408,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   const surface = probeHostSurface()
   logger.info(`safeharness: host surface ${describeSurface(surface)}`)
   const probe: PostureProbe = {
-    sandboxMode: () => detectSandboxMode(ctx),
+    sandbox: () => observeSandbox(ctx, runtime),
     hmrEnabled: () => detectHmr(ctx),
     versionMismatch: () => detectVersionMismatch(),
     // Approval policy has no session-free reader; the check reports SKIP until a
@@ -495,11 +484,14 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
       // Titles are produced by the host's title provider as events arrive, not
       // before the first pre-step. Capturing on every event means the metadata
       // index learns a rename/suggestion without waiting for the next turn.
-      runtime.state.describe(sessionIdOf({ session }), {
+      const sessionId = sessionIdOf({ session })
+      runtime.state.describe(sessionId, {
         workspace: sessionWorkspaceOf({ session }),
         createdAt: sessionCreatedAtOf({ session }),
         title: sessionTitleOf(ctx, { session }),
       })
+      observeSessionSandbox(runtime, ctx, session)
+      recordSandboxSwitch(runtime, session, event as { type?: unknown; data?: unknown })
     } catch (error) {
       runtime.internalError('session/event', error)
     }
@@ -527,7 +519,7 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
   // ledger for the rate/reconciliation checks. Its own HTTP/notification calls are
   // the only network activity the plugin ever performs.
   const patrolProbe: PatrolProbe = {
-    sandboxMode: probe.sandboxMode,
+    sandbox: probe.sandbox,
     approvalPolicy: probe.approvalPolicy,
     posture,
   }

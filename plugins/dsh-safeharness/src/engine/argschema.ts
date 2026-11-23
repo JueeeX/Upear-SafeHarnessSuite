@@ -104,7 +104,7 @@ type CompiledConstraint =
   | { readonly kind: 'enum'; readonly values: readonly string[] }
   | { readonly kind: 'minBytes'; readonly min: number }
   | { readonly kind: 'maxBytes'; readonly max: number }
-  | { readonly kind: 'pathPrefix'; readonly prefix: string }
+  | { readonly kind: 'pathPrefix'; readonly prefix: ParsedPath }
   | { readonly kind: 'urlScheme'; readonly schemes: readonly string[] }
   | { readonly kind: 'commandAllowlist'; readonly commands: readonly string[] }
 
@@ -206,17 +206,108 @@ function readStringList(
 }
 
 /**
- * Normalize one path for prefix containment: unify separators and collapse the
- * `.` segments, but **keep** `..` so the caller can refuse it.
+ * One path split into the part that identifies its filesystem root and the
+ * segments below it.
  *
- * @param value - raw path text.
- * @returns segments, with empty and `.` entries removed.
+ * Why this exists: comparing paths as text is wrong in two directions at once.
+ * `/workspace-evil/x` starts with `/workspace` but is a sibling, and
+ * `workspace/a` (relative) contains the same segments as `/workspace/a` while
+ * resolving to wherever the process happens to be. So containment is decided on
+ * (root, segments), never on a string prefix:
+ *
+ * | input | root | segments |
+ * |---|---|---|
+ * | `/workspace/a` | `/` | `workspace, a` |
+ * | `workspace/a` | `` (relative) | `workspace, a` |
+ * | `C:\work\ws\a.md` | `c:` | `work, ws, a.md` |
+ * | `C:ws\a` (drive-relative) | `` | `C:ws, a` |
+ * | `\\srv\share\ws\a` | `//srv/share` | `ws, a` |
+ *
+ * A relative path can never be contained by an absolute prefix, which is the
+ * whole point: `workspace/a` used to pass a `/workspace` prefix check.
  */
-function pathSegments(value: string): string[] {
-  return value
-    .replace(/\\/g, '/')
-    .split('/')
-    .filter((segment) => segment.length > 0 && segment !== '.')
+interface ParsedPath {
+  /**
+   * `'/'` (POSIX absolute), `'c:'` (Windows drive-absolute, lower-cased),
+   * `'//server/share'` (UNC), or `''` for anything relative.
+   */
+  readonly root: string
+  /** Path segments with empty and `.` entries removed; `..` is **kept** so callers can refuse it. */
+  readonly segments: readonly string[]
+}
+
+/** Windows-rooted paths compare case-insensitively; POSIX ones do not. */
+function rootIsCaseInsensitive(root: string): boolean {
+  return root.startsWith('//') || /^[a-z]:$/u.test(root)
+}
+
+/**
+ * Split a path into root + segments.
+ *
+ * @param value - the raw path as the model passed it.
+ * @returns the parsed path; a relative or drive-relative input has `root: ''`.
+ */
+function parsePath(value: string): ParsedPath {
+  const unified = value.replace(/\\/g, '/')
+
+  // UNC: `//server/share/...`. Two leading slashes are never "an absolute POSIX
+  // path with an empty segment": on Windows they name a share, and treating them
+  // as `/` would let a share path satisfy a `/`-rooted prefix.
+  if (unified.startsWith('//')) {
+    const unc = /^\/\/([^/]+)\/([^/]+)(\/.*)?$/u.exec(unified)
+    if (unc !== null) {
+      const server = (unc[1] ?? '').toLowerCase()
+      const share = (unc[2] ?? '').toLowerCase()
+      return { root: `//${server}/${share}`, segments: splitSegments(unc[3] ?? '') }
+    }
+    // `//server` or `//server/` is an incomplete share path. It is not a POSIX
+    // absolute path either (those have exactly one leading slash), so it resolves
+    // to no root at all and is refused by the caller rather than guessed at.
+    return { root: '', segments: splitSegments(unified) }
+  }
+
+  // Drive-absolute: `C:/...`. `C:ws` (no slash after the colon) is
+  // drive-*relative* on Windows — it resolves against that drive's cwd — so it is
+  // deliberately not treated as rooted here.
+  const drive = /^([A-Za-z]):\/(.*)$/u.exec(unified)
+  if (drive !== null) {
+    return { root: `${(drive[1] ?? '').toLowerCase()}:`, segments: splitSegments(drive[2] ?? '') }
+  }
+
+  if (unified.startsWith('/')) return { root: '/', segments: splitSegments(unified) }
+  return { root: '', segments: splitSegments(unified) }
+}
+
+/** Split on `/`, dropping empty and `.` segments but keeping `..`. */
+function splitSegments(path: string): string[] {
+  return path.split('/').filter((segment) => segment.length > 0 && segment !== '.')
+}
+
+/**
+ * Whether one path is inside a parsed prefix.
+ *
+ * Both the root and every prefix segment must match, and **any** `..` refuses
+ * outright: `/workspace/../../etc/passwd` has the prefix's segments at the front
+ * but resolves outside it.
+ *
+ * @param value - the path the call passed.
+ * @param prefix - the compiled prefix (already validated at compile time).
+ * @returns true only for a genuinely contained path.
+ */
+function pathIsUnderPrefix(value: string, prefix: ParsedPath): boolean {
+  const parsed = parsePath(value)
+  if (parsed.segments.includes('..')) return false
+  const foldCase = rootIsCaseInsensitive(prefix.root)
+  const leftRoot = foldCase ? parsed.root.toLowerCase() : parsed.root
+  const rightRoot = foldCase ? prefix.root.toLowerCase() : prefix.root
+  if (leftRoot !== rightRoot) return false
+  if (parsed.segments.length < prefix.segments.length) return false
+  for (let index = 0; index < prefix.segments.length; index += 1) {
+    const actual = parsed.segments[index] ?? ''
+    const expected = prefix.segments[index] ?? ''
+    if (foldCase ? actual.toLowerCase() !== expected.toLowerCase() : actual !== expected) return false
+  }
+  return true
 }
 
 /**
@@ -296,15 +387,22 @@ function compileArgs(
         problems.push(`${argLabel}.pathPrefix must be a non-empty string`)
         return undefined
       }
-      if (pathSegments(prefix).includes('..')) {
+      const parsed = parsePath(prefix)
+      if (parsed.segments.includes('..')) {
         problems.push(`${argLabel}.pathPrefix must not itself contain '..'`)
         return undefined
       }
-      if (pathSegments(prefix).length === 0) {
+      if (parsed.root === '') {
+        // A relative prefix can never contain anything safely: what it is relative
+        // to is the process cwd, not a boundary the operator declared.
+        problems.push(`${argLabel}.pathPrefix must be an absolute path (a relative prefix cannot bound anything)`)
+        return undefined
+      }
+      if (parsed.segments.length === 0) {
         problems.push(`${argLabel}.pathPrefix must name a directory, not the filesystem root`)
         return undefined
       }
-      constraints.push({ kind: 'pathPrefix', prefix: pathSegments(prefix).join('/') })
+      constraints.push({ kind: 'pathPrefix', prefix: parsed })
     }
 
     if (bounds['urlScheme'] !== undefined) {
@@ -468,14 +566,10 @@ function checkConstraint(constraint: CompiledConstraint, value: unknown): string
     case 'enum':
       return constraint.values.includes(value) ? undefined : 'enum'
     case 'pathPrefix': {
-      const segments = pathSegments(value)
-      // Any `..` is refused outright: prefix matching alone cannot tell
-      // `/workspace/../../etc/passwd` from a path inside the workspace.
-      if (segments.includes('..')) return 'pathPrefix'
-      const normalized = segments.join('/')
-      const prefix = constraint.prefix
-      if (normalized === prefix || normalized.startsWith(`${prefix}/`)) return undefined
-      return 'pathPrefix'
+      // Root AND segments must match: a relative path has no root and can never be
+      // contained by an absolute prefix, and a sibling directory that merely shares
+      // the leading text (`/workspace-evil`) fails on the segment comparison.
+      return pathIsUnderPrefix(value, constraint.prefix) ? undefined : 'pathPrefix'
     }
     case 'urlScheme': {
       const match = URL_SCHEME.exec(value)

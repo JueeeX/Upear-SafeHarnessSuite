@@ -22,6 +22,7 @@ import { contentDigest } from '../util/hash.js'
 import { ReasonCode } from '../engine/types.js'
 import { matchNamePattern } from '../engine/tool.js'
 import { agentIdOf, argsByteLength, callIdOf, sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf, toolResultViewOf, toolViewOf } from './context.js'
+import { observeSessionSandbox } from './sandbox.js'
 
 /** Maximum number of in-flight call start times we keep (defensive bound). */
 const MAX_INFLIGHT = 1024
@@ -68,6 +69,14 @@ export function installToolHooks(ctx: Context, runtime: Runtime): void {
     markStart(exec)
     const sessionId = sessionIdOf(exec.agent)
     const agentId = agentIdOf(exec.agent)
+    // A tool call is the moment the sandbox mode actually binds to an execution,
+    // so record the session's mode here too: posture must answer for the sessions
+    // that run tools, not only for the ones that reach `agent/pre-step`.
+    try {
+      observeSessionSandbox(runtime, ctx, exec.agent?.session)
+    } catch (error) {
+      runtime.internalError('tools:sandbox', error)
+    }
     runtime.state.describe(sessionId, {
       workspace: sessionWorkspaceOf(exec.agent),
       createdAt: sessionCreatedAtOf(exec.agent),

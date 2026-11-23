@@ -239,6 +239,62 @@ describe('tools.argSchemas: path bound', () => {
     expect(evaluateToolCall(RULESET, cfg, view('fs_write', { path: '/workspace-evil/x' }), SESSION).kind).toBe('deny')
   })
 
+  it('refuses a relative path even when its segments match the prefix', () => {
+    // The 1.16.1 hole: `pathSegments()` dropped the leading empty segment, so
+    // `workspace/a` compiled and compared equal to `/workspace/a` — but a relative
+    // path resolves against the process cwd, which is exactly what the prefix was
+    // supposed to bound. Containment is decided on (root, segments) now.
+    const cfg = cfgWith({ name: 'workspace_only', tool: 'fs_write*', args: { path: { pathPrefix: '/workspace' } } })
+    for (const path of [
+      'workspace/a.md',
+      './workspace/a.md',
+      'workspace/../workspace/a.md',
+      'WORKSPACE/a.md',
+    ]) {
+      const decision = evaluateToolCall(RULESET, cfg, view('fs_write', { path }), SESSION)
+      expect(decision.kind, path).toBe('deny')
+    }
+    // The absolute form still passes, so the fix narrows without breaking use.
+    expect(evaluateToolCall(RULESET, cfg, view('fs_write', { path: '/workspace/a.md' }), SESSION).kind).toBe('allow')
+  })
+
+  it('refuses a prefix that is not an absolute path', () => {
+    // A relative prefix cannot bound anything: what it is relative to is the cwd.
+    for (const prefix of ['workspace', '.', 'C:', '\\\\srv']) {
+      const { entries, problems } = compileArgSchemas([
+        { name: 'bad', tool: 'fs_*', args: { path: { pathPrefix: prefix } } },
+      ] as never)
+      expect(entries, prefix).toEqual([])
+      expect(problems.join(' '), prefix).toContain('absolute')
+    }
+  })
+
+  it('keeps POSIX, Windows-drive and UNC roots apart', () => {
+    // A Windows path never satisfies a POSIX prefix, and vice versa: comparing
+    // segment lists alone would have made `/work/ws/a` pass `C:\work\ws`.
+    const posix = cfgWith({ name: 'posix', tool: 'fs_*', args: { path: { pathPrefix: '/work/ws' } } })
+    expect(evaluateToolCall(RULESET, posix, view('fs_write', { path: '/work/ws/a' }), SESSION).kind).toBe('allow')
+    expect(evaluateToolCall(RULESET, posix, view('fs_write', { path: 'C:/work/ws/a' }), SESSION).kind).toBe('deny')
+
+    const drive = cfgWith({ name: 'drive', tool: 'fs_*', args: { path: { pathPrefix: 'C:\\work\\ws' } } })
+    expect(evaluateToolCall(RULESET, drive, view('fs_write', { path: '/work/ws/a' }), SESSION).kind).toBe('deny')
+    // Drive-relative (`C:ws`) is not drive-absolute: it resolves against that
+    // drive's own cwd, so it must not pass a `C:/` prefix.
+    expect(evaluateToolCall(RULESET, drive, view('fs_write', { path: 'C:ws/a' }), SESSION).kind).toBe('deny')
+
+    const unc = cfgWith({ name: 'unc', tool: 'fs_*', args: { path: { pathPrefix: '\\\\srv\\share\\ws' } } })
+    expect(evaluateToolCall(RULESET, unc, view('fs_write', { path: '\\\\srv\\share\\ws\\a' }), SESSION).kind).toBe('allow')
+    expect(evaluateToolCall(RULESET, unc, view('fs_write', { path: '\\\\srv\\other\\ws\\a' }), SESSION).kind).toBe('deny')
+    expect(evaluateToolCall(RULESET, unc, view('fs_write', { path: '/srv/share/ws/a' }), SESSION).kind).toBe('deny')
+  })
+
+  it('compares Windows roots case-insensitively but POSIX roots exactly', () => {
+    const drive = cfgWith({ name: 'drive', tool: 'fs_*', args: { path: { pathPrefix: 'C:\\work\\ws' } } })
+    expect(evaluateToolCall(RULESET, drive, view('fs_write', { path: 'c:/WORK/WS/a.md' }), SESSION).kind).toBe('allow')
+    const posix = cfgWith({ name: 'posix', tool: 'fs_*', args: { path: { pathPrefix: '/Workspace' } } })
+    expect(evaluateToolCall(RULESET, posix, view('fs_write', { path: '/workspace/a' }), SESSION).kind).toBe('deny')
+  })
+
   it('normalizes Windows separators before comparing', () => {
     const cfg = cfgWith({
       name: 'workspace_only',
@@ -362,15 +418,31 @@ describe('tools.argSchemas: precedence and shape', () => {
     expect(decision.reasonCode).toBe(ReasonCode.ToolArgument)
   })
 
-  it('uses the first matching schema per tool', () => {
+  it('applies every matching schema, not just the first', () => {
+    // 1.16.2: declarations are conjunctive. The first one here PASSES and the
+    // second refuses, which is the only case that distinguishes "AND" from the
+    // previously documented "first match wins" — that documentation was wrong
+    // about the code, and this test now pins the behaviour the docs describe.
     const cfg = toolsConfig({
       argSchemas: [
-        { name: 'first', tool: 'fs_write*', args: { path: { maxBytes: 4 } } },
-        { name: 'second', tool: 'fs_*', args: { path: { maxBytes: 1000 } } },
+        { name: 'first', tool: 'fs_write*', args: { path: { maxBytes: 1000 } } },
+        { name: 'second', tool: 'fs_*', args: { path: { maxBytes: 4 } } },
       ],
     } as never)
     const decision = evaluateToolCall(RULESET, cfg, view('fs_write', { path: '/workspace/a.md' }), SESSION)
-    expect(decision.ruleIds).toEqual(['first'])
+    expect(decision.kind).toBe('deny')
+    expect(decision.ruleIds).toEqual(['second'])
+  })
+
+  it('reports the first violation in declaration order', () => {
+    const cfg = toolsConfig({
+      argSchemas: [
+        { name: 'alpha', tool: 'fs_*', args: { path: { maxBytes: 4 } } },
+        { name: 'beta', tool: 'fs_*', args: { path: { maxBytes: 5 } } },
+      ],
+    } as never)
+    const decision = evaluateToolCall(RULESET, cfg, view('fs_write', { path: '/workspace/a.md' }), SESSION)
+    expect(decision.ruleIds).toEqual(['alpha'])
   })
 
   it('matches the tool by glob, not by exact name', () => {
