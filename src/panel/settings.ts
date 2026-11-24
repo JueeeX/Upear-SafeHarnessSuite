@@ -18,6 +18,7 @@ import type { Judge } from '../judge/client.js'
 import { createJudgeFor } from '../hooks/llm.js'
 import { JUDGE_PROBE_TEXT } from '../surface/commands.js'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { isVolatileConfigPath, mergeConfigLayers } from '../config.js'
 import { dirname } from 'node:path'
 import { resolveProviderIndexPath } from '../audit/paths.js'
 import { PII_CLASS_NAMES } from '../engine/pii.js'
@@ -136,6 +137,15 @@ interface SettingsServiceLike {
 interface ConfigEditorLike {
   readonly documentPath?: string
   entries?: () => Array<{ options?: { id?: unknown; name?: unknown }; fiber?: unknown }>
+  /**
+   * Persist a complete raw config and apply it through the normal Loader path
+   * (1.17.2). This is the documented writer for *ordinary* config fields; the
+   * `settings` service accepts live (`.volatile()`) fields only.
+   */
+  edit?: (
+    entry: unknown,
+    change: (current: Record<string, unknown>, inherited: Record<string, unknown>) => Record<string, unknown>,
+  ) => Promise<void>
 }
 
 /** Structural slice of the host `llm` service. */
@@ -505,6 +515,65 @@ function revisionOf(settings: SettingsServiceLike, ns: string): number | undefin
     // A host that cannot describe its entries simply has no revision to offer.
   }
   return undefined
+}
+
+/** True for a plain non-array object. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Write config fields the host will not accept through its live-only `settings` seam.
+ *
+ * Why a second path exists at all: the host's `settings` service is deliberately
+ * restricted to `.volatile()` fields (it threw `Config field "tools.argSchemas" is
+ * not volatile` for everything else, measured 2026-11-24). Its own documentation
+ * names the writer for the rest — `ctx.configEditor.edit()`, "callers that edit
+ * complete configuration can use `configEditor.edit()`; ordinary fields retain
+ * Loader's normal lifecycle". That method validates the next config through the
+ * plugin's own schema (`fiber.resolveConfig`), persists atomically, reconciles
+ * through the Loader, and rolls the document back if the reload fails. So this is
+ * the supported seam, not a workaround around one.
+ *
+ * What this function must NOT do is restate the whole config: `edit` merges the
+ * returned value over the entry's current raw config. We hand back only `update`,
+ * so keys the operator never touched stay exactly as they are — the difference
+ * between this and `replace()`, which would pin every inherited value into the
+ * profile patch.
+ *
+ * @param settings - the settings service (used for the revision CAS only).
+ * @param editor - the `configEditor` service; must expose `edit`.
+ * @param ns - the profile entry id this plugin owns.
+ * @param update - the fields to write, nested by config section.
+ * @param expected - revision the caller read; refused when the entry moved past it.
+ */
+async function writeOrdinaryFields(
+  settings: SettingsServiceLike,
+  editor: ConfigEditorLike | undefined,
+  ns: string,
+  update: Record<string, unknown>,
+  expected: number | undefined,
+): Promise<void> {
+  if (editor === undefined || typeof editor.edit !== 'function' || typeof editor.entries !== 'function') {
+    throw new PanelSettingsError(
+      'settings_readonly',
+      'this profile composes no configEditor service, so ordinary configuration fields cannot be written from the panel',
+    )
+  }
+  const entry = editor.entries().find(row => row.options?.id === ns)
+  if (entry === undefined) {
+    throw new PanelSettingsError('settings_readonly', 'the profile entry for this plugin is not addressable by the config editor')
+  }
+  // The revision guard exists on this path too: `edit` has no CAS of its own, and a
+  // stale form overwriting a concurrent ordinary-field change is the same bug the
+  // live path already refuses.
+  if (expected !== undefined) {
+    const current = revisionOf(settings, ns)
+    if (current !== undefined && current !== expected) {
+      throw new PanelSettingsError('settings_conflict', 'the profile configuration changed since it was read; reload and retry')
+    }
+  }
+  await editor.edit(entry, (current) => mergeConfigLayers(current, update))
 }
 
 /** Build the judge/probe surface the panel route calls. */
@@ -1045,12 +1114,56 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     const expected = typeof patch.expectedRevision === 'number' && Number.isSafeInteger(patch.expectedRevision)
       ? patch.expectedRevision
       : revisionOf(settings, ns)
+
+    // 1.17.2: split by the host's own rule.
+    //
+    // The host's `settings` service accepts `.volatile()` paths only — its docs say
+    // so ("forms restricted to live fields"), and it threw exactly
+    // `Config field "tools.argSchemas" is not volatile` for every other save. The
+    // documented writer for ordinary fields is `configEditor.edit()`, which persists
+    // the complete raw config and applies it through the normal Loader path. Until
+    // this release the panel called `settings.update` for everything, so every
+    // non-volatile field was refused outright.
+    //
+    // One save goes down exactly one path. Doing both would mean two writes and a
+    // revision race against our own reload, and the ordinary path already reloads
+    // the entry — which is what the panel's own copy promises for those fields.
+    //
+    // A leaf is volatile when its own path carries `.volatile()`. Arrays count as
+    // leaves (`results.piiClasses` is volatile and is an array), and so do scalars.
+    const leavesAreVolatile = Object.entries(update).every(([section, value]) => {
+      if (!isPlainRecord(value)) return isVolatileConfigPath([section])
+      return Object.entries(value).every(([key, child]) =>
+        isPlainRecord(child)
+          ? Object.keys(child).every(inner => isVolatileConfigPath([section, key, inner]))
+          : isVolatileConfigPath([section, key]))
+    })
     try {
-      // Omitted (not `undefined`) when the host exposes no revision, so a stub or an
-      // older host sees exactly the two-argument call it always supported.
-      if (expected === undefined) await settings.update(ns, update)
-      else await settings.update(ns, update, expected)
+      if (leavesAreVolatile) {
+        // Omitted (not `undefined`) when the host exposes no revision, so a stub or an
+        // older host sees exactly the two-argument call it always supported.
+        if (expected === undefined) await settings.update(ns, update)
+        else await settings.update(ns, update, expected)
+      } else {
+        await writeOrdinaryFields(settings, editor, ns, update, expected)
+      }
     } catch (error) {
+      // A typed refusal raised by this file (`settings_readonly` for a profile with no
+      // config editor, `settings_conflict` from the ordinary path's revision guard) is
+      // already the precise answer: re-wrapping it as "the host rejected the write"
+      // would recreate the very defect 1.17.1 fixed one layer down.
+      if (error instanceof PanelSettingsError) {
+        runtime.audit('invariant_probe', {
+          decision: 'warn',
+          reason_code: 'panel_settings',
+          labels: {
+            state: 'settings_write_refused',
+            fields: Object.keys(update).sort().join(',').slice(0, 120),
+            error_code: error.code,
+          },
+        })
+        throw error
+      }
       const diagnostic = describeWriteFailure(error)
       logger.warn(`safeharness: settings write failed (${describeFailure(error)})`)
       // The ledger keeps its own discipline: identifiers only, never a message.

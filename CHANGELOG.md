@@ -2,6 +2,36 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.17.2 — 2026-11-24
+
+修 1.17.1 揭示的那个问题：**面板对非 volatile 字段一直用错了写入通道**。
+
+- **根因（1.17.1 的新诊断直接给出）**：`Config field "tools.argSchemas" is not volatile`。
+  宿主 `settings` 服务只接受带 `.volatile()` 的字段——这是它的契约（"forms restricted to
+  live fields"），不是 bug。而 ordinary 字段的官方写入通道是 `configEditor.edit()`，宿主自己的
+  文档原文就写着：「Callers that edit complete configuration can use `ctx.configEditor.edit()`;
+  ordinary fields retain Loader's normal lifecycle.」面板却把所有保存都发给了 `settings.update`，
+  于是非 volatile 字段一律被拒。**这不是修不好的 bug，是接错了线。**
+- **改法**：保存时按宿主自己的规则分流。`isVolatileConfigPath()` 读的是**本包自己的 Config
+  schema** 的 `meta.volatile`（与宿主 `isVolatilePath` 同构），所以两侧不可能对「哪些字段是
+  实时字段」有分歧。全 volatile 的保存仍走 `settings.update`（热更、不重载）；含任何非 volatile
+  字段的保存整次走 `configEditor.edit`（持久化 + 走正常 Loader 生命周期）。
+- **一次保存只走一条通道**。两条都走会产生两次写入和与自己重载的 revision 竞争；而且 ordinary
+  通道本来就重载 entry——这正是面板对这些字段本来的承诺（文案写着「保存会重载插件」）。
+- **不重述整份配置**：`edit` 会把它收到的值合并进 entry 的现有原始配置，所以只交回 `update`。
+  这正是它与 `replace()` 的区别——后者会把每个继承值都钉进 profile patch。
+- **revision 守卫保留**：`configEditor.edit` 自己没有 CAS，所以这条路径显式比对 revision，
+  不匹配就报 `settings_conflict`（与 live 路径同一个错误码，面板文案一致）。
+- **不吞掉精确错误**：`settings_readonly`（profile 没compose `configEditor`）与
+  `settings_conflict` 由本文件抛出，不再被改写成"宿主拒绝写入"。1.17.1 修的就是这层掩盖。
+- **测试**：新增 7 条——volatile 判定的正反例与 fail-closed、`mergeConfigLayers` 不修改入参且数组
+  整体替换、无 `configEditor` 时报 `settings_readonly`、ordinary 路径的 revision 冲突、
+  volatile-only 保存不碰 editor。62 文件 / **980** 用例。
+
+> **实测待办**：这条修复本身还没在真机上跑过。重启后应能用面板保存 `argSchemas` / deny 列表 /
+  `rules.dir`；账本会多出 `invariant_probe` 的 `settings_saved`，以及一条 `rules_reloaded`
+> （ordinary 路径会重载 entry）。
+
 ## 1.17.1 — 2026-11-24
 
 修 1.17.0 的验收事故：**面板里每一个「非 volatile」字段都存不进去，而报错只说了一句「宿主拒绝了配置写入」。**
