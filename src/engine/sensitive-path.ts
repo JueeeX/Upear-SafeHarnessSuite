@@ -26,7 +26,15 @@ export const SENSITIVE_PATH_CLASSES = [
   'dotenv',
   /** `id_rsa`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`. */
   'private_key',
-  /** Anything under an `.ssh` directory. */
+  /**
+   * Private key material inside a `.ssh` directory — the files that are secrets.
+   *
+   * Deliberately NOT "everything under `.ssh`": `config`, `known_hosts`,
+   * `authorized_keys` and `*.pub` are public or client settings, and an agent
+   * debugging an ssh/git failure reads them routinely. Classifying the whole
+   * directory would deny that work the moment an operator flips to `enforce` —
+   * measured 2026-11-24: five of seven `.ssh` files were harmless.
+   */
   'ssh_material',
   /** `.aws/credentials`, `.config/gcloud/`, `.kube/config`, `.docker/config.json`. */
   'cloud_credential',
@@ -172,8 +180,16 @@ export function classifySensitivePath(path: string): readonly SensitivePathClass
     }
   }
 
-  // ssh_material: any file inside a directory literally named `.ssh`.
-  if (/(?:^|[\\/])\.ssh[\\/]/u.test(lower)) matched.add('ssh_material')
+  // ssh_material: a PRIVATE key inside a `.ssh` directory. The directory alone is not
+  // evidence: `config`, `known_hosts`, `authorized_keys` and every `*.pub` are public
+  // or client settings, and they are exactly what an agent reads while debugging ssh.
+  // Anything that IS a private half is already matched by `private_key` above; this
+  // class adds the files inside `.ssh` that name themselves as private but that the
+  // extension rule would miss (an id file with no `.pub` sibling, `identity`, …).
+  if (/(?:^|[\\/])\.ssh[\\/]/u.test(lower) && !basename.endsWith('.pub')) {
+    const harmless = new Set(['config', 'known_hosts', 'known_hosts.old', 'authorized_keys', 'authorized_keys2', 'environment', 'rc'])
+    if (!harmless.has(basename)) matched.add('ssh_material')
+  }
 
   // cloud_credential: the well-known credential locations of the major CLIs.
   if (
