@@ -62,7 +62,7 @@ describe('sensitive-path: each class', () => {
     for (const path of [
       '/a/.env',
       '/a/id_rsa',
-      '/a/.ssh/known_hosts',
+      '/a/.ssh/id_ed25519',
       '/a/.aws/credentials',
       '/a/secrets.yaml',
       '/a/store.kdbx',
@@ -103,11 +103,19 @@ describe('sensitive-path: false positives are the real risk', () => {
 })
 
 describe('sensitive-path: deliberate near-misses', () => {
-  it('flags the public half inside .ssh as key material, but not as a private key', () => {
-    // Everything under .ssh is treated as material because `known_hosts`, `config`
-    // and `authorized_keys` live there too; an allowlist inside that directory would
-    // be a list to forget. The `private_key` class still excludes `.pub`.
-    expect(classifySensitivePath('/home/u/.ssh/id_rsa.pub')).toEqual(['ssh_material'])
+  it('allows the public and config files inside .ssh', () => {
+    // Measured 2026-11-24: the directory-blanket rule denied five of seven `.ssh`
+    // files that are harmless, and an agent debugging ssh/git reads exactly those.
+    for (const path of ['/home/u/.ssh/config', '/home/u/.ssh/known_hosts', '/home/u/.ssh/authorized_keys', '/home/u/.ssh/id_rsa.pub']) {
+      expect(classifySensitivePath(path), path).toEqual([])
+    }
+  })
+
+  it('still flags the private halves inside .ssh', () => {
+    expect(classifySensitivePath('/home/u/.ssh/id_rsa')).toContain('ssh_material')
+    expect(classifySensitivePath('/home/u/.ssh/id_ed25519')).toContain('ssh_material')
+    // A private file with an unusual name is what this class adds over `private_key`.
+    expect(classifySensitivePath('/home/u/.ssh/identity')).toContain('ssh_material')
   })
 
   it('flags a bare .env', () => {
