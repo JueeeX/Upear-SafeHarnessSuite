@@ -819,7 +819,36 @@ HMR（热模块重载）是**唯一会让其他所有姿态答案瞬间过期**�
 
 **同一行被组合两次怎么办**：profile 可以把同一行既有 `insert` 又有后续层的 `id` 覆盖（本机的 `hmr` 就是这样：base 插入，web-app 禁用它）。判定是"**存在任何一条启用的行就是启用**"，不是"先遇到的那条说了算"——只有启用的那条意味着真的会发生重载。
 
-**顺带纠正一条被误传的操作结论**：改 profile 的 `cordis.patch.yml` **不需要重启**。`dsh-base` 组合了 `cordis-plugin-hmr`，它 watch 着 patch 文件并在变化时用 `applyEntryPatches` 重建 include 配置、重挂载受影响的 entry。本机两次实测：patch 里加 `judge.maxChars: 7777` → 5 秒内生效果且账本多一条 `rules_reloaded`；改成 `8888` → 立刻生效；删掉 → 回到 12000。**只有换插件包本身（`node_modules` 变了）才必须重启**，因为 entry 已经 import 完，热重载不会重新解析包。
+### 5.4 桌面版为什么会报 `hmr_enabled: true`（1.16.3 实测，重要）
+
+**这是配置里看不出来的事实**：在桌面 profile 里，组合出来的 `hmr` 行是 `disabled: true`（`dsh-web-app` 把它关掉），但**启动器在 `boot()` 之后会自己再建一条**：
+
+```js
+// @deepseek-ai/dsh/lib/profile-boot-*.js
+if (ctx.get("hmr") === void 0) {              // 行被禁用 ⇒ 服务不存在 ⇒ 条件成立
+  await ctx.loader.create({ name: "@deepseek-ai/cordis-plugin-hmr", config: { root: [] } })
+}
+await watchUserPatches(ctx, ...)              // 然后才挂 patch 层监听
+```
+
+所以 **`safeharness_posture` 在桌面版上报 `hmr_enabled: OK / "hot-module reload is enabled…"` 是正确的**，不是误报：loader 里确实有一条启用的 HMR entry。
+
+**但这条运行期 entry 只做一半的事**，因为 `root: []`：
+
+| 能力 | 由谁驱动 | `root: []` 时 |
+|---|---|---|
+| **配置文件热更**（`cordis.patch.yml` 变化 → 重挂载 entry） | `registerConfig()` 自带的 watcher（`dsh-app-boot` 的两个 `watchUserPatches`），与 `root` 无关 | ✅ 正常工作 |
+| **模块热替换**（源码/依赖变了 → 换掉正在跑的模块） | 主 `this.watcher`，over `root` | ❌ 惰性：`root.length === 0` 直接 resolve，chokidar 收空数组监听 0 个路径（已实测 `getWatched()` = 0） |
+
+也就是说：**桌面版的 `hmr_enabled: true` 意味着"配置文件可以热更"，不意味着"守卫代码会在运行中被换掉"**。后者才是这条检查要防的风险（`MANUAL §11` 的 HMR 边界），前者是正常工作方式。
+
+**对 operator 的实际含义**：
+
+- `balanced` / `observe` 下这条是信息性的 `OK`，可以忽略。
+- **`hardened` 下这条会 `FAIL` 并拒绝加载**——这是当前桌面版的现实，不是配置错误。要么接受 hardened 在桌面版不可用，要么等宿主把启动器那条运行期 entry 改成可配置（去掉，或给 `root` 一个显式值）。**不要在插件里"猜"掉这条**：那正是这个版本要修的"假 OK"。
+- 真要让 `hardened` 在桌面版可加载，需要宿主侧改动；插件侧唯一诚实的做法是报出它。
+
+**顺带纠正一条被误传的操作结论**：改 profile 的 `cordis.patch.yml` **不需要重启**。原因不是 HMR 的模块重载，而是 `dsh-app-boot` 的 `watchUserPatches` + `registerConfig` 路径（上表第一行）。本机实测：patch 里加 `judge.maxChars: 7777` → 5 秒内生效且账本多一条 `rules_reloaded`；改成 `8888` → 立刻生效；删掉 → 回到 12000；加/改 `argSchemas`（非 volatile）→ 触发 `plugin_loaded` 重挂载。**只有换插件包本身（`node_modules` 变了）才必须重启**，因为 entry 已经 import 完，配置热更不会重新解析包。
 
 ---
 
