@@ -155,6 +155,62 @@ function wordComponents(basename: string): readonly string[] {
 }
 
 /**
+ * Extension-less filenames that are secrets on their own.
+ *
+ * Needed because {@link looksLikeFilename} requires a dot or a separator, and these
+ * carry neither: `type id_rsa` names a private key without writing a path. Kept to a
+ * short explicit list rather than "any bare word", which is what made
+ * `DEFAULT_MAX_TOKENS` look like a filename.
+ */
+const BARE_SECRET_FILENAMES: ReadonlySet<string> = new Set([
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+  'netrc', 'pgpass', 'htpasswd', 'authorized_keys', 'known_hosts',
+])
+
+/**
+ * Whether one whitespace-delimited token should be read as a filename at all.
+ *
+ * The rule that matters here: a token needs a dot (an extension or a dotfile), a path
+ * separator, or membership in {@link BARE_SECRET_FILENAMES}. Without that requirement,
+ * `DEFAULT_MAX_TOKENS` inside a `Select-String` pattern was treated as a basename whose
+ * word `tokens` matched `secret_file` — which denied a legitimate grep (measured
+ * 2026-11-24, ledger `tool_denied rc=sensitive_path_argument`).
+ *
+ * @param token - one candidate, already quote-stripped.
+ * @returns `true` when the token can be classified as a filename.
+ */
+function looksLikeFilename(token: string): boolean {
+  if (token.length === 0 || token.length > MAX_PATH_CANDIDATE) return false
+  if (token.includes('/') || token.includes('\\')) return true
+  if (token.includes('.')) return true
+  return BARE_SECRET_FILENAMES.has(token.toLowerCase())
+}
+
+/**
+ * Every token in one argument that could be a filename.
+ *
+ * A tool argument is often a whole command line (`type C:\x\secret.txt`, `grep x in
+ * y.cs`), so classifying the argument as a single path is wrong in both directions: it
+ * misses the second path in a command, and it invents a basename out of everything
+ * after the last separator. Splitting on whitespace and shell punctuation, then keeping
+ * only filename-shaped tokens, handles both.
+ *
+ * @param value - one string argument.
+ * @returns filename-shaped tokens, in order.
+ */
+function pathTokens(value: string): readonly string[] {
+  if (value.length === 0 || value.length > MAX_PATH_CANDIDATE) return []
+  // Control characters (including newlines) mean prose, a multi-line blob, or junk.
+  if (CONTROL_CHARS.test(value)) return []
+  const tokens: string[] = []
+  for (const raw of value.split(/[\s,;|&()<>"'`=]+/u)) {
+    const token = normalizePath(raw)
+    if (looksLikeFilename(token)) tokens.push(token)
+  }
+  return tokens
+}
+
+/**
  * Classify one already-normalized path.
  *
  * @param path - path-like string, first see {@link isPathLike}.
@@ -231,6 +287,10 @@ export function resolveSensitivePathClasses(enabled: readonly string[] | undefin
 /**
  * Scan every string argument for sensitive-path intent.
  *
+ * Each argument is split into filename-shaped tokens rather than classified whole: a
+ * command line contains several tokens, and treating the whole string as one path both
+ * misses later paths and invents a basename out of whatever follows the last separator.
+ *
  * @param strings - the call's string arguments, in collection order.
  * @param enabled - enabled classes, from {@link resolveSensitivePathClasses}.
  * @returns the first argument that names a sensitive path, or `undefined`.
@@ -243,9 +303,11 @@ export function scanSensitivePaths(
   const wanted = new Set<string>(enabled)
   for (let index = 0; index < strings.length; index += 1) {
     const raw = strings[index]
-    if (raw === undefined || !isPathLike(raw)) continue
-    const classes = classifySensitivePath(normalizePath(raw)).filter(name => wanted.has(name))
-    if (classes.length > 0) return { classes, argumentIndex: index }
+    if (raw === undefined) continue
+    for (const token of pathTokens(raw)) {
+      const classes = classifySensitivePath(token).filter(name => wanted.has(name))
+      if (classes.length > 0) return { classes, argumentIndex: index }
+    }
   }
   return undefined
 }

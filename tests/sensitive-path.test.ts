@@ -124,6 +124,42 @@ describe('sensitive-path: deliberate near-misses', () => {
   })
 })
 
+describe('sensitive-path: command lines are not one path', () => {
+  // Measured 2026-11-24: this exact command was denied with
+  // `sensitive_path_argument / secret_file` because the whole string was classified
+  // as one path and the tail `DEFAULT_MAX_TOKENS` parsed as a basename.
+  const falsePositive = "Select-String -Path src\\judge\\client.ts -Pattern 'DEFAULT_MAX_TOKENS' -Context 6,10"
+
+  it('allows the command that was wrongly denied', () => {
+    expect(scanSensitivePaths([falsePositive], DEFAULT_SENSITIVE_PATH_CLASSES)).toBeUndefined()
+  })
+
+  it('does not treat a bare ALL_CAPS identifier as a filename', () => {
+    for (const word of ['DEFAULT_MAX_TOKENS', 'MAX_TOKEN_BUDGET', 'AUTH_TOKEN_ENV']) {
+      expect(scanSensitivePaths([word], DEFAULT_SENSITIVE_PATH_CLASSES), word).toBeUndefined()
+    }
+  })
+
+  it('still catches a real secret path inside a command', () => {
+    const found = scanSensitivePaths(['type C:\\Users\\x\\.dsh\\secret.txt'], DEFAULT_SENSITIVE_PATH_CLASSES)
+    expect(found?.classes).toEqual(['secret_file'])
+  })
+
+  it('catches the second path in a command, which the whole-string rule missed', () => {
+    // Before the token split, `copy a.txt b.env` was classified by its LAST path
+    // component only when a separator was present; a whitespace-separated pair was
+    // treated as one string and the first real hit could be skipped.
+    const found = scanSensitivePaths(['copy notes.md .env'], DEFAULT_SENSITIVE_PATH_CLASSES)
+    expect(found?.classes).toContain('dotenv')
+  })
+
+  it('still catches a bare secret filename with no extension', () => {
+    // These carry neither a dot nor a separator, so they are on an explicit list.
+    expect(scanSensitivePaths(['cat id_rsa'], DEFAULT_SENSITIVE_PATH_CLASSES)?.classes).toContain('private_key')
+    expect(scanSensitivePaths(['cat netrc'], DEFAULT_SENSITIVE_PATH_CLASSES)).toBeDefined()
+  })
+})
+
 describe('sensitive-path: configuration', () => {
   it('treats an absent class list as every class, and an empty one as none', () => {
     expect(resolveSensitivePathClasses(undefined)).toEqual(DEFAULT_SENSITIVE_PATH_CLASSES)
