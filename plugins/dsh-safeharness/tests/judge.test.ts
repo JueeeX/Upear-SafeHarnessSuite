@@ -30,6 +30,22 @@ function textCall(parts: readonly string[], calls: CallRecord[] = []): JudgeCall
   return chunkCall(parts.map((text) => ({ type: 'text-delta', text })), calls)
 }
 
+/**
+ * A call that scripts one response PER INVOCATION (1.19.0).
+ *
+ * Needed by the empty-reply retry: `textCall` emits every delta inside a single call, so
+ * it cannot express "first call says nothing, the second says the JSON".
+ */
+function seqCall(responses: readonly (readonly string[])[], calls: CallRecord[] = []): JudgeCall {
+  let index = 0
+  return async function* (prompt, options) {
+    calls.push({ prompt, maxTokens: options.maxTokens, signal: options.signal })
+    const parts = responses[Math.min(index, responses.length - 1)] ?? []
+    index += 1
+    for (const part of parts) yield { type: 'text-delta', text: part }
+  }
+}
+
 /** A call that fails after one delta (iteration-time failure, not invocation). */
 function throwingCall(calls: CallRecord[] = []): JudgeCall {
   return async function* (prompt, options) {
@@ -194,6 +210,64 @@ describe('createJudge malformed or missing replies', () => {
   })
 })
 
+describe('empty-reply retry (1.19.0)', () => {
+  it('retries once with a larger budget when the reply has no text', async () => {
+    const calls: CallRecord[] = []
+    const result = await createJudge(seqCall([[], ['{"verdict":"block","reason":"x"}']], calls))
+      .review('hello', REVIEW)
+    expect(result.status).toBe('ok')
+    expect(result.verdict).toBe('block')
+    expect(calls).toHaveLength(2)
+    // The retry gets a bigger budget: the first attempt is what ran out.
+    expect(calls[0]?.maxTokens).toBe(4096)
+    expect(calls[1]?.maxTokens).toBe(8192)
+    // The recursion marker must survive into the retry prompt verbatim.
+    expect(calls[1]?.prompt.startsWith('[safeharness-judge]')).toBe(true)
+    expect(result.labels['attempts']).toBe('2')
+    expect(result.metrics['attempts']).toBe(2)
+  })
+
+  it('reports empty when both attempts produce no text', async () => {
+    const calls: CallRecord[] = []
+    const result = await createJudge(seqCall([[], []], calls)).review('hello', REVIEW)
+    expect(result.status).toBe('empty')
+    expect(calls).toHaveLength(2)
+  })
+
+  it('does not retry a reply that arrived but did not parse', async () => {
+    const calls: CallRecord[] = []
+    const result = await createJudge(textCall(['not json at all'], calls)).review('hello', REVIEW)
+    expect(result.status).toBe('bad_json')
+    expect(calls).toHaveLength(1)
+  })
+
+  it('does not retry a timeout', async () => {
+    const calls: CallRecord[] = []
+    const hang: JudgeCall = async function* (_prompt, options) {
+      calls.push({ prompt: _prompt, maxTokens: options.maxTokens, signal: options.signal })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      yield { type: 'text-delta', text: '{"verdict":"allow"}' }
+    }
+    const result = await createJudge(hang).review('hello', { maxChars: 1000, timeoutMs: 20 })
+    expect(result.status).toBe('timeout')
+    expect(calls).toHaveLength(1)
+  })
+
+  it('does not start a retry once the deadline has passed', async () => {
+    // A first attempt that consumed the whole budget must not be followed by a second
+    // call the operator never agreed to wait for.
+    const calls: CallRecord[] = []
+    const slowEmpty: JudgeCall = async function* (_prompt, options) {
+      calls.push({ prompt: _prompt, maxTokens: options.maxTokens, signal: options.signal })
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      // Emits nothing: an honest empty reply, but only after the deadline.
+    }
+    const result = await createJudge(slowEmpty).review('hello', { maxChars: 1000, timeoutMs: 50 })
+    expect(calls).toHaveLength(1)
+    expect(['empty', 'timeout']).toContain(result.status)
+  })
+})
+
 describe('createJudge prompt construction', () => {
   it('clips content to maxChars independently of the instruction', async () => {
     const calls: CallRecord[] = []
@@ -250,7 +324,9 @@ describe('createJudge prompt construction', () => {
     const calls: CallRecord[] = []
     const result = await createJudge(textCall(['{"verdict":"allow"}'], calls)).review('hello', REVIEW)
     expect(result.status).toBe('ok')
-    expect(calls[0]?.maxTokens).toBe(2048)
+    // 4096 since 1.19.0: measured on the deployed thinking model, 2048 went entirely
+    // to reasoning tokens and produced zero characters of text (10 such reviews).
+    expect(calls[0]?.maxTokens).toBe(4096)
     expect(calls[0]?.signal).toBeInstanceOf(AbortSignal)
     expect(calls[0]?.signal.aborted).toBe(false)
   })

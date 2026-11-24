@@ -25,6 +25,9 @@ export const MAX_FAILURE_TOOLS = 64
 /** Maximum distinct tool names whose descriptor warning was already reported. */
 export const MAX_FLAGGED_DESCRIPTORS = 64
 
+/** Cap on distinct flagged result contents tracked per session. */
+export const MAX_FLAGGED_RESULTS = 256
+
 /** Format version of the plugin-owned session metadata index. */
 export const SESSION_INDEX_VERSION = 1
 
@@ -79,6 +82,18 @@ export interface SessionState {
    * warning is written once per session instead of on every proposal.
    */
   flaggedDescriptors: Set<string>
+  /**
+   * Result-scan findings already recorded in this session, keyed by
+   * `tool:sha256` of the flagged content, mapped to how many times it has recurred.
+   *
+   * Why: measured 2026-11-24, 132 `injection_marker` records in one day collapsed to
+   * seven distinct content digests — the same file content flagged on every edit that
+   * touched it. Re-reading a file that quotes an injection example is not new evidence,
+   * so the row is written once and the registry counts the repeats. The count is the
+   * signal that survives ("this content was flagged 23 times"), without 22 duplicate
+   * rows burying the one that would have been different.
+   */
+  flaggedResults: Map<string, number>
   /** Per-session decision counters. */
   counters: { allow: number; deny: number; ask: number; warn: number }
   /** Last time this session produced an event (epoch ms), for LRU. */
@@ -214,6 +229,7 @@ export class SessionStateStore {
       totalCalls: 0,
       failures: {},
       flaggedDescriptors: new Set<string>(),
+      flaggedResults: new Map<string, number>(),
       counters: { allow: 0, deny: 0, ask: 0, warn: 0 },
       touchedAt: Date.now(),
       historical: false,
@@ -272,6 +288,29 @@ export class SessionStateStore {
     }
     state.flaggedDescriptors.add(toolName)
     return true
+  }
+
+  /**
+   * Whether one flagged result content is new in this session, counting the repeat.
+   *
+   * Returns the occurrence number: 1 means "first time, write the row", and a larger
+   * number means "already recorded, only bump the counter". The caller decides what to
+   * do with it; this only owns the bound and the identity.
+   *
+   * @param sessionId - owning session (internal key).
+   * @param identity - `tool:sha256` of the flagged content.
+   * @returns the 1-based occurrence count.
+   */
+  noteResultFinding(sessionId: string | undefined, identity: string): number {
+    const state = this.of(sessionId)
+    const seen = state.flaggedResults.get(identity) ?? 0
+    const next = seen + 1
+    if (seen === 0 && state.flaggedResults.size >= MAX_FLAGGED_RESULTS) {
+      const first = state.flaggedResults.keys().next()
+      if (first.done !== true) state.flaggedResults.delete(first.value)
+    }
+    state.flaggedResults.set(identity, next)
+    return next
   }
 
   /** Record one tool call in the session trail (bounded). */
@@ -545,6 +584,7 @@ export class SessionStateStore {
           totalCalls: 0,
           failures: {},
           flaggedDescriptors: new Set<string>(),
+          flaggedResults: new Map<string, number>(),
           counters: { allow: 0, deny: 0, ask: 0, warn: 0 },
           touchedAt: item.touchedAt,
           ...(item.workspace === undefined ? {} : { workspace: item.workspace }),

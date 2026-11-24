@@ -262,6 +262,19 @@ export function installToolHooks(ctx: Context, runtime: Runtime): void {
       }
 
       const blocking = cfg.mode === 'enforce' && categories.some((category) => cfg.blockOn.includes(category))
+      // Repeat suppression (1.19.0). Measured 2026-11-24: 132 injection_marker rows in
+      // one day collapsed to seven distinct content digests — the same file flagged on
+      // every edit that touched it. Re-scanning content that already produced a row is
+      // not new evidence, so a repeat only bumps a counter the next row carries.
+      //
+      // Blocks are NEVER suppressed: a denial must be recorded in full every time it
+      // happens, because the ledger is the evidence a denial occurred. Only the
+      // warn/spam case is collapsed, and the count still shows the pressure.
+      const occurrence = blocking ? 1 : runtime.state.noteResultFinding(sessionId, `${view.name}:${digest.sha256}`)
+      if (!blocking && occurrence > 1) {
+        runtime.count('warn', sessionId)
+        return downstream
+      }
       runtime.audit('tool_result_flagged', { ...fields, decision: blocking ? 'block' : 'warn' })
       runtime.count(blocking ? 'deny' : 'warn', sessionId)
 

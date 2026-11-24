@@ -160,10 +160,32 @@ export interface JudgeSetup {
 }
 
 /**
- * Completion budget for the judge call (§6.6: reasoning models emit reasoning
- * tokens first, so a small cap yields empty or truncated JSON).
+ * Completion budget for ONE judge call.
+ *
+ * §6.6 notes reasoning models emit reasoning tokens first, so a small cap yields empty
+ * or truncated JSON. Measured 2026-11-24 on the deployed `od-ds/deepseek-v4.1-flash`
+ * route: ten `empty` reviews where the model produced 1016–4422 output tokens and not
+ * one character of text — the budget went entirely to thinking. 2048 was the old value
+ * and it was simply too small for a thinking model.
  */
-const DEFAULT_MAX_TOKENS = 2048
+const DEFAULT_MAX_TOKENS = 4096
+
+/**
+ * Budget for the single retry after an empty reply.
+ *
+ * The first attempt can be honestly empty: a thinking model spent everything on
+ * reasoning and ran out before writing JSON. Retrying with a larger budget and an
+ * instruction that discourages deliberation is the only lever this client has — the
+ * route and the model's thinking mode belong to the operator, not to the plugin.
+ */
+const RETRY_MAX_TOKENS = 8192
+
+/**
+ * The instruction used on the retry: the marker must stay verbatim at the start (the
+ * recursion guard matches it), then the demand is made blunter. Kept inside the same
+ * {@link MAX_PROMPT_CHARS} clamp as the first attempt.
+ */
+const RETRY_INSTRUCTION_SUFFIX = ' Answer immediately with the JSON object and nothing else.'
 
 /** Sentinel resolved by the deadline timer; a symbol cannot collide with a chunk. */
 const TIMEOUT = Symbol('safeharness-judge-timeout')
@@ -305,63 +327,98 @@ export function createJudge(call: JudgeCall | undefined, deps: JudgeSetup = {}):
         const controller = new AbortController()
         const prompt = systemPrompt + PROMPT_SEPARATOR + content
         baseMetrics['prompt_chars'] = prompt.length
-        let iterator: AsyncIterator<JudgeChunkLike>
-        try {
-          iterator = call(prompt, { signal: controller.signal, maxTokens: DEFAULT_MAX_TOKENS })[
-            Symbol.asyncIterator
-          ]()
-        } catch {
-          return finish('error', 'unknown', { ...baseLabels, reason: 'call_failed' })
-        }
 
-        let timer: ReturnType<typeof setTimeout> | undefined
-        let timedOut = false
-        const deadline = new Promise<typeof TIMEOUT>((resolve) => {
-          timer = setTimeout(() => {
-            timedOut = true
-            controller.abort()
-            resolve(TIMEOUT)
-          }, Math.max(0, options.timeoutMs))
-        })
-
-        let response = ''
-        try {
-          for (;;) {
-            const step = await Promise.race([iterator.next(), deadline])
-            if (step === TIMEOUT) break
-            if (step.done) break
-            // Host chunks are typed loosely once adapted; read them defensively.
-            const chunk: unknown = (step as IteratorResult<unknown>).value
-            if (typeof chunk !== 'object' || chunk === null) continue
-            const candidate = chunk as JudgeChunkLike
-            if (candidate.type === 'text-delta' && typeof candidate.text === 'string') {
-              response += candidate.text
-            }
+        /**
+         * One model call inside the caller's deadline.
+         *
+         * Extracted so the empty-reply retry shares the timeout discipline instead of
+         * duplicating it: a retry must not be able to run past the operator's deadline,
+         * and the deadline is absolute (measured from `startedAt`), not per attempt.
+         */
+        const attempt = async (
+          request: string,
+          maxTokens: number,
+        ): Promise<{ response: string; timedOut: boolean; failed: boolean }> => {
+          let iterator: AsyncIterator<JudgeChunkLike>
+          try {
+            iterator = call(request, { signal: controller.signal, maxTokens })[Symbol.asyncIterator]()
+          } catch {
+            return { response: '', timedOut: false, failed: true }
           }
-        } finally {
-          // Always release the timer: a late rejection/abort after this point
-          // would otherwise leak into an unrelated review.
-          if (timer !== undefined) clearTimeout(timer)
-          if (timedOut) closeQuietly(iterator)
+          let timer: ReturnType<typeof setTimeout> | undefined
+          let timedOut = false
+          const remaining = Math.max(0, options.timeoutMs - (now() - startedAt))
+          const deadline = new Promise<typeof TIMEOUT>((resolve) => {
+            timer = setTimeout(() => {
+              timedOut = true
+              controller.abort()
+              resolve(TIMEOUT)
+            }, remaining)
+          })
+          let response = ''
+          try {
+            for (;;) {
+              const step = await Promise.race([iterator.next(), deadline])
+              if (step === TIMEOUT) break
+              if (step.done) break
+              // Host chunks are typed loosely once adapted; read them defensively.
+              const chunk: unknown = (step as IteratorResult<unknown>).value
+              if (typeof chunk !== 'object' || chunk === null) continue
+              const candidate = chunk as JudgeChunkLike
+              if (candidate.type === 'text-delta' && typeof candidate.text === 'string') {
+                response += candidate.text
+              }
+            }
+          } finally {
+            // Always release the timer: a late rejection/abort after this point
+            // would otherwise leak into an unrelated review.
+            if (timer !== undefined) clearTimeout(timer)
+            if (timedOut) closeQuietly(iterator)
+          }
+          return { response, timedOut, failed: false }
         }
 
-        if (timedOut) {
+        const first = await attempt(prompt, DEFAULT_MAX_TOKENS)
+        if (first.failed) return finish('error', 'unknown', { ...baseLabels, reason: 'call_failed' })
+        if (first.timedOut) {
           return finish('timeout', 'unknown', { ...baseLabels, reason: 'timeout' }, {
             timeout_ms: Math.max(0, options.timeoutMs),
           })
         }
+
+        let response = first.response
+        let attempts = 1
+        let retried = false
+        // Retry ONLY on an honestly empty reply: a resolved answer — even an
+        // unparsable one — is not improved by asking again, and a timeout has already
+        // spent the whole deadline.
+        if (response.trim().length === 0 && now() - startedAt < options.timeoutMs) {
+          retried = true
+          attempts = 2
+          const retryInstruction = instructionOf(systemPrompt + RETRY_INSTRUCTION_SUFFIX)
+          const second = await attempt(
+            retryInstruction + PROMPT_SEPARATOR + content,
+            RETRY_MAX_TOKENS,
+          )
+          if (!second.failed && !second.timedOut) response = second.response
+        }
+
+        const attemptLabels: Record<string, string | undefined> = retried
+          ? { ...baseLabels, attempts: String(attempts) }
+          : baseLabels
+        baseMetrics['attempts'] = attempts
         if (response.trim().length === 0) {
-          return finish('empty', 'unknown', { ...baseLabels, reason: 'empty_model_reply' }, {
+          return finish('empty', 'unknown', { ...attemptLabels, reason: 'empty_model_reply' }, {
             response_chars: response.length,
           })
         }
         const verdict = readVerdict(response)
         if (verdict === undefined) {
-          return finish('bad_json', 'unknown', { ...baseLabels, reason: 'unparsable_model_reply' }, {
+          return finish('bad_json', 'unknown', { ...attemptLabels, reason: 'unparsable_model_reply' }, {
             response_chars: response.length,
           })
         }
-        return finish('ok', verdict, baseLabels, { response_chars: response.length })
+        return finish('ok', verdict, attemptLabels, { response_chars: response.length })
       } catch {
         // Provider failures must not propagate into the stream hook.
         return buildResult('error', 'unknown', { reason: 'judge_internal_error' }, {
