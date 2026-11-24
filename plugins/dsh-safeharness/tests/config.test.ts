@@ -5,7 +5,7 @@
  * so it is tested first.
  */
 import { describe, expect, it } from 'vitest'
-import { Config, ConfigError, MAX_BUFFERED_OUTPUT_CHARS, resolveConfig } from '../src/config.js'
+import { Config, ConfigError, isVolatileConfigPath, MAX_BUFFERED_OUTPUT_CHARS, mergeConfigLayers, resolveConfig } from '../src/config.js'
 
 describe('resolveConfig — host-validated config (R37)', () => {
   it('does not let schemastery materialize absent arrays (they used to defeat presets)', () => {
@@ -246,5 +246,44 @@ describe('resolveConfig — notification channels', () => {
     expect(() => resolveConfig({
       patrol: { notify: [{ type: 'generic', webhook: 'https://x.example/y', headers: { A: 1 as never } }] },
     })).toThrow(/headers\.A/u)
+  })
+})
+
+describe('volatile split — the panel write seam (1.17.2)', () => {
+  it('matches the .volatile() flags the host reads from this same schema', () => {
+    // The host's settings service accepts volatile paths only; the panel sends the
+    // rest to the config editor. Both sides read this schema, so a field gaining or
+    // losing .volatile() cannot desynchronise them.
+    expect(isVolatileConfigPath(['output', 'judge', 'maxChars'])).toBe(true)
+    expect(isVolatileConfigPath(['tools', 'descriptorScan'])).toBe(true)
+    expect(isVolatileConfigPath(['results', 'piiClasses'])).toBe(true)
+    expect(isVolatileConfigPath(['tools', 'argSchemas'])).toBe(false)
+    expect(isVolatileConfigPath(['tools', 'denyTools'])).toBe(false)
+    expect(isVolatileConfigPath(['results', 'blockOn'])).toBe(false)
+    expect(isVolatileConfigPath(['rules', 'dir'])).toBe(false)
+    expect(isVolatileConfigPath(['patrol', 'minCount'])).toBe(false)
+  })
+
+  it('treats an unknown path as non-volatile, never as live-writable', () => {
+    // Fail closed: an unknown field must not be assumed to hot-reload, and must not
+    // take the live seam where the host would refuse it outright.
+    expect(isVolatileConfigPath(['nope'])).toBe(false)
+    expect(isVolatileConfigPath(['tools', 'nope'])).toBe(false)
+    expect(isVolatileConfigPath([])).toBe(false)
+  })
+
+  it('merges config layers without mutating either input', () => {
+    const base = { tools: { denyTools: ['a'], sql: { allowedTables: ['t'] } }, preset: 'balanced' }
+    const patch = { tools: { denyTools: ['b'] } }
+    const merged = mergeConfigLayers(base, patch)
+    expect(merged).toEqual({ tools: { denyTools: ['b'], sql: { allowedTables: ['t'] } }, preset: 'balanced' })
+    // The entry's raw config belongs to the loader, not to this write.
+    expect(base.tools.denyTools).toEqual(['a'])
+    expect(patch.tools.denyTools).toEqual(['b'])
+  })
+
+  it('replaces arrays wholesale, the way the loader does', () => {
+    expect(mergeConfigLayers({ tools: { denyTools: ['a', 'b'] } }, { tools: { denyTools: ['c'] } }).tools.denyTools)
+      .toEqual(['c'])
   })
 })

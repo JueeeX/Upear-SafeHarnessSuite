@@ -84,6 +84,30 @@ function stubSettings(update = vi.fn(async () => undefined), describe?: () => un
   }
 }
 
+/**
+ * A `configEditor` stub that records the raw config it was handed (1.17.2).
+ *
+ * Ordinary (non-`.volatile()`) fields go through `configEditor.edit`, because the
+ * host's `settings` service refuses those paths outright. The stub applies the
+ * change to a caller-supplied "current" config, so a test can assert the exact raw
+ * config that would have been written to the profile patch.
+ */
+function stubEditor(options: { current?: Record<string, unknown>; failWith?: unknown } = {}) {
+  const calls: Record<string, unknown>[] = []
+  const current = options.current ?? {}
+  return {
+    documentPath: 'C:\\profile\\cordis.patch.yml',
+    entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }],
+    calls,
+    edit: vi.fn(async (_entry: unknown, change: (now: Record<string, unknown>, inherited: Record<string, unknown>) => Record<string, unknown>) => {
+      if (options.failWith !== undefined) throw options.failWith
+      const next = change(current, {})
+      calls.push(next)
+      return undefined
+    }),
+  }
+}
+
 /** The logger seam. */
 const logger = { warn: () => undefined }
 
@@ -117,7 +141,7 @@ describe('createPanelSettingsHost', () => {
         ? [{ id: 'gpt-6-luna', name: 'gpt-6-luna' }, { name: 'no id' }]
         : []),
     }
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(), configEditor: editor, llm }) as never,
       stubRuntime(),
@@ -160,7 +184,7 @@ describe('createPanelSettingsHost', () => {
 
   it('writes only the supplied judge fields through the settings service', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const runtime = stubRuntime()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
@@ -179,7 +203,7 @@ describe('createPanelSettingsHost', () => {
 
   it('writes the drafting route and its enable flag', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -193,7 +217,7 @@ describe('createPanelSettingsHost', () => {
 
   it('writes the per-surface switchboard, keeping the judge route in the same output object', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -213,7 +237,7 @@ describe('createPanelSettingsHost', () => {
 
   it('writes the 1.12.0 tool-detection knobs, keeping the surface mode in the same tools object', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -229,7 +253,10 @@ describe('createPanelSettingsHost', () => {
         allowedTables: ['users', 'audit_log'],
       },
     })
-    expect(update).toHaveBeenCalledWith('safeharness', {
+    // A mixed save takes the ordinary-field path (1.17.2): the SQL allowlist is not
+    // volatile, so the whole save is one `configEditor.edit` and no live update.
+    expect(update).not.toHaveBeenCalled()
+    expect(editor.calls).toEqual([{
       tools: {
         mode: 'warn',
         descriptorScan: 'enforce',
@@ -238,12 +265,12 @@ describe('createPanelSettingsHost', () => {
         entropyMinLength: 64,
         sql: { allowedTables: ['users', 'audit_log'] },
       },
-    })
+    }])
   })
 
   it('writes the PII scan settings as a results object of their own', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -257,7 +284,7 @@ describe('createPanelSettingsHost', () => {
 
   it('refuses invalid 1.12.0 values before touching the host config', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -281,7 +308,7 @@ describe('createPanelSettingsHost', () => {
 
   it('reads the 1.12.0 detection state back to the panel', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -302,7 +329,7 @@ describe('createPanelSettingsHost', () => {
 
   it('writes a compiled tools.argSchemas list, and reads it back as raw JSON text', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -313,7 +340,11 @@ describe('createPanelSettingsHost', () => {
       { name: 'write_inside', tool: 'write', args: { file_path: { pathPrefix: '/workspace' } } },
     ]
     await host.save({ toolDetection: { argSchemas: declarations } })
-    expect(update).toHaveBeenCalledWith('safeharness', { tools: { argSchemas: declarations } })
+    // `tools.argSchemas` is not `.volatile()`, so since 1.17.2 it goes to the
+    // config editor (the documented writer for ordinary fields) instead of the
+    // live-only settings seam that used to refuse it.
+    expect(update).not.toHaveBeenCalled()
+    expect(editor.calls).toEqual([{ tools: { argSchemas: declarations } }])
   })
 
   it('refuses an argSchemas declaration that does not compile, writing nothing', async () => {
@@ -321,7 +352,7 @@ describe('createPanelSettingsHost', () => {
     // must not do that. "Saved" followed by a silently discarded rule is the exact
     // failure this plugin keeps having to fix, so the save is refused instead.
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -355,21 +386,73 @@ describe('createPanelSettingsHost', () => {
 
   it('accepts an empty argSchemas list as "no declarations"', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
       logger,
     )
     await host.save({ toolDetection: { argSchemas: [] } })
-    expect(update).toHaveBeenCalledWith('safeharness', { tools: { argSchemas: [] } })
+    expect(update).not.toHaveBeenCalled()
+    expect(editor.calls).toEqual([{ tools: { argSchemas: [] } }])
+  })
+
+  it('refuses a non-volatile save when the profile composes no config editor', async () => {
+    // Before 1.17.2 this answered "the host rejected the configuration write", which
+    // pointed at nothing. A profile without the editor cannot write ordinary fields at
+    // all, and the operator needs to be told that rather than sent to a log.
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({
+        settings: stubSettings(update),
+        configEditor: { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] },
+      }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ toolDetection: { argSchemas: [] } }))
+      .rejects.toMatchObject({ code: 'settings_readonly' })
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('keeps the revision guard on the ordinary-field path', async () => {
+    // configEditor.edit has no compare-and-swap, so the guard is checked here. Without
+    // it a form loaded before a concurrent ordinary-field change would overwrite it.
+    const update = vi.fn(async () => undefined)
+    const editor = stubEditor()
+    const host = createPanelSettingsHost(
+      stubContext({
+        settings: stubSettings(update, () => [{ ns: 'safeharness', revision: 9 }]),
+        configEditor: editor,
+      }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ expectedRevision: 4, toolDetection: { argSchemas: [] } }))
+      .rejects.toMatchObject({ code: 'settings_conflict' })
+    expect(editor.calls).toEqual([])
+  })
+
+  it('keeps a live-only save on the settings seam, without touching the editor', async () => {
+    // The split must not send every save through the reloading path: a volatile-only
+    // change still hot-applies, which is what the panel promises for those fields.
+    const update = vi.fn(async () => undefined)
+    const editor = stubEditor()
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ judge: { maxChars: 9000 }, surfaces: { input: 'warn' } })
+    expect(editor.calls).toEqual([])
+    expect(update).toHaveBeenCalledOnce()
   })
 
   it('reads declarations back verbatim, not reconstructed from the compiled entries', async () => {
     // Compiled entries have already normalised paths and folded case; echoing those
     // would rewrite the operator's config the first time the form is saved untouched.
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const raw = [{ name: 'keep_me_verbatim', tool: 'write', args: { file_path: { pathPrefix: 'F:/W' } } }]
     const runtime = stubRuntime()
     const host = createPanelSettingsHost(
@@ -390,8 +473,8 @@ describe('createPanelSettingsHost', () => {
       new TypeError('settings-file: the document must be a map of namespace sections'),
       { code: 'SETTINGS_FILE_SHAPE' },
     )
-    const update = vi.fn(async () => { throw hostError })
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const update = vi.fn(async () => undefined)
+    const editor = stubEditor({ failWith: hostError })
     const audited: { kind: string; fields: Record<string, unknown> }[] = []
     const runtime = stubRuntime()
     const host = createPanelSettingsHost(
@@ -427,8 +510,8 @@ describe('createPanelSettingsHost', () => {
 
   it('bounds the quoted diagnostic and never emits a multi-line dump', async () => {
     const long = `${'x'.repeat(400)}\nsecond line ${'y'.repeat(50)}`
-    const update = vi.fn(async () => { throw new Error(long) })
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const update = vi.fn(async () => undefined)
+    const editor = stubEditor({ failWith: new Error(long) })
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -449,8 +532,8 @@ describe('createPanelSettingsHost', () => {
     // A conflict is the operator's fix (refresh and retry), not a host refusal, so it
     // must not inherit the diagnostic suffix.
     const conflict = Object.assign(new Error('namespace moved'), { code: 'SETTINGS_CONFLICT' })
-    const update = vi.fn(async () => { throw conflict })
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const update = vi.fn(async () => undefined)
+    const editor = stubEditor({ failWith: conflict })
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -462,7 +545,7 @@ describe('createPanelSettingsHost', () => {
 
   it('writes the 1.13.0 list fields into tools / results / approval', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -478,7 +561,8 @@ describe('createPanelSettingsHost', () => {
         blockOn: ['credential_leak', 'pii'],
       },
     })
-    expect(update).toHaveBeenCalledWith('safeharness', {
+    expect(update).not.toHaveBeenCalled()
+    expect(editor.calls).toEqual([{
       tools: {
         denyTools: ['shell_*', 'mcp__fs__delete'],
         askTools: ['web_*'],
@@ -487,12 +571,12 @@ describe('createPanelSettingsHost', () => {
       },
       results: { blockOn: ['credential_leak', 'pii'] },
       approval: { allowOnce: ['db_query'] },
-    })
+    }])
   })
 
   it('writes the 1.13.0 source and patrol knobs', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -501,15 +585,16 @@ describe('createPanelSettingsHost', () => {
     await host.save({
       source: { rulesDir: 'C:\\Users\\x\\.dsh\\safeharness\\rules', rulesWatch: false, patrolWindowMinutes: 15, patrolFactor: 6.5, patrolMinCount: 20 },
     })
-    expect(update).toHaveBeenCalledWith('safeharness', {
+    expect(update).not.toHaveBeenCalled()
+    expect(editor.calls).toEqual([{
       rules: { dir: 'C:\\Users\\x\\.dsh\\safeharness\\rules', watch: false },
       patrol: { windowMinutes: 15, factor: 6.5, minCount: 20 },
-    })
+    }])
   })
 
   it('refuses invalid 1.13.0 list/source values before touching the host config', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -534,7 +619,7 @@ describe('createPanelSettingsHost', () => {
 
   it('reads back lists, source and the read-only facts without any credential', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -564,7 +649,7 @@ describe('createPanelSettingsHost', () => {
 
   it('refuses an unknown surface mode', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -577,7 +662,7 @@ describe('createPanelSettingsHost', () => {
 
   it('refuses invalid values before touching the host config', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -594,7 +679,7 @@ describe('createPanelSettingsHost', () => {
 
   it('refuses to enable the judge with an empty route', async () => {
     const update = vi.fn(async () => undefined)
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime({ judge: { provider: '', model: '' } }),
@@ -620,7 +705,7 @@ describe('createPanelSettingsHost', () => {
     // error object: no stack, no path-free guarantee needed because the detail is
     // a single bounded line chosen by the caller, not `String(error)`.
     const update = vi.fn(async () => { throw new Error('disk full at C:\\secret') })
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),
@@ -637,7 +722,7 @@ describe('createPanelSettingsHost', () => {
   it('sends the revision the form was rendered at so a stale save is refused', async () => {
     const update = vi.fn(async () => undefined)
     const describe = () => [{ ns: 'safeharness', revision: 7, value: { preset: 'balanced' } }]
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update, describe), configEditor: editor }) as never,
       stubRuntime(),
@@ -650,7 +735,7 @@ describe('createPanelSettingsHost', () => {
   it('maps a stale write to settings_conflict instead of a generic failure', async () => {
     const stale = Object.assign(new Error('revision mismatch'), { code: 'SETTINGS_CONFLICT', expected: 3, actual: 4 })
     const update = vi.fn(async () => { throw stale })
-    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const editor = stubEditor()
     const host = createPanelSettingsHost(
       stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
       stubRuntime(),

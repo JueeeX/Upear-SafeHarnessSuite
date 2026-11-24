@@ -737,6 +737,50 @@ function mergeDeep(base: unknown, patch: unknown): unknown {
   return out
 }
 
+/**
+ * Deep-merge two config layers with the same semantics the loader applies (1.17.2).
+ *
+ * Exported for the panel's write path: an ordinary-field save must merge its change
+ * over the entry's own raw config without dropping sibling keys or pinning inherited
+ * values into the profile patch. Arrays replace wholesale, as they do in the loader.
+ *
+ * @param base - lower layer (the entry's current raw config).
+ * @param patch - higher layer (the fields being written).
+ * @returns a fresh plain object; neither input is mutated.
+ */
+export function mergeConfigLayers(base: unknown, patch: unknown): Record<string, unknown> {
+  return mergeDeep(base, patch) as Record<string, unknown>
+}
+
+/**
+ * Whether a config field path is one the host's settings service will write live.
+ *
+ * The host's `settings` service refuses any path that is not `.volatile()`; that is
+ * its contract ("live fields only"), not a defect — the documented writer for
+ * ordinary fields is `configEditor.edit()`. This mirrors the host's own
+ * `isVolatilePath` against OUR schema, so the panel and the host cannot disagree
+ * about which seam a field belongs to.
+ *
+ * A path is volatile when it, or any ancestor, carries `meta.volatile`.
+ *
+ * @param path - field path, e.g. `['tools', 'argSchemas']`.
+ * @returns `true` when the field can be written without reloading the entry.
+ */
+export function isVolatileConfigPath(path: readonly string[]): boolean {
+  // The schema instance carries the schemastery node tree (`dict` / `meta`) that
+  // `.toJSON()` does not; the declared type only describes the value shape.
+  let node = Config as unknown as {
+    meta?: { volatile?: boolean }
+    dict?: Record<string, { meta?: { volatile?: boolean }; dict?: Record<string, unknown> }>
+  }
+  for (const key of path) {
+    if (node?.meta?.volatile === true) return true
+    node = (node?.dict?.[key] ?? undefined) as typeof node
+    if (node === undefined) return false
+  }
+  return node?.meta?.volatile === true
+}
+
 /** Fail-loud config rejection; carries every problem found, not just the first. */
 export class ConfigError extends Error {
   /** Human-readable validation problems, in discovery order. */
