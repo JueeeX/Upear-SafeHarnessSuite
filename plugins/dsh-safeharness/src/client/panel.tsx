@@ -163,6 +163,14 @@ interface ToolDetectionForm {
   readonly entropyMinLength: string
   /** One table name per line (empty = no restriction). */
   readonly allowedTables: string
+  /**
+   * `tools.argSchemas` as JSON text (1.17.0). Empty means "no declarations".
+   *
+   * JSON rather than YAML because the browser has no YAML emitter and the plugin's
+   * parser rejects flow sequences such as `[https]`; `JSON.parse` also lets the form
+   * refuse text it cannot parse before anything reaches the host.
+   */
+  readonly argSchemas: string
 }
 
 /**
@@ -265,6 +273,7 @@ interface MutableToolDetectionPatch {
   entropyThreshold?: number
   entropyMinLength?: number
   allowedTables?: readonly string[]
+  argSchemas?: readonly unknown[]
 }
 
 /** Mutable builder for the PII patch. */
@@ -361,6 +370,30 @@ const INTERVAL_CHOICES = [5, 15, 30, 60, 180, 360, 720, 1_440]
 
 /** The unfiltered selection (a fresh object each time it is used, so `limit` resets). */
 const EMPTY_FILTER: EventFilter = { workspace: 'all', session: 'all', kind: 'all', decision: 'all' }
+
+/**
+ * Worked example shown in the empty `tools.argSchemas` textarea.
+ *
+ * Chosen to be the two shapes an operator most often wants (keep writes inside the
+ * workspace; keep egress on TLS) and to be valid JSON, since that is the format this
+ * control speaks.
+ */
+const ARG_SCHEMAS_PLACEHOLDER = JSON.stringify(
+  [
+    {
+      name: 'write_inside_workspace',
+      tool: 'write',
+      args: { file_path: { pathPrefix: '/workspace' } },
+    },
+    {
+      name: 'web_https_only',
+      tool: 'web_fetch',
+      args: { url: { urlScheme: ['https'] } },
+    },
+  ],
+  null,
+  2,
+)
 
 /** Session-scoped keys: a Host remount (settings hot-reload) must not reset the UI. */
 const TAB_KEY = 'safeharness.panel.tab'
@@ -1308,6 +1341,9 @@ export function toSettingsData(value: PanelSettingsValue): SettingsData {
       entropyThreshold: String(value.toolDetection.entropyThreshold),
       entropyMinLength: String(value.toolDetection.entropyMinLength),
       allowedTables: value.toolDetection.allowedTables.join('\n'),
+      // `?? ''`: a host that predates 1.17.0 sends no such field. The form always
+      // carries text, so "absent" and "empty" mean the same thing here.
+      argSchemas: value.toolDetection.argSchemas ?? '',
     },
     pii: { enabled: value.pii.enabled, classes: [...value.pii.classes] },
     lists: {
@@ -1326,6 +1362,49 @@ export function toSettingsData(value: PanelSettingsValue): SettingsData {
       patrolMinCount: String(value.source.patrolMinCount),
     },
   }
+}
+
+/**
+ * Parse the `tools.argSchemas` textarea.
+ *
+ * Accepts only a JSON array of objects (the same text the panel puts in, and the
+ * shape `tools.argSchemas` has on the wire). Empty or comment-less blank text means
+ * "no declarations", which is what an absent key means to the loader.
+ *
+ * The plugin does NOT re-check the schema keywords here: that is the host's job on
+ * save, using the loader's own compiler, so the form and the deployment cannot hold
+ * two different opinions about what a valid schema is. This function only decides
+ * whether the text is an array the wire can carry.
+ *
+ * @param text - raw textarea content.
+ * @returns the declarations plus an optional operator-facing error message.
+ */
+function parseArgSchemasText(text: string): { value?: readonly unknown[]; error?: string } {
+  // Defensive: a value from an older host (or a partially-shaped fixture) carries no
+  // `argSchemas` text at all. That must read as "no declarations", never crash the
+  // whole settings tab — a settings form that throws is worse than one field missing.
+  const trimmed = (text ?? '').trim()
+  if (trimmed.length === 0) return { value: [] }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return { error: '「参数形状规则」不是合法 JSON（应为对象数组，参照上面的示例）。' }
+  }
+  if (!Array.isArray(parsed)) {
+    return { error: '「参数形状规则」必须是 JSON 数组（留空 = 不限制）。' }
+  }
+  for (const entry of parsed) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      return { error: '「参数形状规则」的每一项都必须是对象。' }
+    }
+  }
+  return { value: parsed as readonly unknown[] }
+}
+
+/** Whether two settings values serialise identically (order-insensitive compare). */
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
 }
 
 /**
@@ -1395,6 +1474,10 @@ export function buildPatch(value: PanelSettingsValue, form: SettingsForm): Patch
   if (entropy === undefined) return { patch: undefined, invalid: '「熵阈值」必须是 0–8 之间的数字。' }
   if (entropyMin === undefined) return { patch: undefined, invalid: '「熵检测最短长度」必须是正整数。' }
   const allowedTables = parseTableList(toolDetection.allowedTables)
+  // Argument schemas: parsed here so unparsable text can never reach the host, and
+  // compared as JSON so a reformat (whitespace only) is not a change.
+  const argSchemas = parseArgSchemasText(toolDetection.argSchemas)
+  if (argSchemas.error !== undefined) return { patch: undefined, invalid: argSchemas.error }
   // Source/patrol numbers: same rule (0 is legal for minCount, not for the window).
   const windowMinutes = nonNegativeNumber(source.patrolWindowMinutes.replace(',', '.'))
   const factor = nonNegativeNumber(source.patrolFactor.replace(',', '.'))
@@ -1435,6 +1518,15 @@ export function buildPatch(value: PanelSettingsValue, form: SettingsForm): Patch
   if (entropyMin !== value.toolDetection.entropyMinLength) toolDetectionPatch.entropyMinLength = entropyMin
   const savedTables = value.toolDetection.allowedTables.join('\u0000').toLowerCase()
   if (allowedTables.join('\u0000').toLowerCase() !== savedTables) toolDetectionPatch.allowedTables = allowedTables
+  // Compare as canonical JSON: reformatting the textarea alone is not an edit.
+  // An absent field (older host, or a fixture that predates 1.17.0) reads as "no
+  // declarations", which is what an empty list means — otherwise every untouched
+  // form would report itself dirty. The SAVED side is parsed rather than compared as
+  // text, because `[]` and `` are the same thing to the loader but not to `===`.
+  const savedArgSchemas = parseArgSchemasText(value.toolDetection.argSchemas ?? '').value ?? []
+  if (argSchemas.value !== undefined && !sameJson(argSchemas.value, savedArgSchemas)) {
+    toolDetectionPatch.argSchemas = argSchemas.value
+  }
   const piiPatch: MutablePiiPatch = {}
   if (pii.enabled !== value.pii.enabled) piiPatch.enabled = pii.enabled
   const savedClasses = [...value.pii.classes].sort().join(',')
@@ -3279,6 +3371,25 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
           白名单只作用于会被扫描的 SQL 参数（默认只扫能执行 SQL 的工具）；非白名单表的
           <code className="shp-mono"> SELECT </code> 会被拒，破坏性语句仍按危险 SQL 拒绝。
           这一格不是热更新字段：保存会重载插件。
+        </p>
+        <Field
+          label="参数形状规则 tools.argSchemas（JSON 数组，留空 = 不限制）"
+          value={toolDetection.argSchemas}
+          multiline
+          disabled={readOnly}
+          placeholder={ARG_SCHEMAS_PLACEHOLDER}
+          onChange={(next) => { updateToolDetection({ argSchemas: next }) }}
+        />
+        <p className="shp-card-hint">
+          每一项是 <code className="shp-mono">{'{ name, tool, args }'}</code>：<code className="shp-mono">tool</code>
+          是工具名 glob（<code className="shp-mono">*</code> 是唯一通配符），
+          <code className="shp-mono">args</code> 里每个参数可写
+          <code className="shp-mono">pattern</code> / <code className="shp-mono">enum</code> /
+          <code className="shp-mono">minBytes</code> / <code className="shp-mono">maxBytes</code> /
+          <code className="shp-mono">pathPrefix</code> / <code className="shp-mono">urlScheme</code> /
+          <code className="shp-mono">commandAllowlist</code>。命中即拒（
+          <code className="shp-mono">unauthorized_tool_argument</code>），账本只记参数哈希与长度。
+          编不过的声明会在保存时被拒，**一个字节都不写**。这一格不是热更新字段：保存会重载插件。
         </p>
         <div className="shp-switch-row">
           <label className="shp-switch-label">

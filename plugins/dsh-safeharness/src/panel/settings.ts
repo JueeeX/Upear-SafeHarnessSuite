@@ -21,6 +21,11 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname } from 'node:path'
 import { resolveProviderIndexPath } from '../audit/paths.js'
 import { PII_CLASS_NAMES } from '../engine/pii.js'
+import {
+  compileArgSchemas,
+  MAX_ARG_SCHEMAS,
+  type ArgSchemaDeclaration,
+} from '../engine/argschema.js'
 import type {
   PanelCustomProvider,
   PanelDraftSettings,
@@ -337,12 +342,59 @@ function blockOnField(value: unknown): string[] {
 }
 
 /**
- * Validate a directory path (`rules.dir`).
+ * Validate the `tools.argSchemas` declarations a save would write (1.17.0).
  *
- * The plugin does not resolve or create it here — it only refuses what can never be
- * a path (a newline, a NUL, or something absurdly long) so a bad paste is caught
- * before the host rewrites the profile patch.
+ * Why validate at all when the loader already drops a bad schema: dropping is the
+ * right behaviour for a hand-edited profile (one typo must not block the load), and
+ * the wrong behaviour for a form. An operator who types a schema into a form and
+ * presses save must not be told "saved" while the plugin quietly discarded it — so
+ * this runs the loader's own compiler and refuses the whole write when any entry
+ * fails. `compileArgSchemas` is the same function the deployment uses, so the form
+ * and the loader can never disagree about what compiles.
+ *
+ * The bounds mirror the schema's own caps (declaration count, args per declaration,
+ * bounds per argument, list entries) so a hostile payload cannot reach the compiler
+ * at all, and every message names the schema, the argument and the keyword — never
+ * a value.
  */
+function argSchemasField(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new PanelSettingsError('settings_invalid', 'tools.argSchemas must be an array')
+  }
+  if (value.length > MAX_ARG_SCHEMAS) {
+    throw new PanelSettingsError('settings_invalid', `tools.argSchemas accepts at most ${MAX_ARG_SCHEMAS} entries`)
+  }
+  // A shallow structural guard first: the compiler tolerates junk by dropping it,
+  // but a form submission should be refused before anything is persisted.
+  for (const entry of value) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new PanelSettingsError('settings_invalid', 'tools.argSchemas entries must be objects')
+    }
+  }
+  const { problems } = compileArgSchemas(value as ArgSchemaDeclaration[])
+  if (problems.length > 0) {
+    // Name the first problem only (the rest are in the posture report if this ever
+    // reaches the loader); a form refusal should read like one sentence.
+    const [first] = problems
+    throw new PanelSettingsError('settings_invalid', `tools.argSchemas: ${first ?? 'declaration did not compile'}`)
+  }
+  return value as unknown[]
+}
+
+/**
+ * Serialise the declarations for the panel form: pretty JSON, one schema per block.
+ *
+ * JSON rather than the YAML the profile uses, because the browser half has no YAML
+ * emitter and the plugin's own parser rejects flow sequences (`[https]`), which is
+ * exactly the shape a compact schema wants. JSON is also what `JSON.parse` in the
+ * browser can round-trip without a second grammar, so the form can validate the
+ * text before it is sent (and refuse to save text it cannot even parse).
+ */
+function argSchemasText(declarations: readonly unknown[]): string {
+  return declarations.length === 0 ? '' : JSON.stringify(declarations, null, 2)
+}
+
+
 function directoryField(value: unknown, name: string): string {
   if (typeof value !== 'string') throw new PanelSettingsError('settings_invalid', `${name} must be a string`)
   const trimmed = value.trim()
@@ -664,6 +716,9 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       entropyThreshold: cfg.tools.entropyThreshold,
       entropyMinLength: cfg.tools.entropyMinLength,
       allowedTables: [...cfg.tools.sql.allowedTables],
+      // The declarations as written, not the compiled entries: re-serialising a
+      // compiled schema would normalise the operator's config on the first save.
+      argSchemas: argSchemasText(cfg.argSchemaDeclarations),
     }
     const pii = { enabled: cfg.results.pii, classes: [...cfg.results.piiClasses] }
     const lists = {
@@ -876,6 +931,11 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       }
       if (knobs.allowedTables !== undefined) {
         tools['sql'] = { allowedTables: tableListField(knobs.allowedTables) }
+      }
+      if (knobs.argSchemas !== undefined && knobs.argSchemas !== null) {
+        // Compiled here, before the write: a declaration that does not compile is a
+        // refusal, not a silent drop (see `argSchemasField`).
+        tools['argSchemas'] = argSchemasField(knobs.argSchemas)
       }
     }
 
