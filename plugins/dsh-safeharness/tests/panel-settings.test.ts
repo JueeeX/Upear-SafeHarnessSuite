@@ -32,6 +32,10 @@ function stubRuntime(overrides: {
       // 1.16.0 argument schemas: the compiled view plus the raw declarations the
       // panel edits (the read projection shows the raw text, never the compiled one).
       argSchemas: [] as unknown[],
+      // 1.18.0: the sensitive-path scan is part of the tool-detection projection,
+      // so the stub has to carry it or the read path throws before asserting.
+      sensitivePathScan: 'warn' as const,
+      sensitivePathClasses: ['dotenv', 'secret_file'] as string[],
     },
     argSchemaProblems: [] as string[],
     argSchemaDeclarations: [] as unknown[],
@@ -323,6 +327,9 @@ describe('createPanelSettingsHost', () => {
       allowedTables: [],
       // No declarations ⇒ empty text, the same thing an absent key means.
       argSchemas: '',
+      // 1.18.0: the scan and its vocabulary are part of the same projection.
+      sensitivePathScan: 'warn',
+      sensitivePathClasses: ['dotenv', 'secret_file'],
     })
     expect(value.pii).toEqual({ enabled: true, classes: ['id_card', 'email'] })
   })

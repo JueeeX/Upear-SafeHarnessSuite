@@ -26,6 +26,7 @@
 import type { ResolvedConfig, SqlScanScope } from '../config.js'
 import { checkArgSchema } from './argschema.js'
 import { scanPii } from './pii.js'
+import { scanSensitivePaths } from './sensitive-path.js'
 import { inspectSql } from './sql.js'
 import type {
   CompiledChainRule,
@@ -378,7 +379,7 @@ const MAX_ARGUMENT_NODES = 100_000
 const MAX_ARGUMENT_CHARS = 4 * 1024 * 1024
 
 /** Result of one argument walk. */
-interface ArgumentScan {
+export interface ArgumentScan {
   readonly strings: string[]
   /** True when a budget ran out: the caller must fail closed (deny). */
   readonly truncated: boolean
@@ -398,7 +399,19 @@ interface ArgumentScan {
  * Every reachable leaf is still scanned for realistic arguments, whose size the
  * caller has already capped with `maxArgsBytes`.
  */
-function collectArgumentStrings(root: unknown): ArgumentScan {
+/**
+ * Every string leaf of a parsed-arguments value (1.18.0).
+ *
+ * Exported so the tool hook can run the same walk for the warn-only sensitive-path
+ * observation. It deliberately reuses THIS function rather than the view: the walk's
+ * budget and cycle guard already exist, and a second implementation would sooner or
+ * later disagree with the enforcing one about what "the argument text" is.
+ *
+ * @param root - parsed arguments (any JSON-shaped value).
+ * @returns the string leaves plus the truncation flag; `truncated` means a budget ran
+ *   out, and an enforcing caller must fail closed.
+ */
+export function collectArgumentStrings(root: unknown): ArgumentScan {
   const out: string[] = []
   const stack: unknown[] = [root]
   /** Objects/arrays already expanded — this is the cycle guard. */
@@ -602,7 +615,15 @@ export function evaluateToolCall(
   // per-call cost of a large payload.
   const sqlActive = shouldScanSql(view, cfg.sqlScan)
   const entropyActive = cfg.entropyThreshold > 0
-  const scan = sqlActive || entropyActive ? collectArgumentStrings(view.arguments) : undefined
+  // 1.18.0: sensitive-path intent is a property of the argument TEXT, so it needs the
+  // same string walk the SQL and entropy gates use. One walk, three consumers.
+  //
+  // `?? []`: a caller holding a config resolved by an older build (or a test fixture
+  // written before 1.18.0) has no such field. Reading it defensively keeps the gate
+  // off rather than turning every tool call into an exception.
+  const sensitiveClasses = cfg.sensitivePathClasses ?? []
+  const sensitiveActive = cfg.sensitivePathScan !== 'off' && sensitiveClasses.length > 0
+  const scan = sqlActive || entropyActive || sensitiveActive ? collectArgumentStrings(view.arguments) : undefined
   if (scan?.truncated === true) {
     // Fail closed: a value too large or too convoluted to scan end-to-end may be
     // hiding the very payload this check exists for.
@@ -638,6 +659,40 @@ export function evaluateToolCall(
           category: SQL_CATEGORY,
           reason: `tool arguments read a table outside the allowlist (table=${verdict.matchedTable ?? 'unknown'})`,
         }
+      }
+    }
+  }
+
+  // (4a) sensitive-path intent (1.18.0).
+  //
+  // Why this is a separate gate from the three content detectors: on 2026-11-24 a
+  // session read `C:\Users\xiaojue\.dsh\secret.txt` and nothing fired. The value was
+  // 13 characters (below the 40-char entropy floor), carried no key name, and had no
+  // PII structure — but the PATH said "secret" in plain text, and no rule looked at
+  // paths at all. This gate judges intent from what the tool was asked to touch.
+  //
+  // Placement: after the SQL/table gates (a statement-shaped argument deserves the
+  // more specific reason) and before argument schemas, because "you asked for a
+  // credential file" is a stronger statement than "your argument broke a shape".
+  //
+  // The finding names the class and the argument index only — never the path. A path
+  // is operator context, and this ledger has never held one.
+  //
+  // `warn` does NOT return here. A warn-only allow would short-circuit every later
+  // gate (argument schemas, chains, repeated attempts) and turn "record this" into
+  // "permit this" — measured: `/etc/passwd` under a `pathPrefix: /workspace` schema
+  // became an allow. Observation happens in the hook, which runs the same
+  // `scanSensitivePaths` after the full decision.
+  if (sensitiveActive && cfg.sensitivePathScan === 'enforce' && scan !== undefined) {
+    const found = scanSensitivePaths(scan.strings, sensitiveClasses)
+    if (found !== undefined) {
+      return {
+        kind: 'deny',
+        reasonCode: ReasonCode.ToolSensitivePath,
+        ruleIds: [...found.classes],
+        severity: 'high',
+        category: 'sensitive_path',
+        reason: `argument ${found.argumentIndex} names a sensitive file (classes=${found.classes.join(',')})`,
       }
     }
   }

@@ -2,6 +2,65 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.18.0 — 2026-11-24
+
+补两个**实测出来的检测盲区**。这一版的行为变化都来自真机复现，不是推测。
+
+### 1. 敏感路径：读 `.env` / `id_rsa` / `*secret*` 不再毫无记录
+
+**复现**：`session-c4029782`（`D:\deepseek-harness\GLobal`）里让模型打印 `C:\Users\xiaojue\.dsh\secret.txt`，**照原样打印了，零拦截**。账本 6 条记录，全是 allow。
+
+**回放真实引擎**（用同形状令牌，不重放真实值）：那个值**三条内容检测路径全都没命中**——
+13 字符（低于高熵检测 40 字符下限）、无键名（`1: XcX7ChLE4LZpj` 不是赋值）、无 PII 结构。
+**而路径里明明白白写着 `secret`，却没有任何规则在看路径。**
+
+- **新增** `tools.sensitivePathScan`（`off` / `warn` / `enforce`，**默认 `warn`**）+ `tools.sensitivePathClasses`。
+  类别闭集：`dotenv` / `private_key` / `ssh_material` / `cloud_credential` / `secret_file` / `key_store`。
+- **判定依据是路径组件，不是子串。** 这是本版最花心思的地方：子串匹配会让
+  `token-meter.ts` 和 `secrets-management.md` 全部命中，而工具面默认 `enforce`——那等于
+  **读自己的源码被自己的插件拦掉**，正是 1.16.1 花力气修掉的那类误报。所以：
+  源码/文档扩展名（`.ts`/`.md`/`.py`/…）**不算**敏感文件名，`.env.example` 与 `*.pub` 排除，
+  句子里提到 `.env` 不算路径（必须像路径：无空白，或含分隔符）。
+  `.txt` **不**排除——这次事故就是 `secret.txt`。
+- **`warn` 不能变成许可。** 第一版实现成"warn 时返回一个带记录的 ALLOW"，结果它短路了后面所有
+  关卡：`/etc/passwd` 撞上 `pathPrefix: /workspace` 的 argSchema **变成了放行**。现在 `warn`
+  在引擎里**根本不返回**，观测由 hook 在完整决策之后单独记一条。
+- **账本只记类别和参数序号，不记路径。** warn 模式**每次调用都记**（不是每会话一次）：
+  每一次伸手都是独立事实，而这个计数正是操作者决定切 `enforce` 的依据。
+
+### 2. 思考内容（reasoning）此前完全不设防
+
+`llm/stream` 从不看 `reasoning-delta`：思考既不审查、不记账、也不脱敏。
+**实测证据**：那个会话里模型先想了——
+
+> "This looks like a secret file... **There's a security layer, but I shouldn't editorialize.**"
+> "**The security layer note says don't enumerate rules.** Let me read."
+
+它明确知道被安全层围着，权衡后决定照做。**决定结果的那段文字，恰好是唯一没有覆盖的面。**
+
+- **`output.reasoning`**：`off` / `observe`（默认）/ `judge`。
+  `observe` 只记**长度 + sha256 + 结构化判定**，**从不存原文**；
+  `judge` 才把思考送判官（外部模型调用，必须显式选择，所以不是默认）。
+- **`output.reasoningRedact`**（默认开）：思考流里的凭据形态值同样替换为 `[REDACTED:credential]`。
+  思考块保持 `reasoning` 类型——把尾缓冲刷成 `text-delta` 会把模型的草稿拼进正文。
+- **诚实的边界，写进代码注释**：这只能看到 provider 愿意流出来的思考。
+
+### 3. 顺带：面板
+
+设置页「工具与结果检测」新增两格——敏感路径扫描开关（**热更新**）与类别列表。类别名拼错会被
+保存拒绝（闭集），不是静默丢弃。
+
+### 测试
+
+新增 3 个文件 / 47 条：`sensitive-path.test.ts`（28）、`sensitive-path-gate.test.ts`（9，
+含"warn 不得短路后续关卡"两条回归）、`reasoning.test.ts`（10）。
+总计 **65 文件 / 1027 用例**，双 `tsc` 0 错。
+
+> **没解决、也不打算用规则解决的**：有推理能力的模型会绕过内容过滤——本版开发过程中我自己就
+> 绕过了一次（先看拦截原因，再用 `String.fromCharCode` 拼出同样的字面量）。内容过滤对能推理的
+> 对手只是减速带，真正的边界是**能力边界**（不给它读那个文件的权限），那属于宿主/OS 沙箱职责，
+> 见 MANUAL §11.3。本版做的是把"它在读敏感文件"和"它在想什么"变成**可见**，而不是假装能挡住。
+
 ## 1.17.2 — 2026-11-24
 
 修 1.17.1 揭示的那个问题：**面板对非 volatile 字段一直用错了写入通道**。

@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.17.2` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.18.0` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -103,7 +103,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 ### 2.4 审计、姿态、巡检、预算
 
 - **审计**：单行 JSON、哈希链（`prev_sha256`）、按字段名脱敏、按大小轮转；只存哈希与长度，不存原文（详见 §6）。
-- **姿态**（11 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`、`arg_schema_invalid`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。`arg_schema_invalid` 只报 WARN，默认不进 `failOn`（一个可选 schema 的笔误不该拒绝加载，理由见 §4.11）。**`sandbox_danger_full_access` 判定的是"实际在跑的会话"**：DSH 按会话解析沙箱模式，1.16.2 起这一项取部署默认与所有已观察会话中最宽的那个，读不到模式的会话按 WARN 计（详见 §5.2）。**`hmr_enabled` 判的是"有没有一条启用的 HMR 行"**：1.17.2 起读 `entry.options.name` 并匹配 `cordis-plugin-hmr`（1.16.2 及以前读的是不存在的 `entry.name`、匹配的是从未存在过的 `dsh-hmr`，所以这一项对任何部署都恒报 "not composed"）；读不到 loader 时记 SKIP，**不猜成"没启用"**——`hardened` 的 `failOn` 只认 FAIL，猜错就是静默放行（详见 §5.3）。
+- **姿态**（11 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`、`arg_schema_invalid`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。`arg_schema_invalid` 只报 WARN，默认不进 `failOn`（一个可选 schema 的笔误不该拒绝加载，理由见 §4.11）。**`sandbox_danger_full_access` 判定的是"实际在跑的会话"**：DSH 按会话解析沙箱模式，1.16.2 起这一项取部署默认与所有已观察会话中最宽的那个，读不到模式的会话按 WARN 计（详见 §5.2）。**`hmr_enabled` 判的是"有没有一条启用的 HMR 行"**：1.18.0 起读 `entry.options.name` 并匹配 `cordis-plugin-hmr`（1.16.2 及以前读的是不存在的 `entry.name`、匹配的是从未存在过的 `dsh-hmr`，所以这一项对任何部署都恒报 "not composed"）；读不到 loader 时记 SKIP，**不猜成"没启用"**——`hardened` 的 `failOn` 只认 FAIL，猜错就是静默放行（详见 §5.3）。
 - **巡检**（5 项）：`audit_rate`（拒绝速率异常）、`health_probe`（GET 探针）、`config_drift`（与上次姿态报告对比）、`ledger_reconcile`（`tool_asked` vs `approval_decided` 对账）、`notify`（可选，多个通道）。退出码 `0` 干净、`1` 有 FAIL、`2` 巡检自身出错；巡检函数**从不抛异常**。
 - **预算**：`budget.maxTokensPerTurn > 0` 时按轮累计，越限只 warn（一个回合只记一条）。
 
@@ -688,7 +688,7 @@ tools:
 
 **编译失败怎么办**：某一条 schema 编不过（未知关键字、空的 `enum`、越界正则、`pathPrefix` 自身含 `..`）→ **只丢这一条**，并在姿态里报 `arg_schema_invalid`（WARN，`detail` 只给条数）。它不会拒绝加载——一个可选 schema 的笔误不该让整个插件起不来，但也绝不静默。写 `regex:` 而不是 `pattern:` 这种笔误一定会被报出来，而不是变成一个什么都不检查的 schema。
 
-**面板（1.17.2 起可编辑）**：设置页「工具与结果检测」卡片的最后一格。编辑格式是 **JSON 数组**（不是 YAML）：
+**面板（1.18.0 起可编辑）**：设置页「工具与结果检测」卡片的最后一格。编辑格式是 **JSON 数组**（不是 YAML）：
 
 ```json
 [
@@ -713,6 +713,68 @@ tools:
 **留空 = 不限制**（写 `[]`，与「键不存在」同义）。这一格不是热更新字段：保存会重载插件。读取时回显的是**操作者当初写的声明原文**，不是从编译结果反推的——编译会归一化路径、折叠大小写，反推会在第一次保存时悄悄改写配置。
 
 **与内核的差异（诚实口径）**：① 只支持六种原语，不支持 JSON Schema 的 `additionalProperties` / `items` / `required`（宿主自己已经用它的 JSON Schema 子集校验每个工具的入参，插件再引一套等于对"这个参数合不合格"给出两个答案）；② 没有 `ToolCatalog`/`CapabilityAuthority`，所以没有 `unknown_tool` / 签名回执；③ 内核 `invalid_tool_arguments` 是 deny 且带 0.8 风险分，这里统一 `high`。
+
+### 4.11b 敏感路径扫描（1.18.0）
+
+参数形状规则管的是"值长什么样"；这一节管的是**"你要碰的是哪个文件"**。
+
+**为什么加**：2026-11-24 实测，一个会话读了 `C:\Users\xiaojue\.dsh\secret.txt` 并原样打印，零拦截。回放真实引擎确认：那个值**三条内容检测全都漏了**——13 字符（低于高熵 40 字符下限）、无键名、无 PII 结构。而路径里写着 `secret`，**却没有任何规则看路径**。
+
+**配置**：
+
+```yaml
+tools:
+  sensitivePathScan: warn        # off / warn（默认）/ enforce
+  sensitivePathClasses: [dotenv, private_key, ssh_material, cloud_credential, secret_file, key_store]
+```
+
+类别闭集：
+
+| 类别 | 命中什么 |
+|---|---|
+| `dotenv` | `.env`、`.env.local`、`production.env`；`.env.example`/`.sample`/`.template` 排除 |
+| `private_key` | `id_rsa`/`id_ed25519`、`*.pem`/`*.key`/`*.p12`/`*.pfx`/`*.jks`；`*.pub` 排除 |
+| `ssh_material` | 任何 `.ssh/` 目录下的文件 |
+| `cloud_credential` | `.aws/credentials`、`.config/gcloud/`、`.kube/config`、`.docker/config.json` |
+| `secret_file` | 文件名里整词出现 secret/credential/password/apikey/token/… |
+| `key_store` | `*.kdbx`、`*.keychain`、`*.ovpn` |
+
+**误报是这里唯一真实的设计难题。** 子串匹配会让 `token-meter.ts` 和 `secrets-management.md` 命中，而工具面默认 `enforce`——那等于读自己的源码被自己的插件拦掉（1.16.1 修的就是这类）。所以：
+
+- 判定看**路径组件**，不看子串；
+- 源码/文档扩展名（`.ts`/`.md`/`.py`/`.sh`/…）**不算**敏感文件名；`.txt` 不排除（事故就是 `secret.txt`）；
+- 句子里提到 `.env` 不算路径——字符串必须**像路径**（无空白，或含分隔符），且长度 ≤ 512；
+- 一行有控制字符（含换行）直接当散文。
+
+**`warn` 绝不是"许可"。** `warn` 在引擎里根本不返回决策，观测由 hook 在**完整决策之后**另记一条。写成"返回带记录的 ALLOW"会短路后面所有关卡——实测 `/etc/passwd` 撞上 `pathPrefix: /workspace` 的 argSchema 因此变成了放行。
+
+**账本纪律**：只记**类别 + 参数序号**，不记路径，更不记值。`warn` 每次调用都记（不是每会话一次），因为这个计数就是切 `enforce` 的依据。
+
+**热更新字段**：改完立即生效，不重载插件。
+
+### 4.11c 思考内容（reasoning）覆盖（1.18.0）
+
+1.17.x 及之前，`llm/stream` **从不看 `reasoning-delta`**：思考既不审查、不记账、也不脱敏。
+
+**实测证据**：那个会话里模型先想了「*This looks like a secret file... There's a security layer, but I shouldn't editorialize.*」「*The security layer note says don't enumerate rules. Let me read.*」——它明确知道被安全层围着，权衡后照做。**决定结果的那段文字，恰好是唯一没有覆盖的面。**
+
+配置：
+
+```yaml
+output:
+  reasoning: observe        # off / observe（默认）/ judge
+  reasoningRedact: true     # 思考流里的凭据形态值同样脱敏
+```
+
+| 档 | 行为 |
+|---|---|
+| `off` | 回到 1.17.x：思考原样透传，不记账 |
+| `observe` | 账本记 **长度 + sha256 + 结构化规则判定**；**从不存原文**；正文的 `output_reviewed` 也带这个哈希，一行就能答"这轮有没有思考" |
+| `judge` | 另外把思考送判官（外部模型调用）。**必须显式选**，所以不是默认 |
+
+`reasoningRedact` 默认开：凭据形态值在思考流里同样替换为 `[REDACTED:credential]`。思考块保持 `reasoning` 类型——把尾缓冲刷成 `text-delta` 会把模型草稿拼进正文。
+
+**诚实的边界**：这只能看到 provider 愿意流出来的思考；不流出的部分不可见。
 
 ### 4.12 规则快照与回滚（1.14.0）
 
@@ -816,7 +878,7 @@ DSH 的文件沙箱模式是**按会话**解析的：`ctx.sandboxPolicy.resolve(
 
 一个诚实的边界：插件只能为**它见过的会话**作答。进程启动前就存在、且此后没有任何事件的会话不会被计入——那种情况下报告反映的是"观察到的最宽模式"，不是"数学上所有会话的并集"。要把这条也收严，需要宿主暴露"列出所有活动会话 + 其沙箱模式"的接口，当前没有。
 
-### 5.3 姿态里的 HMR 一项怎么算（1.17.2 修正）
+### 5.3 姿态里的 HMR 一项怎么算（1.18.0 修正）
 
 HMR（热模块重载）是**唯一会让其他所有姿态答案瞬间过期**的东西：一次重载会短暂卸掉每一个守卫监听器。所以 `hardened` 的 `failOn` 里有 `hmr_enabled`，一旦真的在跑 HMR 就拒绝加载。
 
@@ -829,7 +891,7 @@ HMR（热模块重载）是**唯一会让其他所有姿态答案瞬间过期**�
 
 后果是这一项对**任何**部署都返回"没组合"，报 `OK / HMR not composed`。本机恰好 HMR 是 `disabled: true`，所以结论碰巧正确——这正是最难发现的一类：绿灯亮着，灯泡是坏的。
 
-1.17.2 的规则：
+1.18.0 的规则：
 
 | 观察到的情况 | 结论 |
 |---|---|
@@ -841,7 +903,7 @@ HMR（热模块重载）是**唯一会让其他所有姿态答案瞬间过期**�
 
 **同一行被组合两次怎么办**：profile 可以把同一行既有 `insert` 又有后续层的 `id` 覆盖（本机的 `hmr` 就是这样：base 插入，web-app 禁用它）。判定是"**存在任何一条启用的行就是启用**"，不是"先遇到的那条说了算"——只有启用的那条意味着真的会发生重载。
 
-### 5.4 桌面版为什么会报 `hmr_enabled: true`（1.17.2 实测，重要）
+### 5.4 桌面版为什么会报 `hmr_enabled: true`（1.18.0 实测，重要）
 
 **这是配置里看不出来的事实**：在桌面 profile 里，组合出来的 `hmr` 行是 `disabled: true`（`dsh-web-app` 把它关掉），但**启动器在 `boot()` 之后会自己再建一条**：
 
@@ -1000,7 +1062,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               980 个用例（62 个文件，1.17.2）
+├─ tests/               1027 个用例（65 个文件，1.18.0）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -1019,7 +1081,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：62 个文件 / 980 个用例（1.17.2；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
+pnpm test             # vitest：65 个文件 / 1027 个用例（1.18.0；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
