@@ -23,6 +23,11 @@ import { POSTURE_CODES } from './posture/checks.js'
 import { PII_CLASS_NAMES } from './engine/pii.js'
 import { compileArgSchemas, type ArgSchemaDeclaration } from './engine/argschema.js'
 import type { CompiledArgSchema } from './engine/argschema.js'
+import {
+  DEFAULT_SENSITIVE_PATH_CLASSES,
+  resolveSensitivePathClasses,
+  type SensitivePathClass,
+} from './engine/sensitive-path.js'
 
 /** Deployment posture preset. */
 export type PresetId = 'observe' | 'balanced' | 'hardened'
@@ -78,6 +83,28 @@ export type SqlScanScope = 'execution' | 'all'
  * the model's list, so enforcement is per call rather than per surface.
  */
 export type DescriptorScanScope = 'off' | 'warn' | 'enforce'
+
+/**
+ * Sensitive-path argument scan scope (1.18.0).
+ *
+ * `warn` records the finding and lets the call proceed; `enforce` denies it. It is a
+ * separate switch from `tools.mode` because the two answer different questions: the
+ * mode says whether findings are enforced at all, this says whether path intent
+ * participates. Keeping them separate lets a deployment enforce argument shapes and
+ * sensitive paths while leaving, say, entropy alone.
+ */
+export type SensitivePathScanScope = 'off' | 'warn' | 'enforce'
+
+/**
+ * Reasoning-text handling (1.18.0).
+ *
+ * `off` restores the pre-1.18 behaviour (reasoning passes through untouched and
+ * unrecorded). `observe` records its length and hash in the ledger — evidence that a
+ * model reasoned, without storing what it reasoned about. `judge` additionally sends
+ * it to the semantic judge, which is an external model call: an operator has to choose
+ * that deliberately, so it is not the default.
+ */
+export type ReasoningHandling = 'off' | 'observe' | 'judge'
 
 /**
  * One operator-written notification destination.
@@ -186,6 +213,20 @@ export interface SafeHarnessConfig {
      * one schema must not switch every other schema off.
      */
     argSchemas?: ArgSchemaDeclaration[]
+    /**
+     * Sensitive-path argument scan (1.18.0): `off`, `warn` (default — record the
+     * finding, run the call) or `enforce` (deny the call).
+     *
+     * Separate from `tools.mode` because the two answer different questions: the mode
+     * says whether findings are enforced at all, this says whether path intent takes
+     * part. A deployment can enforce argument shapes while only observing paths.
+     */
+    sensitivePathScan?: SensitivePathScanScope
+    /**
+     * Enabled sensitive-path classes; absent means every class, an explicit empty
+     * list means the vocabulary is empty (so the scan can never fire).
+     */
+    sensitivePathClasses?: string[]
   }
   results?: {
     mode?: EnforcementMode
@@ -215,6 +256,13 @@ export interface SafeHarnessConfig {
       maxChars?: number
       timeoutMs?: number
     }
+    /**
+     * Reasoning-text handling (1.18.0): `off`, `observe` (default — record length and
+     * hash) or `judge` (also send it to the semantic judge, an external model call).
+     */
+    reasoning?: ReasoningHandling
+    /** Replace credential-shaped runs inside reasoning before the user sees it. */
+    reasoningRedact?: boolean
   }
   approval?: {
     mode?: ApprovalMode
@@ -387,6 +435,10 @@ export const Config = z.object({
     }))).description('Tool name → semantic tag mapping.'),
     argSchemas: keepAbsent(z.array(z.any()))
       .description('Per-tool argument shape rules (kernel constrain.py, argument-schema half).'),
+    sensitivePathScan: z.union(['off', 'warn', 'enforce'] as const).volatile()
+      .description('Sensitive-path argument scan: off, warn-only, or deny the call (1.18.0).'),
+    sensitivePathClasses: keepAbsent(z.array(z.string())).volatile()
+      .description('Enabled sensitive-path classes; absent means every class.'),
   }).description('Tool guard (pre-execute / guard).'),
 
   results: z.object({
@@ -409,6 +461,18 @@ export const Config = z.object({
       maxChars: z.number().min(1).volatile().description('Output characters fed to the judge.'),
       timeoutMs: z.number().min(1).volatile().description('Judge deadline.'),
     }).description('Semantic judge.'),
+    /**
+     * Reasoning (thinking) text, 1.18.0.
+     *
+     * `observe` records length + hash only; `judge` additionally sends the reasoning to
+     * the semantic judge. `off` ignores reasoning entirely (the 1.17.x behaviour).
+     * Redaction of credential-shaped runs is separate (`reasoningRedact`) and applies
+     * to what the user sees.
+     */
+    reasoning: z.union(['off', 'observe', 'judge'] as const).volatile()
+      .description('Reasoning-text handling: off, observe (length + hash), or judge.'),
+    reasoningRedact: z.boolean().volatile()
+      .description('Replace credential-shaped runs inside reasoning before it is shown.'),
   }).description('Output review (llm/stream).'),
 
   approval: z.object({
@@ -515,6 +579,10 @@ export interface ResolvedConfig {
      * {@link ResolvedConfig.argSchemaProblems} so the posture check can report them.
      */
     readonly argSchemas: readonly CompiledArgSchema[]
+    /** Sensitive-path argument scan; see {@link SensitivePathScanScope} (1.18.0). */
+    readonly sensitivePathScan: SensitivePathScanScope
+    /** Enabled sensitive-path classes; empty disables the scan's vocabulary. */
+    readonly sensitivePathClasses: readonly SensitivePathClass[]
   }
   readonly results: {
     readonly mode: EnforcementMode
@@ -536,6 +604,10 @@ export interface ResolvedConfig {
       readonly maxChars: number
       readonly timeoutMs: number
     }
+    /** Reasoning-text handling (1.18.0); see {@link ReasoningHandling}. */
+    readonly reasoning: ReasoningHandling
+    /** Replace credential-shaped runs inside reasoning before it is shown (1.18.0). */
+    readonly reasoningRedact: boolean
   }
   readonly approval: { readonly mode: ApprovalMode; readonly allowOnce: readonly string[] }
   readonly audit: {
@@ -680,6 +752,12 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
     // 1.16.0: no argument schema by default. A deployment opts in per tool; an
     // empty list is "no shape constraint", exactly like `denyTools: []`.
     argSchemas: [],
+    // 1.18.0: sensitive-path intent is `warn` by default. It is a heuristic that
+    // reads intent from a filename, and a heuristic that starts by denying calls is
+    // how a deployment ends up with the guard switched off; `warn` makes it visible
+    // in the ledger first, and `enforce` is one config line away.
+    sensitivePathScan: 'warn',
+    sensitivePathClasses: [...DEFAULT_SENSITIVE_PATH_CLASSES],
   },
   results: {
     mode: 'warn',
@@ -694,6 +772,12 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
     bufferTimeoutMs: 15000,
     bufferMaxChars: 512000,
     judge: { enabled: false, scope: 'flagged', provider: '', model: '', maxChars: 12000, timeoutMs: 4000 },
+    // 1.18.0: reasoning is observed (length + hash) but not sent to the judge by
+    // default — that would hand an external model the model's private scratchpad.
+    // Redaction is ON because the cost of a leaked credential in thinking is the same
+    // as in the answer, and replacing a credential-shaped run does not damage the text.
+    reasoning: 'observe',
+    reasoningRedact: true,
   },
   approval: { mode: 'delegate', allowOnce: [] },
   audit: { format: 'ndjson', dir: '', redact: true, hashChain: true, required: true, rotateMb: 64 },
@@ -993,6 +1077,13 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       trajectory: typeof tools.trajectory === 'boolean' ? tools.trajectory : true,
       tagOverrides,
       argSchemas: argSchemas.entries,
+      // 1.18.0: unknown class names are dropped rather than rejected. A profile
+      // written for a newer release must still boot on this one; the vocabulary is
+      // closed, so anything unrecognised simply does not participate.
+      sensitivePathScan: oneOf(tools.sensitivePathScan, ['off', 'warn', 'enforce'] as const, 'tools.sensitivePathScan', problems),
+      sensitivePathClasses: resolveSensitivePathClasses(
+        Array.isArray(tools.sensitivePathClasses) ? tools.sensitivePathClasses.filter((item): item is string => typeof item === 'string') : undefined,
+      ),
     },
     results: {
       mode: oneOf(results.mode, ['off', 'warn', 'enforce'] as const, 'results.mode', problems),
@@ -1012,6 +1103,8 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
         maxChars: positive(judge.maxChars, 'output.judge.maxChars', problems, 12000),
         timeoutMs: positive(judge.timeoutMs, 'output.judge.timeoutMs', problems, 4000),
       },
+      reasoning: oneOf(output.reasoning, ['off', 'observe', 'judge'] as const, 'output.reasoning', problems),
+      reasoningRedact: typeof output.reasoningRedact === 'boolean' ? output.reasoningRedact : true,
     },
     approval: {
       mode: oneOf(approval.mode, ['delegate', 'policy'] as const, 'approval.mode', problems),

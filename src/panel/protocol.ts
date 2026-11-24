@@ -272,6 +272,15 @@ export interface PanelToolDetection {
    * the entry (the card says so next to the control).
    */
   readonly argSchemas: string
+  /**
+   * Sensitive-path argument scan (1.18.0): `off`, `warn` or `enforce`.
+   *
+   * Live field: an operator who reads the observations in the ledger has to be able to
+   * move this to `enforce` without a restart.
+   */
+  readonly sensitivePathScan: 'off' | 'warn' | 'enforce'
+  /** Enabled sensitive-path classes; empty means none. */
+  readonly sensitivePathClasses: readonly string[]
 }
 
 /** Result-surface PII scan settings (kernel `memory/sanitizer.py` classes). */
@@ -432,6 +441,10 @@ export interface PanelSettingsPatch {
      * refused rather than persisted. An empty array clears the list.
      */
     readonly argSchemas?: readonly unknown[]
+    /** Sensitive-path argument scan switch (1.18.0). */
+    readonly sensitivePathScan?: 'off' | 'warn' | 'enforce'
+    /** Enabled sensitive-path classes; an empty array disables the scan's vocabulary. */
+    readonly sensitivePathClasses?: readonly string[]
   }
   /** Tool-result PII scan (`enabled` plus an optional class subset). */
   readonly pii?: {

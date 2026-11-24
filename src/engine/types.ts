@@ -41,6 +41,8 @@ export const ReasonCode = {
   ToolHighEntropy: 'tool_high_entropy_payload',
   /** An argument violates its declared `tools.argSchemas` bounds (1.16.0). */
   ToolArgument: 'unauthorized_tool_argument',
+  /** An argument names a sensitive file (kernel secret-file taxonomy; 1.18.0). */
+  ToolSensitivePath: 'sensitive_path_argument',
   GuardInternal: 'guard_internal_error',
   // result surface
   CredentialLeak: 'credential_leak',

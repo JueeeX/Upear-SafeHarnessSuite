@@ -20,7 +20,8 @@ import { foundSomething, RESULT_BLOCK_TEXT, TOOL_DENIAL_TEXT } from '../runtime.
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { contentDigest } from '../util/hash.js'
 import { ReasonCode } from '../engine/types.js'
-import { matchNamePattern } from '../engine/tool.js'
+import { collectArgumentStrings, matchNamePattern } from '../engine/tool.js'
+import { scanSensitivePaths } from '../engine/sensitive-path.js'
 import { agentIdOf, argsByteLength, callIdOf, sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf, toolResultViewOf, toolViewOf } from './context.js'
 import { observeSessionSandbox } from './sandbox.js'
 
@@ -100,6 +101,35 @@ export function installToolHooks(ctx: Context, runtime: Runtime): void {
         severity: decision.severity,
         category: decision.category,
         args_chars: view.argsBytes,
+      }
+
+      // A sensitive-path hit in `warn` mode (1.18.0). The engine only enforces this
+      // gate when the scan is `enforce`; in `warn` the call proceeds, so the finding
+      // is produced here instead of in the decision. It must NOT be produced as a
+      // warn-only ALLOW from the engine: that short-circuits every later gate
+      // (argument schemas, chains) and turns observation into permission.
+      //
+      // Every call is recorded, not once per session: each is a separate act of
+      // reaching for a credential file, and the count is the evidence an operator
+      // needs before switching the scan to `enforce`.
+      if (cfg.sensitivePathScan === 'warn') {
+        const walked = collectArgumentStrings(exec.arguments)
+        const found = walked.truncated
+          // Fail closed on the observation too: a payload too large to walk may be
+          // hiding the path this check exists for, and silence would read as clean.
+          ? undefined
+          : scanSensitivePaths(walked.strings, runtime.config.tools.sensitivePathClasses ?? [])
+        if (found !== undefined) {
+          runtime.audit('tool_result_flagged', {
+            ...base,
+            decision: 'warn',
+            reason_code: ReasonCode.ToolSensitivePath,
+            rule_ids: [...found.classes],
+            severity: 'high',
+            category: 'sensitive_path',
+          })
+          runtime.count('warn', sessionId)
+        }
       }
 
       // A descriptor hit in `warn` mode is the one ALLOW that still carries a

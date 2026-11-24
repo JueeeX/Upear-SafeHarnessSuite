@@ -48,7 +48,7 @@ export const MAX_OUTPUT_SCAN_CHARS = MAX_BUFFERED_OUTPUT_CHARS
  */
 export const REDACT_TAIL_CHARS = 256
 
-/** Per-text-block redaction state (held tail + what was already handed over). */
+/** Per-block redaction state (held tail + what was already handed over). */
 interface RedactState {
   /** Characters not yet emitted (the matching window's tail). */
   pending: string
@@ -58,6 +58,8 @@ interface RedactState {
   count: number
   /** Whether the provider opened this block (then a synthetic `block-end` is due). */
   opened: boolean
+  /** Which stream this block belongs to (1.18.0): text or reasoning. */
+  kind: 'text' | 'reasoning'
 }
 
 /**
@@ -152,6 +154,18 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
     let completed = false
     let degraded: string | undefined
     let judgeMs: number | undefined
+    /**
+     * Reasoning (thinking) accumulation, 1.18.0.
+     *
+     * Until 1.17.x this stream never looked at `reasoning-delta`: the text went to the
+     * user unreviewed, unrecorded and unredacted. Measured on 2026-11-24, a model
+     * reasoned "there's a security layer, but I shouldn't editorialize" and then read a
+     * secret — the deliberation that mattered was the one surface with no coverage.
+     */
+    let reasoning = ''
+    let reasoningChars = 0
+    let reasoningTruncated = false
+    let reasoningRedacted = 0
 
     /** Accumulate one chunk into the scan state and the budget counters. */
     const observe = (chunk: StreamChunk): void => {
@@ -166,6 +180,17 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
         }
         return
       }
+      if (chunk.type === 'reasoning-delta') {
+        reasoningChars += chunk.text.length
+        if (!reasoningTruncated) {
+          reasoning += chunk.text
+          if (reasoning.length >= MAX_OUTPUT_SCAN_CHARS) {
+            reasoningTruncated = true
+            reasoning = reasoning.slice(0, MAX_OUTPUT_SCAN_CHARS)
+          }
+        }
+        return
+      }
       if (chunk.type === 'usage') {
         usage = chunk.usage
         noteBudget(runtime, sessionId, chunk.usage)
@@ -175,21 +200,27 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
     }
 
     /** Hand over one block's held tail, redacted (never the raw value). */
-    const flushBlock = (index: number, state: RedactState): StreamChunk[] => {
+    const flushBlock = (index: number, state: RedactState, kind: 'text' | 'reasoning' = 'text'): StreamChunk[] => {
       const tail = redactCredentialValues(state.pending)
       state.pending = ''
       state.count += tail.count
-      redactedCount += tail.count
+      if (kind === 'reasoning') reasoningRedacted += tail.count
+      else redactedCount += tail.count
       state.emitted += tail.text
-      return tail.text.length > 0 ? [{ type: 'text-delta', index, text: tail.text }] : []
+      if (tail.text.length === 0) return []
+      // The delta type must match the block it belongs to: a reasoning tail emitted as
+      // `text-delta` would append the model's scratchpad to the visible answer.
+      return [kind === 'reasoning'
+        ? { type: 'reasoning-delta', index, text: tail.text }
+        : { type: 'text-delta', index, text: tail.text }]
     }
 
     /** Hand over every held tail; closes blocks the provider opened but never closed. */
     const flushAll = (): StreamChunk[] => {
       const chunks: StreamChunk[] = []
       for (const [index, state] of redactStates) {
-        chunks.push(...flushBlock(index, state))
-        if (state.opened) chunks.push({ type: 'block-end', index, block: { type: 'text', text: state.emitted } })
+        chunks.push(...flushBlock(index, state, state.kind))
+        if (state.opened) chunks.push({ type: 'block-end', index, block: { type: state.kind, text: state.emitted } })
       }
       redactStates.clear()
       return chunks
@@ -205,12 +236,39 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
           // matches; `block-end` carries the authoritative text, so it is rewritten
           // with the redacted version.
           if (chunk.type === 'block-start') {
-            if (chunk.blockType === 'text') redactStates.set(chunk.index, { pending: '', emitted: '', count: 0, opened: true })
+            if (chunk.blockType === 'text' || chunk.blockType === 'reasoning') {
+              const kind = chunk.blockType === 'text' ? 'text' : 'reasoning'
+              redactStates.set(chunk.index, { pending: '', emitted: '', count: 0, opened: true, kind })
+            }
             yield chunk
             continue
           }
+          // Reasoning gets the same window as text (1.18.0). It is NOT reviewed for
+          // policy here — that happens once after the stream — but a credential the
+          // model repeats while thinking must not reach the screen unredacted, and the
+          // split-across-deltas problem is identical.
+          if (chunk.type === 'reasoning-delta') {
+            if (!runtime.config.output.reasoningRedact) {
+              yield chunk
+              continue
+            }
+            const state = redactStates.get(chunk.index) ?? { pending: '', emitted: '', count: 0, opened: false, kind: 'text' as const }
+            redactStates.set(chunk.index, state)
+            state.pending += chunk.text
+            if (state.pending.length > REDACT_TAIL_CHARS) {
+              const cut = state.pending.length - REDACT_TAIL_CHARS
+              const head = state.pending.slice(0, cut)
+              state.pending = state.pending.slice(cut)
+              const redacted = redactCredentialValues(head)
+              state.count += redacted.count
+              reasoningRedacted += redacted.count
+              state.emitted += redacted.text
+              if (redacted.text.length > 0) yield { ...chunk, text: redacted.text }
+            }
+            continue
+          }
           if (chunk.type === 'text-delta') {
-            const state = redactStates.get(chunk.index) ?? { pending: '', emitted: '', count: 0, opened: false }
+            const state = redactStates.get(chunk.index) ?? { pending: '', emitted: '', count: 0, opened: false, kind: 'text' as const }
             redactStates.set(chunk.index, state)
             state.pending += chunk.text
             if (state.pending.length > REDACT_TAIL_CHARS) {
@@ -228,10 +286,16 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
           if (chunk.type === 'block-end') {
             const state = redactStates.get(chunk.index)
             if (state !== undefined) {
-              for (const flushed of flushBlock(chunk.index, state)) yield flushed
+              for (const flushed of flushBlock(chunk.index, state, state.kind)) yield flushed
               redactStates.delete(chunk.index)
               const block = chunk.block
-              yield block.type === 'text' ? { ...chunk, block: { ...block, text: state.emitted } } : chunk
+              // A reasoning block carries its own type: rewriting it as `text` would
+              // turn the model's scratchpad into part of the answer.
+              if (block.type !== 'text' && block.type !== 'reasoning') {
+                yield chunk
+                continue
+              }
+              yield { ...chunk, block: { ...block, text: state.emitted } }
               continue
             }
             yield chunk
@@ -319,6 +383,78 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
     if (degraded !== undefined) metrics.buffer_chars = chars
     if (redactedCount > 0) metrics.redacted_count = redactedCount
 
+    // ---- reasoning (1.18.0) --------------------------------------------------
+    //
+    // Reviewing the answer but not the deliberation was a real blind spot: on
+    // 2026-11-24 a model reasoned "there's a security layer, but I shouldn't
+    // editorialize" and then read a secret. The honest limit of this block is that it
+    // only ever sees reasoning the provider chose to stream.
+    const reasoningMode = runtime.config.output.reasoning
+    const reasoningLabels: Record<string, string | undefined> = {}
+    let reasoningDecision: 'allow' | 'warn' = 'allow'
+    let reasoningReason: string = ReasonCode.None
+    let reasoningRuleIds: readonly string[] = []
+    if (reasoningMode !== 'off' && reasoningChars > 0) {
+      const reasoningDigest = contentDigest(reasoning)
+      // The structural scan is local and free: run it even in `observe`, because a
+      // credential the model repeats to itself is worth a warning with or without the
+      // judge. Only the classes and rule ids are recorded.
+      const ruleDecision = runtime.engine.evaluateOutput(reasoning)
+      reasoningRuleIds = [...ruleDecision.ruleIds]
+      if (foundSomething(ruleDecision)) {
+        reasoningDecision = 'warn'
+        reasoningReason = ruleDecision.reasonCode
+      }
+      reasoningLabels.reasoning_chars = String(reasoningChars)
+      reasoningLabels.reasoning_sha256 = reasoningDigest.sha256
+      if (reasoningTruncated) reasoningLabels.reasoning_truncated = 'true'
+      if (reasoningRedacted > 0) {
+        reasoningLabels.reasoning_redacted = 'credential'
+        reasoningLabels.reasoning_redacted_count = String(reasoningRedacted)
+        metrics.reasoning_redacted_count = reasoningRedacted
+      }
+      reasoningLabels.reasoning_mode = reasoningMode
+      if (reasoningMode === 'judge' && judgeDepth === 0) {
+        // The operator asked for this explicitly: the reasoning goes to the judge like
+        // the answer does. Same cap, same timeout, same recursion guard.
+        judgeDepth += 1
+        const startedJudge = Date.now()
+        try {
+          const judged = await judge.review(reasoning, {
+            maxChars: runtime.config.output.judge.maxChars,
+            timeoutMs: runtime.config.output.judge.timeoutMs,
+          })
+          reasoningLabels.reasoning_judge = judged.status
+          if (judged.status === 'ok' && judged.blocked) {
+            reasoningDecision = 'warn'
+            reasoningReason = ReasonCode.OutputJudgeBlocked
+            reasoningRuleIds = [...reasoningRuleIds, 'judge:block']
+          }
+        } catch {
+          // The judge never throws by contract; if it did, the reasoning record keeps
+          // its structural verdict rather than losing the whole audit row.
+          reasoningLabels.reasoning_judge = 'unavailable'
+        } finally {
+          judgeDepth -= 1
+          judgeMs = Date.now() - startedJudge
+        }
+      }
+      runtime.audit('invariant_probe', {
+        decision: reasoningDecision,
+        reason_code: reasoningReason,
+        rule_ids: [...reasoningRuleIds],
+        ...runtime.sessionFields(sessionId),
+        labels: { state: 'reasoning_reviewed', ...reasoningLabels },
+        metrics: { reasoning_chars: reasoningChars },
+      })
+      if (reasoningDecision === 'warn') runtime.count('warn', sessionId)
+    } else if (reasoningMode !== 'off') {
+      // Telemetry that never reached the model reads as "no reasoning", which is a
+      // different and harmless fact; say so instead of leaving the field blank.
+      reasoningLabels.reasoning_mode = reasoningMode
+      reasoningLabels.reasoning_empty = 'true'
+    }
+
     runtime.audit('output_reviewed', {
       ...runtime.sessionFields(sessionId),
       decision: outcome.decision,
@@ -329,6 +465,7 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
       detail_chars: digest.chars,
       labels: {
         ...outcome.labels,
+        ...reasoningLabels,
         // Streaming redaction happened before the answer was reviewed: record it so
         // "the ledger says allow" can never be read as "the key was on screen".
         ...(redactedCount > 0 ? { redacted: 'credential', redacted_count: String(redactedCount) } : {}),

@@ -171,6 +171,10 @@ interface ToolDetectionForm {
    * refuse text it cannot parse before anything reaches the host.
    */
   readonly argSchemas: string
+  /** Sensitive-path argument scan (1.18.0). */
+  readonly sensitivePathScan: 'off' | 'warn' | 'enforce'
+  /** Enabled sensitive-path classes, one per line (1.18.0). */
+  readonly sensitivePathClasses: string
 }
 
 /**
@@ -280,6 +284,8 @@ interface MutableToolDetectionPatch {
   entropyMinLength?: number
   allowedTables?: readonly string[]
   argSchemas?: readonly unknown[]
+  sensitivePathScan?: 'off' | 'warn' | 'enforce'
+  sensitivePathClasses?: readonly string[]
 }
 
 /** Mutable builder for the PII patch. */
@@ -1350,6 +1356,10 @@ export function toSettingsData(value: PanelSettingsValue): SettingsData {
       // `?? ''`: a host that predates 1.17.0 sends no such field. The form always
       // carries text, so "absent" and "empty" mean the same thing here.
       argSchemas: value.toolDetection.argSchemas ?? '',
+      // `?? ''`: a host that predates 1.18.0 sends no such field; an empty list is
+      // the same thing to the loader, so they must compare equal here too.
+      sensitivePathClasses: (value.toolDetection.sensitivePathClasses ?? []).join('\n'),
+      sensitivePathScan: value.toolDetection.sensitivePathScan ?? 'warn',
     },
     pii: { enabled: value.pii.enabled, classes: [...value.pii.classes] },
     lists: {
@@ -1532,6 +1542,17 @@ export function buildPatch(value: PanelSettingsValue, form: SettingsForm): Patch
   const savedArgSchemas = parseArgSchemasText(value.toolDetection.argSchemas ?? '').value ?? []
   if (argSchemas.value !== undefined && !sameJson(argSchemas.value, savedArgSchemas)) {
     toolDetectionPatch.argSchemas = argSchemas.value
+  }
+  // Sensitive-path scan (1.18.0). Same list discipline as `pii.classes`: order is not
+  // an edit, and the switch is compared by value.
+  const pathClasses = toolDetection.sensitivePathClasses
+    .split('\n').map(part => part.trim()).filter(part => part.length > 0)
+  const savedPathClasses = [...(value.toolDetection.sensitivePathClasses ?? [])].sort().join(',')
+  if ([...pathClasses].sort().join(',') !== savedPathClasses) {
+    toolDetectionPatch.sensitivePathClasses = pathClasses
+  }
+  if (toolDetection.sensitivePathScan !== (value.toolDetection.sensitivePathScan ?? 'warn')) {
+    toolDetectionPatch.sensitivePathScan = toolDetection.sensitivePathScan
   }
   const piiPatch: MutablePiiPatch = {}
   if (pii.enabled !== value.pii.enabled) piiPatch.enabled = pii.enabled
@@ -3366,6 +3387,37 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
             onChange={(next) => { updateToolDetection({ entropyMinLength: next }) }}
           />
         </div>
+        <div className="shp-form-grid">
+          <SelectField
+            label="敏感路径扫描（1.18.0）"
+            value={toolDetection.sensitivePathScan}
+            disabled={readOnly}
+            onChange={(next) => { updateToolDetection({ sensitivePathScan: next as 'off' | 'warn' | 'enforce' }) }}
+            options={[
+              { value: 'off', label: '关闭' },
+              { value: 'warn', label: '只记录（默认）' },
+              { value: 'enforce', label: '拒绝调用' },
+            ]}
+            hint="读 .env / id_rsa / *secret* 这类文件时，按路径判定意图"
+          />
+          <Field
+            label="启用的敏感路径类别（每行一个，留空 = 全不启用）"
+            value={toolDetection.sensitivePathClasses}
+            multiline
+            disabled={readOnly}
+            onChange={(next) => { updateToolDetection({ sensitivePathClasses: next }) }}
+          />
+        </div>
+        <p className="shp-card-hint">
+          类别：<code className="shp-mono">dotenv</code> / <code className="shp-mono">private_key</code> /
+          <code className="shp-mono">ssh_material</code> / <code className="shp-mono">cloud_credential</code> /
+          <code className="shp-mono">secret_file</code> / <code className="shp-mono">key_store</code>。
+          这是**热更新字段**：保存立即生效，不重载插件。
+          <code className="shp-mono">warn</code> 时账本每次调用都会记一条（只记类别，不记路径），
+          攒够样本再切 <code className="shp-mono">enforce</code>。
+          源码与文档扩展名（<code className="shp-mono">.ts</code> / <code className="shp-mono">.md</code> 等）
+          不算敏感文件名，<code className="shp-mono">.env.example</code> 与 <code className="shp-mono">*.pub</code> 亦排除。
+        </p>
         <Field
           label="SQL 表白名单（每行一个，留空 = 不限制）"
           value={toolDetection.allowedTables}

@@ -19,6 +19,7 @@ import { createJudgeFor } from '../hooks/llm.js'
 import { JUDGE_PROBE_TEXT } from '../surface/commands.js'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { isVolatileConfigPath, mergeConfigLayers } from '../config.js'
+import { isSensitivePathClass } from '../engine/sensitive-path.js'
 import { dirname } from 'node:path'
 import { resolveProviderIndexPath } from '../audit/paths.js'
 import { PII_CLASS_NAMES } from '../engine/pii.js'
@@ -838,6 +839,8 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       // The declarations as written, not the compiled entries: re-serialising a
       // compiled schema would normalise the operator's config on the first save.
       argSchemas: argSchemasText(cfg.argSchemaDeclarations),
+      sensitivePathScan: cfg.tools.sensitivePathScan,
+      sensitivePathClasses: [...cfg.tools.sensitivePathClasses],
     }
     const pii = { enabled: cfg.results.pii, classes: [...cfg.results.piiClasses] }
     const lists = {
@@ -1055,6 +1058,24 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         // Compiled here, before the write: a declaration that does not compile is a
         // refusal, not a silent drop (see `argSchemasField`).
         tools['argSchemas'] = argSchemasField(knobs.argSchemas)
+      }
+      if (knobs.sensitivePathScan !== undefined) {
+        if (knobs.sensitivePathScan !== 'off' && knobs.sensitivePathScan !== 'warn' && knobs.sensitivePathScan !== 'enforce') {
+          throw new PanelSettingsError('settings_invalid', 'toolDetection.sensitivePathScan must be off, warn or enforce')
+        }
+        tools['sensitivePathScan'] = knobs.sensitivePathScan
+      }
+      if (knobs.sensitivePathClasses !== undefined) {
+        if (!Array.isArray(knobs.sensitivePathClasses)) {
+          throw new PanelSettingsError('settings_invalid', 'toolDetection.sensitivePathClasses must be an array')
+        }
+        const unknown = knobs.sensitivePathClasses.filter(name => !isSensitivePathClass(name))
+        if (unknown.length > 0) {
+          // Closed vocabulary: a typo here would silently disable a class the operator
+          // believed was on, which is the failure this package keeps having to fix.
+          throw new PanelSettingsError('settings_invalid', `toolDetection.sensitivePathClasses has unknown names: ${unknown.slice(0, 3).join(', ')}`)
+        }
+        tools['sensitivePathClasses'] = [...knobs.sensitivePathClasses]
       }
     }
 

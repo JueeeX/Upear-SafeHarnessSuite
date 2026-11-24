@@ -102,6 +102,10 @@ describe('settings schema', () => {
       'output.judge.provider',
       'output.judge.scope',
       'output.judge.timeoutMs',
+      // 1.18.0: `reasoning` changes what the judge is fed, `reasoningRedact` changes
+      // what the user sees; both are live for the same reason the output mode is.
+      'output.reasoning',
+      'output.reasoningRedact',
       'output.mode',
       'results.mode',
       'results.pii',
@@ -112,6 +116,11 @@ describe('settings schema', () => {
       'tools.maxArgsBytes',
       'tools.mode',
       'tools.repeatedAttemptThreshold',
+      // 1.18.0: the sensitive-path scan is a live knob — an operator who sees the
+      // observations in the ledger has to be able to move it to `enforce` without a
+      // restart, or the evidence arrives too late to act on.
+      'tools.sensitivePathClasses',
+      'tools.sensitivePathScan',
       'tools.trajectory',
     ].sort())
   })
