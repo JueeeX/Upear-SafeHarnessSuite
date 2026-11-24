@@ -269,16 +269,66 @@ function detectVersionMismatch(): readonly string[] {
   return problems
 }
 
-/** Whether the HMR plugin is composed in this profile (loader entry scan). */
-function detectHmr(ctx: Context): boolean | undefined {
-  const loader = ctx.get('loader') as { entries?: () => Generator<{ name?: unknown; disabled?: unknown }> } | undefined
+/**
+ * Package names that mean "hot module replacement is loaded".
+ *
+ * The shipped bundle composes `@deepseek-ai/cordis-plugin-hmr` (`dsh-base` inserts
+ * it, `dsh-web-app` patches that same row to `disabled: true`). Earlier versions of
+ * this check looked for `dsh-hmr`, which no profile has ever composed — so the
+ * match failed for every deployment and the check reported "not composed" no matter
+ * what. Both spellings are accepted here so a rename in either direction keeps
+ * working, and the scoped form is why the pattern allows a `/` prefix.
+ */
+const HMR_PACKAGE = /(^|\/)(?:cordis-plugin-hmr|dsh-hmr)$/u
+
+/**
+ * The package name of one loader entry.
+ *
+ * `cordis-plugin-loader`'s `Entry` exposes `id`, `disabled`, `options`, `fiber` and
+ * `context` — **not** `name`; the package name lives in `options.name`. Reading only
+ * `entry.name` (the 1.16.2 and earlier behaviour) therefore read `undefined` for
+ * every real entry and could never match. The direct `name` is still consulted first
+ * so a host that ever adds that accessor keeps working.
+ */
+function entryPackageName(entry: unknown): string | undefined {
+  if (entry === null || typeof entry !== 'object') return undefined
+  const direct = (entry as { name?: unknown }).name
+  if (typeof direct === 'string' && direct.length > 0) return direct
+  const optioned = (entry as { options?: { name?: unknown } }).options?.name
+  return typeof optioned === 'string' && optioned.length > 0 ? optioned : undefined
+}
+
+/**
+ * Whether the HMR plugin is active in this profile (loader entry scan).
+ *
+ * HMR is the one thing that makes every other posture answer stale: a reload
+ * briefly drops every guard listener, so `hardened` refuses to load when this is
+ * true. The question is therefore "is any HMR entry enabled", not "does the first
+ * one I happen to see say so" — a profile can compose the row twice (base inserts,
+ * a later layer patches), and only the enabled row means a live reload.
+ *
+ * Exported for tests: the scan depends on a host shape a unit test cannot otherwise
+ * reach, and a check that silently reads the wrong field is exactly the failure this
+ * whole family of bugs keeps reproducing.
+ *
+ * @param ctx - plugin context carrying the loader service.
+ * @returns `true` when an HMR entry is enabled, `false` when HMR is absent or every
+ *   row is disabled, `undefined` when the loader surface is unreadable.
+ */
+export function detectHmr(ctx: Context): boolean | undefined {
+  const loader = ctx.get('loader') as
+    | { entries?: () => Iterable<{ options?: { name?: unknown }; name?: unknown; disabled?: unknown }> }
+    | undefined
   if (loader === undefined || typeof loader.entries !== 'function') return undefined
   try {
     for (const entry of loader.entries()) {
-      if (typeof entry.name === 'string' && /(^|\/)dsh-hmr$/u.test(entry.name)) {
-        return entry.disabled !== true
-      }
+      const name = entryPackageName(entry)
+      if (name === undefined || !HMR_PACKAGE.test(name)) continue
+      // `disabled` is a getter that walks the owning parents; a throwing one means
+      // we cannot tell, and "cannot tell" must not be reported as "harmless".
+      if (entry.disabled !== true) return true
     }
+    // No HMR row at all, or every HMR row is disabled: either way no reload happens.
     return false
   } catch {
     return undefined

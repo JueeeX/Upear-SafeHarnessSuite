@@ -2,6 +2,21 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.16.3 — 2026-11-24
+
+修复：**姿态的 HMR 一项同样是假 OK**——和 1.16.2 修的沙箱那一项是同一类病：结论碰巧正确，但检测根本不可能命中。`hardened` 的 `hmr_enabled` 加载门禁因此从来没可能拦住任何部署。
+
+- **症状**：本机 profile 里 HMR 是 `disabled: true`，姿态报 `OK / HMR not composed`（结论对）。但把 `disabled` 改成 `false` 之后，这一项**仍然**报 `OK / HMR not composed`——也就是说这道门禁对任何部署都不成立，只是恰好没有部署开着 HMR。
+- **根因**（两处独立缺陷，任一处都足以让检测恒失败）：
+  1. **读错字段**。`cordis-plugin-loader` 的 `Entry` 只有 `id` / `disabled` / `options` / `fiber` / `context`，**没有 `name`**；包名在 `options.name`。旧代码写的是 `entry.name`，对真实 entry 恒为 `undefined`。
+  2. **匹配错名字**。宿主真正组合的包是 `@deepseek-ai/cordis-plugin-hmr`（`dsh-base` insert，`dsh-web-app` 把那行 patch 成 `disabled: true`），而正则是 `/(^|\/)dsh-hmr$/u`——仓里从来没有过一个叫 `dsh-hmr` 的包。
+- **修法**：新增 `HMR_PACKAGE = /(^|\/)(?:cordis-plugin-hmr|dsh-hmr)$/u` 与 `entryPackageName()`（先看 `entry.name`，回落到 `options.name`，兼容性两个方向都留）；`detectHmr` 改为**扫到任何一条启用的 HMR 行就是 true**，而不是"先遇到的那条说了算"——profile 可以把同一行组合两次（base 插入 + 后续层 patch），只有启用的那条意味着真的会重载。`detectHmr` 导出供测试。
+- **失败方向不变**：loader 读不到 / 遍历抛错 / 读某个 entry 的 `disabled` 抛错 → `undefined`（姿态记 SKIP），**不猜成"没启用"**。这一点很关键：`hardened` 的 `failOn` 只认 FAIL，把"读不到"当成 `false` 会让 hardened 静默通过。
+- **测试**：新增 `tests/hmr-detect.test.ts` 8 条——真实包名（启用/禁用）、同一行组合两次且一启用（必须 true）、旧拼写兼容、`entry.name` 直挂的兼容形状、没有 HMR 行、loader 缺失/未就绪/遍历抛错、读 `options` 抛错、以及"名字里只是含 hmr"的相似包不得误判。
+- **测试口径**：62 文件 / **966** 用例（1.16.2 是 61 / 958）。
+
+**顺带写清一条被误传的操作结论**：改 profile 的 `cordis.patch.yml` **不需要重启**——`dsh-base` 组合了 `cordis-plugin-hmr` 并用 `applyEntryPatches` 重建 include 配置，patch 变了就重挂载 entry。本机两次实测：patch 里加 `judge.maxChars: 7777` → 5 秒内生效且账本多一条 `rules_reloaded`；改成 `8888` → 立刻生效；删掉 → 回到 12000。**只有换插件包（`node_modules` 变了）才必须重启**，因为 entry 已经 import 完，热重载不会重新解析包。1.16.0–1.16.2 的文档把这两件事混成了一句。
+
 ## 1.16.2 — 2026-11-23
 
 修复：**姿态的沙箱一项给过假 OK**——部署实际跑在 `danger-full-access` 却报 `sandbox mode is workspace-write`，连带 `hardened` 的 `sandbox_danger_full_access` 加载门禁等于不存在。

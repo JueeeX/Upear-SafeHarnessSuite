@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.16.2` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.16.3` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -103,7 +103,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 ### 2.4 审计、姿态、巡检、预算
 
 - **审计**：单行 JSON、哈希链（`prev_sha256`）、按字段名脱敏、按大小轮转；只存哈希与长度，不存原文（详见 §6）。
-- **姿态**（11 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`、`arg_schema_invalid`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。`arg_schema_invalid` 只报 WARN，默认不进 `failOn`（一个可选 schema 的笔误不该拒绝加载，理由见 §4.11）。**`sandbox_danger_full_access` 判定的是"实际在跑的会话"**：DSH 按会话解析沙箱模式，1.16.2 起这一项取部署默认与所有已观察会话中最宽的那个，读不到模式的会话按 WARN 计（详见 §5.2）。
+- **姿态**（11 项）：`sandbox_danger_full_access`、`approval_never`、`hmr_enabled`、`rules_loaded`、`ledger_writable`、`ledger_chain_ok`、`output_guard_off`、`judge_unavailable`、`plugin_version_mismatch`、`engine_sidecar_unavailable`、`arg_schema_invalid`。`posture.failOn` 里的 code 一旦 FAIL，`apply()` 抛错拒绝加载。`arg_schema_invalid` 只报 WARN，默认不进 `failOn`（一个可选 schema 的笔误不该拒绝加载，理由见 §4.11）。**`sandbox_danger_full_access` 判定的是"实际在跑的会话"**：DSH 按会话解析沙箱模式，1.16.2 起这一项取部署默认与所有已观察会话中最宽的那个，读不到模式的会话按 WARN 计（详见 §5.2）。**`hmr_enabled` 判的是"有没有一条启用的 HMR 行"**：1.16.3 起读 `entry.options.name` 并匹配 `cordis-plugin-hmr`（1.16.2 及以前读的是不存在的 `entry.name`、匹配的是从未存在过的 `dsh-hmr`，所以这一项对任何部署都恒报 "not composed"）；读不到 loader 时记 SKIP，**不猜成"没启用"**——`hardened` 的 `failOn` 只认 FAIL，猜错就是静默放行（详见 §5.3）。
 - **巡检**（5 项）：`audit_rate`（拒绝速率异常）、`health_probe`（GET 探针）、`config_drift`（与上次姿态报告对比）、`ledger_reconcile`（`tool_asked` vs `approval_decided` 对账）、`notify`（可选，多个通道）。退出码 `0` 干净、`1` 有 FAIL、`2` 巡检自身出错；巡检函数**从不抛异常**。
 - **预算**：`budget.maxTokensPerTurn > 0` 时按轮累计，越限只 warn（一个回合只记一条）。
 
@@ -794,6 +794,33 @@ DSH 的文件沙箱模式是**按会话**解析的：`ctx.sandboxPolicy.resolve(
 
 一个诚实的边界：插件只能为**它见过的会话**作答。进程启动前就存在、且此后没有任何事件的会话不会被计入——那种情况下报告反映的是"观察到的最宽模式"，不是"数学上所有会话的并集"。要把这条也收严，需要宿主暴露"列出所有活动会话 + 其沙箱模式"的接口，当前没有。
 
+### 5.3 姿态里的 HMR 一项怎么算（1.16.3 修正）
+
+HMR（热模块重载）是**唯一会让其他所有姿态答案瞬间过期**的东西：一次重载会短暂卸掉每一个守卫监听器。所以 `hardened` 的 `failOn` 里有 `hmr_enabled`，一旦真的在跑 HMR 就拒绝加载。
+
+1.16.2 及以前的判定是坏的，而且是两处独立的坏，任一处都足以让它恒失败：
+
+| 缺陷 | 旧代码 | 真实情况 |
+|---|---|---|
+| 读错字段 | `entry.name` | `cordis-plugin-loader` 的 `Entry` 只有 `id` / `disabled` / `options` / `fiber` / `context`，包名在 `options.name`；对真实 entry 读 `entry.name` 恒为 `undefined` |
+| 匹配错名字 | `/(^\|\/)dsh-hmr$/u` | 宿主组合的包是 `@deepseek-ai/cordis-plugin-hmr`（`dsh-base` insert，`dsh-web-app` 把那行 patch 成 `disabled: true`）。仓里从来没有过 `dsh-hmr` |
+
+后果是这一项对**任何**部署都返回"没组合"，报 `OK / HMR not composed`。本机恰好 HMR 是 `disabled: true`，所以结论碰巧正确——这正是最难发现的一类：绿灯亮着，灯泡是坏的。
+
+1.16.3 的规则：
+
+| 观察到的情况 | 结论 |
+|---|---|
+| 任一条 HMR 行存在且**未禁用** | `true` → `hardened` 为 `FAIL`（触发加载门禁），其余预设为 `OK`（信息性） |
+| HMR 行存在但全部 `disabled: true`，或根本没有 HMR 行 | `false` → `OK / HMR not composed` |
+| 没有 `loader` 服务 / `entries()` 抛错 / 读某条 entry 的 `options` 或 `disabled` 抛错 | `undefined` → `SKIP`，**绝不猜成 `false`** |
+
+最后一行是重点：`failOn` 只认 `FAIL`，把"读不到"当成"没启用"就是静默放行。**问不到 ≠ 安全**，和 §5.2 里沙箱那条是同一条原则。
+
+**同一行被组合两次怎么办**：profile 可以把同一行既有 `insert` 又有后续层的 `id` 覆盖（本机的 `hmr` 就是这样：base 插入，web-app 禁用它）。判定是"**存在任何一条启用的行就是启用**"，不是"先遇到的那条说了算"——只有启用的那条意味着真的会发生重载。
+
+**顺带纠正一条被误传的操作结论**：改 profile 的 `cordis.patch.yml` **不需要重启**。`dsh-base` 组合了 `cordis-plugin-hmr`，它 watch 着 patch 文件并在变化时用 `applyEntryPatches` 重建 include 配置、重挂载受影响的 entry。本机两次实测：patch 里加 `judge.maxChars: 7777` → 5 秒内生效果且账本多一条 `rules_reloaded`；改成 `8888` → 立刻生效；删掉 → 回到 12000。**只有换插件包本身（`node_modules` 变了）才必须重启**，因为 entry 已经 import 完，热重载不会重新解析包。
+
 ---
 
 ## 6. 审计账本与隐私
@@ -922,7 +949,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               958 个用例（61 个文件，1.16.2）
+├─ tests/               966 个用例（62 个文件，1.16.3）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -941,7 +968,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：61 个文件 / 958 个用例（1.16.2；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
+pnpm test             # vitest：62 个文件 / 966 个用例（1.16.3；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```
