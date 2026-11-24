@@ -29,7 +29,12 @@ function stubRuntime(overrides: {
       askTools: [] as string[],
       denyTags: [] as string[],
       tagOverrides: [] as { pattern: string; tags: string[] }[],
+      // 1.16.0 argument schemas: the compiled view plus the raw declarations the
+      // panel edits (the read projection shows the raw text, never the compiled one).
+      argSchemas: [] as unknown[],
     },
+    argSchemaProblems: [] as string[],
+    argSchemaDeclarations: [] as unknown[],
     results: {
       mode: 'warn' as const,
       pii: true,
@@ -289,8 +294,92 @@ describe('createPanelSettingsHost', () => {
       entropyThreshold: 0,
       entropyMinLength: 48,
       allowedTables: [],
+      // No declarations ⇒ empty text, the same thing an absent key means.
+      argSchemas: '',
     })
     expect(value.pii).toEqual({ enabled: true, classes: ['id_card', 'email'] })
+  })
+
+  it('writes a compiled tools.argSchemas list, and reads it back as raw JSON text', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    const declarations = [
+      { name: 'web_https_only', tool: 'web_fetch', args: { url: { urlScheme: ['https'] } } },
+      { name: 'write_inside', tool: 'write', args: { file_path: { pathPrefix: '/workspace' } } },
+    ]
+    await host.save({ toolDetection: { argSchemas: declarations } })
+    expect(update).toHaveBeenCalledWith('safeharness', { tools: { argSchemas: declarations } })
+  })
+
+  it('refuses an argSchemas declaration that does not compile, writing nothing', async () => {
+    // The loader drops a bad schema so a hand-edited profile still boots; a FORM
+    // must not do that. "Saved" followed by a silently discarded rule is the exact
+    // failure this plugin keeps having to fix, so the save is refused instead.
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    // `regex` is not a keyword this loader accepts (the 1.16.0 misspelling trap).
+    await expect(host.save({
+      toolDetection: {
+        argSchemas: [{ name: 'typo', tool: 'write', args: { file_path: { regex: '^/w' } } }],
+      },
+    })).rejects.toMatchObject({ code: 'settings_invalid' })
+    // A relative pathPrefix is refused at compile time (1.16.2 hardening).
+    await expect(host.save({
+      toolDetection: {
+        argSchemas: [{ name: 'relative', tool: 'write', args: { file_path: { pathPrefix: 'workspace' } } }],
+      },
+    })).rejects.toMatchObject({ code: 'settings_invalid' })
+    // An empty enum can never match anything.
+    await expect(host.save({
+      toolDetection: {
+        argSchemas: [{ name: 'empty', tool: 'write', args: { file_path: { enum: [] } } }],
+      },
+    })).rejects.toMatchObject({ code: 'settings_invalid' })
+    // Not an array, and an array of non-objects.
+    await expect(host.save({ toolDetection: { argSchemas: 'nope' as never } }))
+      .rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ toolDetection: { argSchemas: ['nope'] as never } }))
+      .rejects.toMatchObject({ code: 'settings_invalid' })
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('accepts an empty argSchemas list as "no declarations"', async () => {
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ toolDetection: { argSchemas: [] } })
+    expect(update).toHaveBeenCalledWith('safeharness', { tools: { argSchemas: [] } })
+  })
+
+  it('reads declarations back verbatim, not reconstructed from the compiled entries', async () => {
+    // Compiled entries have already normalised paths and folded case; echoing those
+    // would rewrite the operator's config the first time the form is saved untouched.
+    const update = vi.fn(async () => undefined)
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const raw = [{ name: 'keep_me_verbatim', tool: 'write', args: { file_path: { pathPrefix: 'F:/W' } } }]
+    const runtime = stubRuntime()
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      { ...runtime, config: { ...runtime.config, argSchemaDeclarations: raw } } as never,
+      logger,
+    )
+    const value = await host.read()
+    expect(JSON.parse(value.toolDetection.argSchemas)).toEqual(raw)
+    expect(value.toolDetection.argSchemas).toContain('F:/W')
   })
 
   it('writes the 1.13.0 list fields into tools / results / approval', async () => {

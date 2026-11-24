@@ -578,6 +578,18 @@ export interface ResolvedConfig {
    * Messages name the schema, the argument and the keyword; never a value.
    */
   readonly argSchemaProblems: readonly string[]
+  /**
+   * The declarations exactly as the operator wrote them (1.17.0).
+   *
+   * The panel edits this list, so it needs the original shape rather than a
+   * reconstruction from {@link ResolvedConfig.tools.argSchemas}: a compiled entry
+   * has already normalised paths, folded case and sorted a few things, and
+   * round-tripping through it would silently rewrite the operator's config the
+   * first time they open the form and press save.
+   *
+   * Frozen like the rest of the resolved config; an absent list is empty.
+   */
+  readonly argSchemaDeclarations: readonly unknown[]
 }
 
 /**
@@ -994,6 +1006,9 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       maxTokens: positive(draft.maxTokens, 'draft.maxTokens', problems, 400),
     },
     argSchemaProblems: argSchemas.problems,
+    // The raw declarations, kept for the panel's editor (compiled entries have
+    // already normalised; re-serialising those would rewrite the config on save).
+    argSchemaDeclarations: Array.isArray(tools.argSchemas) ? tools.argSchemas : [],
   }
 
   if (resolved.output.judge.enabled && (resolved.output.judge.provider === '' || resolved.output.judge.model === '')) {

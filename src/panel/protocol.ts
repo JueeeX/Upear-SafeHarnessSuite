@@ -260,6 +260,18 @@ export interface PanelToolDetection {
   readonly entropyMinLength: number
   /** SQL table allowlist for scanned arguments; empty means no restriction. */
   readonly allowedTables: readonly string[]
+  /**
+   * `tools.argSchemas` exactly as declared, pretty-printed JSON (1.17.0).
+   *
+   * JSON, not the YAML the profile stores, for two reasons: the browser half has no
+   * YAML emitter, and the plugin's own parser refuses flow sequences such as
+   * `[https]`, which is the natural way to write a compact schema. Empty string means
+   * "no declarations" — the same thing an absent key means.
+   *
+   * Not a `volatile` field: a save rewrites the profile patch and the loader remounts
+   * the entry (the card says so next to the control).
+   */
+  readonly argSchemas: string
 }
 
 /** Result-surface PII scan settings (kernel `memory/sanitizer.py` classes). */
@@ -412,6 +424,14 @@ export interface PanelSettingsPatch {
     readonly entropyThreshold?: number
     readonly entropyMinLength?: number
     readonly allowedTables?: readonly string[]
+    /**
+     * Replacement `tools.argSchemas` list, as the declarations themselves (1.17.0).
+     *
+     * The browser parses the JSON textarea into this shape before sending; the host
+     * re-validates by compiling it, so a payload that skipped the browser is still
+     * refused rather than persisted. An empty array clears the list.
+     */
+    readonly argSchemas?: readonly unknown[]
   }
   /** Tool-result PII scan (`enabled` plus an optional class subset). */
   readonly pii?: {
