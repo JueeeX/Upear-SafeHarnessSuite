@@ -427,6 +427,56 @@ function describeFailure(error: unknown): string {
 }
 
 /**
+ * Longest host diagnostic quoted back to the operator.
+ *
+ * Sized so the whole envelope message stays under the route's 200-char cap:
+ * "the host rejected the configuration write — " is 46, an `Error [CODE]: ` prefix
+ * is at most ~40, so 110 leaves room. Truncating is better than letting the route
+ * cut the tail, which would drop the part that names the cause.
+ */
+const MAX_WRITE_DIAGNOSTIC = 110
+
+/**
+ * The operator-facing half of a refused settings write (1.17.1).
+ *
+ * Why this exists: until 1.17.0 the panel answered every refusal with "the host
+ * rejected the configuration write" and nothing else. That is the same failure this
+ * plugin keeps having to fix — a useless message that reads like operator error and
+ * hides the actual reason. Measured 2026-11-24: *every* non-volatile save (deny
+ * lists, tag overrides, the SQL allowlist, `rules.dir`, `argSchemas`) was refused
+ * while every `volatile` field saved, and the message made that indistinguishable
+ * from a typo.
+ *
+ * What may be quoted: the host's own diagnostic, bounded and trimmed to one line.
+ * Those messages are configuration validation ("... must be a map of namespace
+ * sections", "tools.argSchemas.0.args: Expected string") — paths and keywords, the
+ * operator's own config, never model content or a credential. This is the same
+ * surface that already returns `rulesDir` and `configPath`.
+ *
+ * What must not: a message that could carry a value. `settings_invalid` from this
+ * file is built here and is safe; anything else is truncated before it leaves.
+ *
+ * @param error - whatever the host threw.
+ * @returns the error name, its machine code, and a bounded single-line message.
+ */
+function describeWriteFailure(error: unknown): string {
+  if (!(error instanceof Error)) return `host threw a non-Error (${String(error).slice(0, 40)})`
+  const code = (error as { code?: unknown }).code
+  const label = [
+    error.name.length > 0 ? error.name : 'Error',
+    typeof code === 'string' && code.length > 0 && code.length <= 64 ? `[${code}]` : '',
+  ].filter(part => part.length > 0).join(' ')
+  // First line only: a zod/aggregate message can be a multi-line dump, and the
+  // panel renders one line.
+  const firstLine = error.message.split(/\r?\n/u)[0]?.trim() ?? ''
+  const message = firstLine.length > MAX_WRITE_DIAGNOSTIC
+    ? `${firstLine.slice(0, MAX_WRITE_DIAGNOSTIC)}…`
+    : firstLine
+  return message.length === 0 ? label : `${label}: ${message}`
+}
+
+
+/**
  * Whether a host settings write was refused as stale.
  *
  * Recognised structurally because the class belongs to the host: `SettingsConflictError`
@@ -1001,10 +1051,29 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       if (expected === undefined) await settings.update(ns, update)
       else await settings.update(ns, update, expected)
     } catch (error) {
+      const diagnostic = describeWriteFailure(error)
       logger.warn(`safeharness: settings write failed (${describeFailure(error)})`)
+      // The ledger keeps its own discipline: identifiers only, never a message.
+      // A host diagnostic can carry a path (`... cordis.patch.yml must be a map of
+      // namespace sections`), and this ledger has never held a path. So the record
+      // names the failure class and the fields that were being written; the reason
+      // itself goes to the operator through the panel response, which already
+      // carries `configPath` and `rulesDir` and stays on loopback.
+      const code = (error as { code?: unknown } | null)?.code
+      runtime.audit('invariant_probe', {
+        decision: 'warn',
+        reason_code: 'panel_settings',
+        labels: {
+          state: 'settings_write_failed',
+          fields: Object.keys(update).sort().join(',').slice(0, 120),
+          error_name: error instanceof Error ? error.name.slice(0, 64) : 'non-error',
+          ...(typeof code === 'string' && code.length > 0 && code.length <= 64 ? { error_code: code } : {}),
+          ...(typeof patch.expectedRevision === 'number' ? { expected_revision: String(patch.expectedRevision) } : {}),
+        },
+      })
       throw isSettingsConflict(error)
         ? new PanelSettingsError('settings_conflict', 'the profile configuration changed since it was read; reload and retry')
-        : new PanelSettingsError('settings_write_failed', 'the host rejected the configuration write')
+        : new PanelSettingsError('settings_write_failed', `the host rejected the configuration write — ${diagnostic}`)
     }
 
     runtime.audit('invariant_probe', {

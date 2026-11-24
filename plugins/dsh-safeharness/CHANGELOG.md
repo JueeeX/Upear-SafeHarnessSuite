@@ -2,6 +2,18 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.17.1 — 2026-11-24
+
+修 1.17.0 的验收事故：**面板里每一个「非 volatile」字段都存不进去，而报错只说了一句「宿主拒绝了配置写入」。**
+
+- **实测范围**（2026-11-24，桌面版 0.2.2-rc.5）：用面板接口逐字段试，`volatile` 全过（`judge.maxChars` / `tools.descriptorScan` / `results.piiClasses`），**非 volatile 全挂**——`tools.argSchemas`、`tools.denyTools`、`results.blockOn`、`rules.dir`、`patrol.minCount`，一律 `settings_write_failed`，patch 文件一个字节没动。所以这不是 1.17.0 新功能的缺陷，而是**标着「保存会重载插件」的那些格子一直是坏的**，只是没人试过。
+- **本版只改错误可见性，不改写入行为**：拒绝原因现在原样带回面板（`Error [CODE]: <宿主原文>`），单行、截断到 110 字符，保证整条消息仍在路由的 200 字符上限内（否则尾部——也就是点名原因的那半句——会被裁掉）。
+- **不把宿主的 message 写进账本**。宿主诊断里可能带路径（`… cordis.patch.yml must be a map of namespace sections`），而这个账本从来没存过路径。所以账本里记的是**失败类别**：`error_name` / `error_code` / 被写的字段名 / `expectedRevision`，不含 message。原因本身只经面板响应回给操作者——那条通道本来就有 `configPath`、`rulesDir`，且只走 loopback。
+- **面板侧**：保存失败的提示不再只说「看宿主日志」，而是把服务端原文附在粗粒度代码后面（`SaveState` 增加可选 `detail`，`detailOf` 本来就在取这个字段，只是被丢掉了）。
+- **测试**：新增 3 条（原因原样回传且单行、账本只记类别不记 message、超长诊断被截断且不吞换行行尾），既有那条「不泄漏宿主错误」改为断言前缀仍在。62 文件 / **973** 用例。
+
+> **还没解决的事，写清楚**：非 volatile 写入为什么被拒，本版**没有**修好，只是让它可诊断。根因未定位——用真实 `FileSettingsProvider` 在临时文档上复现时，map 文档下 volatile 与非 volatile **都写成功**；而活进程里拒绝发生在插件摸不到的地方。下一次重启后跑同样的用例，返回里会带宿主的原话，再据此判断是绕开还是上报宿主。
+
 ## 1.17.0 — 2026-11-24
 
 功能：**`tools.argSchemas` 可以在面板里编辑了**。1.16.x 起这项能力只能靠手改 profile patch，看得到、改不动——面板上的缺口正好落在最需要试验（且最容易写错）的那组配置上。
