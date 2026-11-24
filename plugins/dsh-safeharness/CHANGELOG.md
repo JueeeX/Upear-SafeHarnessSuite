@@ -28,9 +28,25 @@
   整体替换、无 `configEditor` 时报 `settings_readonly`、ordinary 路径的 revision 冲突、
   volatile-only 保存不碰 editor。62 文件 / **980** 用例。
 
-> **实测待办**：这条修复本身还没在真机上跑过。重启后应能用面板保存 `argSchemas` / deny 列表 /
-  `rules.dir`；账本会多出 `invariant_probe` 的 `settings_saved`，以及一条 `rules_reloaded`
-> （ordinary 路径会重载 entry）。
+> **真机验收（2026-11-24 14:26，桌面版 0.2.2-rc.5，重启后跑 1.17.2）——已通过**：
+>
+> | 用例 | 结果 |
+> |---|---|
+> | 保存 `tools.argSchemas`（非 volatile） | ✅ 成功后 patch 新增声明 |
+> | 保存 `lists.denyTools`（非 volatile） | ✅ 同上 |
+> | 清空 `denyTools` 回 `[]` | ✅ |
+> | 保存 `judge.maxChars`（volatile） | ✅ 且 `plugin_loaded` 计数不变——热更、不重载 |
+> | 非 volatile 保存 | ✅ `plugin_loaded` 计数 +1——确实走重载，与面板文案一致 |
+>
+> **保真性**：把 patch 与验收前基线逐行 diff，两次非 volatile 保存**只**增加了被写的那几行，
+> 其余字段（`preset` / `output.judge` / `input` / `rules.dir` / 原有 `ssrf` 声明）一个字节没动。
+> 这比"保存成功"更要紧——`configEditor.edit` 合并的是完整原始配置，写错会静默改写整块配置。
+>
+> **执法复验**：验收期间 `web_fetch http://example.com/` 被拒，账本
+> `tool_denied deny rules=ssrf_block_link_local rc=unauthorized_tool_argument args_chars=29`
+> （无参数原文）；`https://example.com/` 正常放行。**保存成功不等于规则在拦，得单独确认。**
+>
+> 验收后 patch 已还原到验收前基线（逐字节相同）。
 
 ## 1.17.1 — 2026-11-24
 
