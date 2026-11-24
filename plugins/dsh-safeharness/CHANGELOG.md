@@ -6,7 +6,7 @@
 
 修复：**姿态的 HMR 一项同样是假 OK**——和 1.16.2 修的沙箱那一项是同一类病：结论碰巧正确，但检测根本不可能命中。`hardened` 的 `hmr_enabled` 加载门禁因此从来没可能拦住任何部署。
 
-- **症状**：本机 profile 里 HMR 是 `disabled: true`，姿态报 `OK / HMR not composed`（结论对）。但把 `disabled` 改成 `false` 之后，这一项**仍然**报 `OK / HMR not composed`——也就是说这道门禁对任何部署都不成立，只是恰好没有部署开着 HMR。
+- **症状**：姿态报 `OK / HMR not composed`，而把 profile 里的 `hmr` 行改成 `disabled: false` 之后**仍然**报 `OK / HMR not composed`——门禁对任何部署都不成立。（当时我据此认为"本机 HMR 是禁用的，结论碰巧正确"；真机复验证明这个判断是错的，见下方复验段。）
 - **根因**（两处独立缺陷，任一处都足以让检测恒失败）：
   1. **读错字段**。`cordis-plugin-loader` 的 `Entry` 只有 `id` / `disabled` / `options` / `fiber` / `context`，**没有 `name`**；包名在 `options.name`。旧代码写的是 `entry.name`，对真实 entry 恒为 `undefined`。
   2. **匹配错名字**。宿主真正组合的包是 `@deepseek-ai/cordis-plugin-hmr`（`dsh-base` insert，`dsh-web-app` 把那行 patch 成 `disabled: true`），而正则是 `/(^|\/)dsh-hmr$/u`——仓里从来没有过一个叫 `dsh-hmr` 的包。
@@ -14,6 +14,33 @@
 - **失败方向不变**：loader 读不到 / 遍历抛错 / 读某个 entry 的 `disabled` 抛错 → `undefined`（姿态记 SKIP），**不猜成"没启用"**。这一点很关键：`hardened` 的 `failOn` 只认 FAIL，把"读不到"当成 `false` 会让 hardened 静默通过。
 - **测试**：新增 `tests/hmr-detect.test.ts` 8 条——真实包名（启用/禁用）、同一行组合两次且一启用（必须 true）、旧拼写兼容、`entry.name` 直挂的兼容形状、没有 HMR 行、loader 缺失/未就绪/遍历抛错、读 `options` 抛错、以及"名字里只是含 hmr"的相似包不得误判。
 - **测试口径**：62 文件 / **966** 用例（1.16.2 是 61 / 958）。
+
+### 1.16.3 真机复验（2026-11-24，重启后）
+
+装进 profile 并重启后，`/safeharness/status` 报 `version: 1.16.3`，账本 `plugin_loaded` 为 `seq 18238 / 2026-11-24T01:50:37Z / plugin_version 1.16.3`。姿态这一项从 `OK / HMR not composed` 变成了 **`OK / hot-module reload is enabled …`** ——返回值从恒 `false` 变成 `true`，说明检测终于读到了真实 entry。
+
+**但真机复验同时揭穿了一个我之前写错的说明**：桌面版的 HMR 并没有真的被禁用。`dsh-web-app` 确实把组合出来的 `hmr` 行 patch 成 `disabled: true`，可 **启动器在 `boot()` 之后自己又建了一条**：
+
+```js
+// @deepseek-ai/dsh/lib/profile-boot-*.js
+if (ctx.get("hmr") === void 0) {
+  await ctx.loader.create({ name: "@deepseek-ai/cordis-plugin-hmr", config: { root: [] } })
+}
+await watchUserPatches(ctx, ...)   // 然后才挂 patch 层监听
+```
+
+所以 `hmr_enabled: true` 在桌面版是**正确结论**，不是误报。我先前在 MANUAL §5.3 里推断"本机 HMR 是禁用的、结论碰巧正确"，那是只看了组合树、没看启动器的结果，已订正为 MANUAL §5.4。
+
+**这条运行期 entry 只做一半的事**（`root: []`）：
+
+| 能力 | 驱动者 | `root: []` 时 |
+|---|---|---|
+| 配置文件热更（patch 变了 → 重挂载 entry） | `registerConfig()` 自带 watcher（`watchUserPatches`），与 `root` 无关 | ✅ 正常 |
+| 模块热替换（换掉正在跑的模块） | 主 watcher over `root` | ❌ 惰性：`root.length === 0` 直接 resolve，chokidar 收空数组监听 0 个路径（实测 `getWatched()` = 0） |
+
+实际含义：**桌面版的 `true` 意味着"配置能热更"，不意味着"守卫代码会在运行中被换掉"**。`balanced` 下这是信息性 OK；**`hardened` 下它会 FAIL 并拒绝加载**——这是桌面版的现实，插件不该去猜掉它。
+
+**同批订正**：「改 patch 不需要重启」的原因不是模块热替换，而是 `watchUserPatches` + `registerConfig` 那条独立路径。结论不变，理由写对了。
 
 **顺带写清一条被误传的操作结论**：改 profile 的 `cordis.patch.yml` **不需要重启**——`dsh-base` 组合了 `cordis-plugin-hmr` 并用 `applyEntryPatches` 重建 include 配置，patch 变了就重挂载 entry。本机两次实测：patch 里加 `judge.maxChars: 7777` → 5 秒内生效且账本多一条 `rules_reloaded`；改成 `8888` → 立刻生效；删掉 → 回到 12000。**只有换插件包（`node_modules` 变了）才必须重启**，因为 entry 已经 import 完，热重载不会重新解析包。1.16.0–1.16.2 的文档把这两件事混成了一句。
 
