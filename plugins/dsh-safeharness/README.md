@@ -1,10 +1,10 @@
 # SafeHarness for DeepSeek Harness
 
-> 版本 `1.18.1` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
+> 版本 `1.18.2` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0
 
 DSH 的智能体安全插件：输入防线、工具调用管控、工具结果守卫（凭据 / 注入 / PII）、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，以一个 profile 级 Cordis 插件包交付。
 
-**安装**（装完即挂载）：`& $dsh plugin --profile <profile> add "file:<path>\upear-dsh-safeharness-1.18.1.tgz"`
+**安装**（装完即挂载）：`& $dsh plugin --profile <profile> add "file:<path>\upear-dsh-safeharness-1.18.2.tgz"`
 **面板**：插件 → `@upear/dsh-safeharness` —— 概览 / 事件 / 规则 / 巡检 / 设置
 
 **完整文档（GitHub）**
