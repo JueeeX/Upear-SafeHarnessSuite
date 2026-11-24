@@ -382,6 +382,84 @@ describe('createPanelSettingsHost', () => {
     expect(value.toolDetection.argSchemas).toContain('F:/W')
   })
 
+  it('quotes the host refusal reason instead of swallowing it, and records the class', async () => {
+    // 1.17.1: measured on the real host, EVERY non-volatile save was refused with
+    // "the host rejected the configuration write" and nothing else, which reads
+    // like operator error and hides the cause. The reason must reach the operator.
+    const hostError = Object.assign(
+      new TypeError('settings-file: the document must be a map of namespace sections'),
+      { code: 'SETTINGS_FILE_SHAPE' },
+    )
+    const update = vi.fn(async () => { throw hostError })
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const audited: { kind: string; fields: Record<string, unknown> }[] = []
+    const runtime = stubRuntime()
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      {
+        ...runtime,
+        audit: (kind: string, fields: Record<string, unknown>) => { audited.push({ kind, fields }) },
+      } as never,
+      logger,
+    )
+    const rejection = await host.save({ toolDetection: { argSchemas: [] } }).then(
+      () => undefined,
+      (error: { code?: string; message?: string }) => error,
+    )
+    expect(rejection?.code).toBe('settings_write_failed')
+    // The host's own words survive, with its machine code, on one line.
+    expect(rejection?.message).toContain('must be a map of namespace sections')
+    expect(rejection?.message).toContain('SETTINGS_FILE_SHAPE')
+    expect(rejection?.message).not.toContain('\n')
+    // …and the refusal is in the ledger as a CLASS, not as the message: the ledger
+    // has never held a path, and a host diagnostic may contain one.
+    const record = audited.find((entry) => {
+      const labels = entry.fields['labels'] as Record<string, unknown> | undefined
+      return labels?.['state'] === 'settings_write_failed'
+    })
+    expect(record?.kind).toBe('invariant_probe')
+    const labels = record?.fields['labels'] as Record<string, unknown>
+    expect(labels['error_name']).toBe('TypeError')
+    expect(labels['error_code']).toBe('SETTINGS_FILE_SHAPE')
+    expect(labels['fields']).toBe('tools')
+    expect(JSON.stringify(labels)).not.toContain('namespace sections')
+  })
+
+  it('bounds the quoted diagnostic and never emits a multi-line dump', async () => {
+    const long = `${'x'.repeat(400)}\nsecond line ${'y'.repeat(50)}`
+    const update = vi.fn(async () => { throw new Error(long) })
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    const rejection = await host.save({ toolDetection: { argSchemas: [] } }).then(
+      () => undefined,
+      (error: { message?: string }) => error,
+    )
+    const message = rejection?.message ?? ''
+    expect(message).not.toContain('\n')
+    expect(message).not.toContain('second line')
+    // 160-char cap plus the fixed prefix.
+    expect(message.length).toBeLessThan(260)
+  })
+
+  it('keeps the stale-revision refusal distinct from a write failure', async () => {
+    // A conflict is the operator's fix (refresh and retry), not a host refusal, so it
+    // must not inherit the diagnostic suffix.
+    const conflict = Object.assign(new Error('namespace moved'), { code: 'SETTINGS_CONFLICT' })
+    const update = vi.fn(async () => { throw conflict })
+    const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: editor }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ toolDetection: { argSchemas: [] } }))
+      .rejects.toMatchObject({ code: 'settings_conflict' })
+  })
+
   it('writes the 1.13.0 list fields into tools / results / approval', async () => {
     const update = vi.fn(async () => undefined)
     const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
@@ -538,6 +616,9 @@ describe('createPanelSettingsHost', () => {
   })
 
   it('reports the settings write failure without leaking the host error', async () => {
+    // The message must carry the host's own reason (1.17.1) but never the whole
+    // error object: no stack, no path-free guarantee needed because the detail is
+    // a single bounded line chosen by the caller, not `String(error)`.
     const update = vi.fn(async () => { throw new Error('disk full at C:\\secret') })
     const editor = { entries: () => [{ options: { id: 'safeharness', name: '@upear/dsh-safeharness' } }] }
     const host = createPanelSettingsHost(
@@ -546,7 +627,10 @@ describe('createPanelSettingsHost', () => {
       logger,
     )
     await expect(host.save({ judge: { enabled: false } })).rejects.toEqual(
-      expect.objectContaining({ code: 'settings_write_failed', message: 'the host rejected the configuration write' }),
+      expect.objectContaining({
+        code: 'settings_write_failed',
+        message: expect.stringContaining('the host rejected the configuration write'),
+      }),
     )
   })
 

@@ -228,7 +228,13 @@ type SaveState =
   | { readonly status: 'idle' }
   | { readonly status: 'saving' }
   | { readonly status: 'saved' }
-  | { readonly status: 'error'; readonly code: string }
+  /**
+   * `detail` is the server's own message, shown next to the coarse code (1.17.1).
+   * The host's refusal reason is the only thing that tells an operator whether the
+   * problem is a typo or the host rejecting the write category, and it was being
+   * dropped here in favour of "look at the host log".
+   */
+  | { readonly status: 'error'; readonly code: string; readonly detail?: string }
 
 /** Judge probe state. */
 type ProbeState =
@@ -1223,7 +1229,7 @@ function settingsErrorMessage(code: string): string {
     case 'settings_unavailable': return '本 profile 没有可读的配置服务（settings_unavailable）。'
     case 'settings_readonly': return '配置是只读的，宿主机不允许写入（settings_readonly）。'
     case 'settings_invalid': return '要保存的取值不合法（settings_invalid），请检查字符数与超时。'
-    case 'settings_write_failed': return '写入 profile 配置失败（settings_write_failed），看宿主日志。'
+    case 'settings_write_failed': return '写入 profile 配置失败（settings_write_failed）：'
     case 'settings_conflict': return '配置在读取之后被别处改过（settings_conflict）：刷新面板再保存。'
     case 'probe_unavailable': return '本 profile 不能探测评审路由（probe_unavailable）。'
     case 'judge_unavailable': return '本 profile 没有可用的 llm 服务（judge_unavailable）。'
@@ -3074,7 +3080,7 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
         storeValue(SETTINGS_SAVED_KEY, String(Date.now()))
         onRefresh()
       },
-      (error: unknown) => { setSave({ status: 'error', code: codeOf(error) }) },
+      (error: unknown) => { setSave({ status: 'error', code: codeOf(error), ...(detailOf(error) === undefined ? {} : { detail: detailOf(error) }) }) },
     )
   }, [face, onRefresh, patchResult])
 
@@ -3889,7 +3895,12 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
         <span className={dirty ? 'shp-dirty' : 'shp-hint'}>{dirty ? '有未保存的修改' : '没有修改'}</span>
         <span className="shp-spacer" />
         {save.status === 'saved' ? <span className="shp-line-ok" role="status">已保存</span> : null}
-        {save.status === 'error' ? <span className="shp-line-error" role="alert">{settingsErrorMessage(save.code)}</span> : null}
+        {save.status === 'error' ? (
+          <span className="shp-line-error" role="alert">
+            {settingsErrorMessage(save.code)}
+            {save.detail === undefined ? null : <span className="shp-mono"> {save.detail}</span>}
+          </span>
+        ) : null}
         {/* The reason a save is refused belongs next to the button, not below the bar:
             an invalid value used to render its alert under the fold and read as
             "没有修改" with a save button that never lit up. */}
