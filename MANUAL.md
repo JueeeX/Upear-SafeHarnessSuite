@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语义装进 DSH 的执行生命周期——输入防线、工具调用管控、工具结果守卫、输出复查、语义 judge、审批桥、审计账本、姿态自检与外部巡检，全部以一个 **profile 级 Cordis 插件包** 交付。
 
-> 版本 `1.19.0` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
+> 版本 `1.21.0` · 宿主 DSH `0.2.2-rc.5`（兼容 `0.2.2-rc.3`）· Node ≥ 24 · 运行时零第三方依赖 · Apache-2.0 · 变更历史见 [CHANGELOG.md](CHANGELOG.md)
 
 - [1. 这是什么（以及不是什么）](#1-这是什么以及不是什么)
 - [2. 安全能力](#2-安全能力)
@@ -79,7 +79,7 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 - 输入超长（默认 60000 字符）先截断再匹配；截断本身记 WARN，不单独拒绝。
 - 拒绝话术是固定的一句通用说明，不回显命中内容；被拒输入不会进入模型历史。
 - **归一化（1.11.0）**：匹配前先去零宽字符与 HTML 注释、再 NFKC 折叠，所以 `ig\u200Bnore`、全角 `ＩＧＮＯＲＥ` 与明文命中同一批规则；清洗后放行的回合以清洗文本进入模型（详见 §4.9）。
-- **输入语义评审（1.11.0）**：`input.judge: flagged`（默认）时，结构规则命中但未拒绝的回合额外做一次模型复核；`block` 直接拒，无结论按 `input.judgeFailClosed` 处理（详见 §4.9）。
+- **输入语义评审（1.11.0）**：`input.judge: flagged`（默认）时，结构规则命中但未拒绝的回合额外做一次模型复核；`block` 直接拒，无结论按 `input.judgeFailClosed` 处理；评审 deadline 可用 `input.judgeTimeoutMs` 单独放宽（1.20.0），详见 §4.9。
 
 ### 2.2 工具执行面
 
@@ -100,6 +100,15 @@ DeepSeek Harness（DSH）的智能体安全插件：把 SafeHarness 的安全语
 - `output.mode: enforce-buffer`：缓冲整条回答后再决定回放还是替换——**代价是牺牲流式**，首字延迟等于整条生成时间；受 `bufferTimeoutMs`（默认 15000）与 `bufferMaxChars`（默认 512000）约束，超限**降级为透传**并在账本记 `labels.buffer=timeout|max_chars`，不会静默吞回答。命中凭据或规则命中时整条替换为固定拒绝话术。
 - **judge 预算与空回答重试（1.19.0）**：单次调用预算 4096 token（原来 2048——实测思考模型会把 2048 全花在思考上，`response_chars=0` 而 `usage_output` 上千）。若首次返回**完全没有文本**，用 8192 预算重试一次，并在指令后追加「立刻只回 JSON」；成功后账本记 `labels.attempts=2`。**`bad_json` 与 `timeout` 不重试**（再问一次不会让 JSON 可解析，deadline 也已花光），重试**不会越过操作者设定的 deadline**。
 - 可选 judge（默认关闭）：通过宿主 `ctx.llm` 做一次结构化复核，`scope: flagged` 只复核已被结构化规则命中的回答（省成本），`always` 每答必审。judge 不可用/超时/坏 JSON 时按预设降级：`hardened` 拒绝输出，`observe`/`balanced` 记 WARN 放行。judge 自己的模型调用带内部标记，**不会被再次复核**（递归防护）；只有 tool_calls、没有文本的回答不送 judge。
+> **2026-11-25 实测更正**：这条诊断只对三分之一的样本成立，**且重试至今一次都没触发**。
+> 全账本 79 条空回答里只有 **25 条（32%）** 的 `usage_output` 超过旧的 2048 预算；
+> `judge_ms` 中位数 810 ms、**没有一条**超过 4 秒——所以它们不是「想太久被 6 秒墙切断」。
+> 空回答在 `2026-11-24T02:32Z` 之后彻底消失，原因是**换了一条评审路由**：
+> 同一个 1.16.3 上，换路前 6 次调用 6 条空回答，换路后 6 次调用 4 条成功、0 条空回答。
+> 1.19.0 的 4096 预算 + 8192 重试**作为兜底保留**（无害），但**不能记为已验证的修复**。
+> 取证与复算方法见仓库内 `docs/verification-2026-11-25.md`。
+
+> **另注（1.20.0）**：`labels.attempts` 这个说法本身也没兑现过——全账本 `metrics.attempts` 出现过 14 次，取值只有 `1`；`labels.attempts` **一次都没写过**。
 
 ### 2.4 审计、姿态、巡检、预算
 
@@ -248,7 +257,13 @@ config:
     timeoutMs: 1500                       # 单次输入判定超时
     startTimeoutMs: 10000                 # 握手超时
   rules: { dir: "", watch: true, inline: [] }
-  input: { mode: enforce, maxChars: 60000 }
+  input:
+    mode: enforce
+    maxChars: 60000
+    judge: flagged                      # 1.11.0：off | flagged | always
+    judgeFailClosed: false              # 评审无结论是否拒绝（hardened 强制 true）
+    judgeTimeoutMs: 0                   # 1.20.0：0 = 沿用 output.judge.timeoutMs
+    judgeMaxTokens: 0                   # 1.21.0：0 = 沿用 output.judge.maxTokens
   tools:
     mode: enforce
     denyTools: ["bash", "pwsh"]           # 工具名 glob（只支持 *）
@@ -274,6 +289,8 @@ config:
       model: ""
       maxChars: 12000
       timeoutMs: 4000
+      maxTokens: 0                       # 1.21.0：单次评审的补全预算，0 = 内置 4096
+      reasoningEffort: ""                # 1.21.0：留空 = 用 provider 默认思考档
   approval: { mode: delegate, allowOnce: [] }
   audit: { format: ndjson, dir: "", redact: true, hashChain: true, required: true, rotateMb: 64 }
   posture: { onLoad: true, failOn: [] }
@@ -584,12 +601,23 @@ DSH 0.2.2-rc.1 起的 `settings` 服务是**表单服务**（`describe` / `confi
 | `input.normalize` | `true` | 匹配前清洗：去零宽字符、去 HTML 注释、NFKC 折叠。命中规则照旧拒绝；**清洗后放行**的回合以清洗文本进入模型（内核 MODIFY 语义），账本记 `normalized` / `zero_width` / `html_comment` 标签与字符数差。 |
 | `input.judge` | `flagged` | `off` 不调用；`flagged` 只在结构规则命中、且结构本身不拒绝时审一次（精度控制）；`always` 每轮都审。 |
 | `input.judgeFailClosed` | `false` | 评审无结论（超时/空回复/低置信/坏 JSON）时是否拒绝。`hardened` 预设自动置 `true`。 |
+| `input.judgeTimeoutMs` | `0`（沿用输出面） | **1.20.0**：输入面评审自己的 deadline（毫秒）。`0` = 与 `output.judge.timeoutMs` 相同，保持旧行为逐字节不变。 |
+| `input.judgeMaxTokens` | `0`（沿用输出面） | **1.21.0**：输入面评审自己的补全预算（每次尝试）。`0` = 与 `output.judge.maxTokens` 相同；两者都是 `0` 时用内置 4096。理由与 deadline 同构：预算不够会让输出面丢一条 `warn`、让输入面丢**整轮**。 |
 
-- 路由复用 `output.judge` 的 `provider` / `model` / `timeoutMs` / `maxChars`；评审请求带 `[safeharness-judge]` 标记，不会被输出面再次评审（递归防护）。
+- 路由复用 `output.judge` 的 `provider` / `model` / `maxChars`；`timeoutMs` 默认也复用，但**可以用 `input.judgeTimeoutMs` 单独放宽**（1.20.0，见下）。评审请求带 `[safeharness-judge]` 标记，不会被输出面再次评审（递归防护）。
+
+**为什么输入面的超时值得单独配置（1.20.0）**：两个面的失败方向相反。输出面判官超时只记一条 `warn`，回答照常给用户；输入面在 `judgeFailClosed: true` 下超时 = **拒掉整轮**，用户看到的是一句通用拒绝。2026-11-25 本机真实发生过一次：一条 102 字符的消息用掉了共享的 6000 ms，整轮被拒（账本 `seq=21364`，`reason_code=input_judge_unavailable`）。所以 `input.judgeTimeoutMs` 给了操作者一个只影响输入面的旋钮，而默认值 `0` 保证既有 profile 行为不变。
+
+**评审自身的补全预算与思考档（1.21.0）**：`output.judge.maxTokens`（默认 `0` = 内置 4096）与 `input.judgeMaxTokens`（默认 `0` = 沿用输出面），以及共用的 `output.judge.reasoningEffort`（默认空 = provider 自己的默认档）。三者的定位要说清：
+
+- **预算**是"思考把额度吃光、一个字的 JSON 都没留下"的兜底。空回 chiefly 是**路由**问题（2026-11-24T02:36Z 换 provider 后归零，见 `docs/verification-2026-11-25.md` §2），所以**不要**指望调大预算能修好空回；它只在确实换了小预算路由时才有用。空回重试仍会自动把预算翻倍（默认即 4096 → 8192），并把两次的 token 用量累加记进 `judge_usage_*`。
+- **思考档**是**降成本**手段，不是修空回手段（原文结论保留）。填一个路由不支持的档位会被宿主在发出请求前拒绝，账本记 `labels.reason=call_refused` + `labels.failure=<code>`，**不会**被当成"模型没说话"再重试一次。
+- 两者都是 volatile（面板可热改），因为盯账单和踩到截断都发生在运行中。
+
 - 结论：`block` → 拒绝（`input_judge_blocked`）；`safe` → 放行；无结论 → 按 `judgeFailClosed` 决定 `input_judge_unavailable` 或保持结构判定。
 - **与内核的差异**：内核 `UNCERTAIN` 一律拦；插件默认 fail-open，只在 `hardened` 或显式开关时 fail-closed。原因是 DSH profile 可能没有配置评审路由，恒 fail-closed 会让每一次输入都被拒。
 - 结构规则已经拒绝的回合不再调用评审，省一次模型调用。
-- 面板位置：设置 → 防护面卡片（输入语义评审三档 + fail-closed + 归一化开关）。
+- 面板位置：设置 → 防护面卡片（输入语义评审三档 + fail-closed + 归一化开关 + **输入评审超时** + **输入评审预算**，1.21.0 起后者也可热改）；评审卡片另有**评审完成预算**与**思考档**两个输入框。
 
 ### 4.10 工具/结果检测与内核对齐（1.12.0）
 
@@ -952,6 +980,12 @@ await watchUserPatches(ctx, ...)              // 然后才挂 patch 层监听
 - **任何情况下都不写**：消息原文、工具参数原文、模型输出原文、密钥值、webhook URL。
 - 查询：`safeharness_audit_query {"limit":50,"decision":"deny"}`，上限 500 条，返回的也是脱敏后的记录。
 
+**`output_reviewed` / `input_checked` 里的 `judge_*` 指标（1.20.0，1.21.0 扩到成本）**：语义评审自己也测长度与耗时，与流钩子测的是**同一批名字**（`chars` / `duration_ms` / `truncated`）。1.20.0 之前两者平铺合并、评审的值在后，于是评审的数字会**覆盖**回答的数字——实测本机 154 条跑过评审的行里 **64 条 `duration_ms < review_ms`**（未覆盖时物理上不可能），另有一条 `chars` 恰好等于 `4096 − 230 − 5 = 3861`（旧整条 prompt 上限减指令长度）。现在评审的测量统一加 `judge_` 前缀：`judge_chars`（送审内容长度）、`judge_prompt_chars`、`judge_response_chars`、`judge_duration_ms`、`judge_attempts`、`judge_timeout_ms`。**不带前缀的永远是这一侧（回答/用户消息）的数字。** 历史账本的分界点在 1.20.0 上线时刻，跨版本对比长度/时长度量时要注意。
+
+**判官自己的 token 用量（1.21.0）**：`judge_usage_input` / `judge_usage_output`（以及按需出现的 `judge_usage_cache_read` / `judge_usage_cache_write` / `judge_usage_reasoning`）是**评审那一次调用**的账单，跨重试累加。1.20.0 及之前的账本里**没有**这几个字段——`usage_input` / `usage_output` 一直是主模型的钱，所以"评审花了多少"以前根本查不到。现在两个面都记：回答的 `usage_*` 与评审的 `judge_usage_*`，互不覆盖。
+
+**`empty_user_message` 只读信号（1.21.0）**：输入钩子会数本轮 `messages` 里**没有任何文本**的 user 消息。正常回合额外记 `labels.empty_user_message=<n>`；若整轮只有空消息（没有可扫文本），则单独写一条 `invariant_probe`（`reason_code: empty_user_message`，`metrics.empty_user_messages`，`labels.state: empty_user_message`）。来源分类放在 `empty_user_retry` / `empty_user_other`。**它只记账，不改消息**：宿主"重试本轮"会往历史里追加一条 `content: []` 的 user 消息，严格端点随后对**每一轮**都回 `400 empty_message_content`，而这类故障以前在安全层里完全不可见（输入钩子刻意只扫 `source.kind === user`）。取证见 `docs/incident-2026-11-25.md`。
+
 ---
 
 ## 7. 运维面：工具与命令
@@ -1063,7 +1097,7 @@ plugins/dsh-safeharness/
 ├─ client/              面板浏览器半（TSX；esbuild 打成 lib/client.js）
 ├─ scripts/             构建/诊断/假模型（fake-openai.mjs 等）+ safeharness_sidecar.py（可选 Python 引擎）
 ├─ tsconfig.client.json 浏览器半的类型检查（DOM lib + react-jsx，noEmit）
-├─ tests/               1042 个用例（66 个文件，1.19.0）
+├─ tests/               1089 个用例（68 个文件，1.21.0）
 └─ package.json         engines.dsh 是唯一兼容门；dependencies 为空
 ```
 
@@ -1082,7 +1116,7 @@ plugins/dsh-safeharness/
 ```bash
 pnpm install          # 宿主包已作为 devDependencies 固定版本，构建/测试不再需要本机装 DSH
 pnpm build            # 宿主半 tsc → lib/；浏览器半 tsc 类型检查 + esbuild → lib/client.js
-pnpm test             # vitest：66 个文件 / 1042 个用例（1.19.0；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
+pnpm test             # vitest：68 个文件 / 1089 个用例（1.21.0；含 golden/sidecar/失败矩阵/面板 jsdom 契约）。公开树按发布过滤掉内部语料/fixture；CI 另剔除 tests/perf.test.ts
 pnpm typecheck        # tsc --noEmit
 node scripts/link-dsh.mjs --check   # 可选：把类型解析对齐到本机 DSH 安装的宿主副本
 ```

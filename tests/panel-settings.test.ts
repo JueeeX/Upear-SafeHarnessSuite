@@ -11,12 +11,31 @@ import type { Runtime } from '../src/runtime.js'
 
 /** A runtime-shaped stub carrying the judge/draft config the host reads. */
 function stubRuntime(overrides: {
-  judge?: Partial<{ enabled: boolean; scope: 'flagged' | 'always'; provider: string; model: string; maxChars: number; timeoutMs: number }>
+  judge?: Partial<{
+    enabled: boolean
+    scope: 'flagged' | 'always'
+    provider: string
+    model: string
+    maxChars: number
+    timeoutMs: number
+    maxTokens: number
+    reasoningEffort: string
+  }>
   draft?: Partial<{ enabled: boolean; provider: string; model: string }>
+  inputJudgeMaxTokens?: number
 } = {}): Runtime {
   const config = {
     preset: 'balanced',
-    input: { mode: 'enforce' as const, judge: 'flagged' as const, judgeFailClosed: false, normalize: true },
+    input: {
+      mode: 'enforce' as const,
+      judge: 'flagged' as const,
+      judgeFailClosed: false,
+      normalize: true,
+      judgeTimeoutMs: 6000,
+      // 1.21.0: resolved the same way as the deadline, so the read projection shows
+      // the budget the hook will actually use.
+      judgeMaxTokens: overrides.inputJudgeMaxTokens ?? 4096,
+    },
     tools: {
       mode: 'enforce' as const,
       descriptorScan: 'warn' as const,
@@ -54,6 +73,10 @@ function stubRuntime(overrides: {
         model: 'gpt-6-luna',
         maxChars: 12_000,
         timeoutMs: 4_000,
+        // 1.21.0 defaults: `0` keeps the client's built-in budget, empty keeps the
+        // provider's own effort — i.e. exactly the pre-1.21.0 behaviour.
+        maxTokens: 0,
+        reasoningEffort: '',
         ...overrides.judge,
       },
     },
@@ -160,10 +183,24 @@ describe('createPanelSettingsHost', () => {
       model: 'gpt-6-luna',
       maxChars: 12_000,
       timeoutMs: 4_000,
+      // 1.21.0: shown literally, not as the code default 4096 — see the comment in
+      // `createPanelSettingsHost.read`.
+      maxTokens: 0,
+      reasoningEffort: '',
       available: true,
       configurable: true,
     })
     expect(value.draft).toEqual({ enabled: false, provider: '', model: '' })
+    // 1.20.0: the read projection carries the deadline the hook will actually use, so
+    // the form can answer "what is in force" without re-deriving the fallback.
+    expect(value.inputJudge).toEqual({
+      mode: 'flagged',
+      failClosed: false,
+      normalize: true,
+      timeoutMs: 6000,
+      // 1.21.0: same resolved-projection rule as the deadline.
+      maxTokens: 4096,
+    })
     expect(value.surfaces).toEqual({
       input: 'enforce',
       tools: 'enforce',
@@ -307,6 +344,103 @@ describe('createPanelSettingsHost', () => {
       .rejects.toMatchObject({ code: 'settings_invalid' })
     await expect(host.save({ pii: { classes: ['passport'] } })).rejects.toMatchObject({ code: 'settings_invalid' })
     await expect(host.save({ pii: { enabled: 'yes' as never } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('saves the input judge deadline on the live seam (1.20.0)', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ inputJudge: { timeoutMs: 9000 } })
+    expect(update).toHaveBeenCalledWith('safeharness', { input: { judgeTimeoutMs: 9000 } })
+  })
+
+  it('accepts 0 as inherit-the-output-deadline, not as an empty field', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ inputJudge: { timeoutMs: 0 } })
+    expect(update).toHaveBeenCalledWith('safeharness', { input: { judgeTimeoutMs: 0 } })
+  })
+
+  it('rejects a deadline below the floor unless it is exactly 0', async () => {
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(vi.fn(async () => undefined)), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ inputJudge: { timeoutMs: 10 } })).rejects.toMatchObject({ code: 'settings_invalid' })
+  })
+
+  it('saves the judge completion budget (1.21.0)', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ judge: { maxTokens: 6000 } })
+    expect(update).toHaveBeenCalledWith('safeharness', {
+      output: { judge: { maxTokens: 6000 } },
+    })
+  })
+
+  it('saves the judge completion budget and trims the effort (1.21.0)', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ judge: { maxTokens: 6000, reasoningEffort: ' low ' } })
+    // The effort is trimmed before it is written: a stray space would be sent to the
+    // provider as part of the id and refused.
+    expect(update).toHaveBeenCalledWith('safeharness', {
+      output: { judge: { maxTokens: 6000, reasoningEffort: 'low' } },
+    })
+  })
+
+  it('accepts an empty effort as "clear it back to the provider default"', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ judge: { reasoningEffort: '' } })
+    expect(update).toHaveBeenCalledWith('safeharness', { output: { judge: { reasoningEffort: '' } } })
+  })
+
+  it('accepts 0 as keep-the-built-in-budget on both surfaces', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ judge: { maxTokens: 0 } })
+    expect(update).toHaveBeenCalledWith('safeharness', { output: { judge: { maxTokens: 0 } } })
+    await host.save({ inputJudge: { maxTokens: 0 } })
+    expect(update).toHaveBeenCalledWith('safeharness', { input: { judgeMaxTokens: 0 } })
+  })
+
+  it('refuses a negative budget and an over-long effort before touching the host', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ judge: { maxTokens: -1 } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ inputJudge: { maxTokens: -1 } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ judge: { reasoningEffort: 'x'.repeat(80) } })).rejects.toMatchObject({ code: 'settings_invalid' })
+    await expect(host.save({ judge: { reasoningEffort: 7 as never } })).rejects.toMatchObject({ code: 'settings_invalid' })
     expect(update).not.toHaveBeenCalled()
   })
 

@@ -16,7 +16,7 @@ function settingsValue(overrides: Partial<PanelSettingsValue> = {}): PanelSettin
   return {
     preset: 'balanced',
     surfaces: { input: 'enforce', tools: 'enforce', results: 'enforce', output: 'warn', approval: 'delegate' },
-    inputJudge: { mode: 'flagged', failClosed: false, normalize: true },
+    inputJudge: { mode: 'flagged', failClosed: false, normalize: true, timeoutMs: 4500, maxTokens: 4096 },
     toolDetection: { descriptorScan: 'warn', repeatedAttemptThreshold: 0, entropyThreshold: 0, entropyMinLength: 48, allowedTables: [] },
     pii: { enabled: true, classes: ['email', 'api_key'] },
     lists: { denyTools: ['rm -rf *'], askTools: [], denyTags: [], tagOverrides: [{ pattern: 'mcp__*', tags: ['external'] }], blockOn: ['credential_leak'], allowOnce: [] },
@@ -28,7 +28,7 @@ function settingsValue(overrides: Partial<PanelSettingsValue> = {}): PanelSettin
       posture: { onLoad: true, failOn: [] },
       patrolNotify: { channels: [], healthUrls: 0 },
     },
-    judge: { enabled: true, scope: 'always', provider: 'liao', model: 'gpt-6-luna', maxChars: 12000, timeoutMs: 6000, available: true, configurable: true },
+    judge: { enabled: true, scope: 'always', provider: 'liao', model: 'gpt-6-luna', maxChars: 12000, timeoutMs: 6000, maxTokens: 0, reasoningEffort: '', available: true, configurable: true },
     draft: { enabled: true, provider: 'liao', model: '' },
     providers: [],
     customProviders: [],
@@ -74,6 +74,52 @@ describe('buildPatch', () => {
     expect(buildPatch(value, { ...base, source: { ...base.source, patrolMinCount: '-1' } }).invalid).toContain('0 或正整数')
   })
 
+  it('patches the input judge deadline and rejects a non-numeric one (1.20.0)', () => {
+    const value = settingsValue()
+    const base = toSettingsData(value)
+    expect(buildPatch(value, {
+      ...base,
+      inputJudge: { ...base.inputJudge, timeoutMs: '12000' },
+    }).patch).toEqual({ expectedRevision: 3, inputJudge: { timeoutMs: 12000 } })
+    // `0` is a real choice ("inherit the output judge"), not an empty field.
+    expect(buildPatch(value, {
+      ...base,
+      inputJudge: { ...base.inputJudge, timeoutMs: '0' },
+    }).patch).toEqual({ expectedRevision: 3, inputJudge: { timeoutMs: 0 } })
+    expect(buildPatch(value, {
+      ...base,
+      inputJudge: { ...base.inputJudge, timeoutMs: 'abc' },
+    }).invalid).toContain('0 或正整数毫秒')
+  })
+
+  it('treats the freshly loaded input deadline as unchanged', () => {
+    // The regression this guards: the form carries the *resolved* deadline (4500 here)
+    // while the raw config may say `0`. Comparing the two raw values would make every
+    // load look dirty and pin the fallback on the first save.
+    const value = settingsValue()
+    expect(toSettingsData(value).inputJudge.timeoutMs).toBe('4500')
+    expect(buildPatch(value, toSettingsData(value)).patch).toBeUndefined()
+  })
+
+  it('diffs the 1.21.0 judge budget and effort, and refuses a negative budget', () => {
+    const value = settingsValue()
+    const base = toSettingsData(value)
+    expect(buildPatch(value, { ...base, judge: { ...base.judge, maxTokens: '6000' } }).patch)
+      .toEqual({ expectedRevision: 3, judge: { maxTokens: 6000 } })
+    expect(buildPatch(value, { ...base, judge: { ...base.judge, reasoningEffort: ' low ' } }).patch)
+      .toEqual({ expectedRevision: 3, judge: { reasoningEffort: 'low' } })
+    expect(buildPatch(value, { ...base, judge: { ...base.judge, maxTokens: '-1' } }).invalid).toContain('0 或正整数')
+    expect(buildPatch(value, { ...base, judge: { ...base.judge, maxTokens: 'lots' } }).invalid).toContain('0 或正整数')
+  })
+
+  it('diffs the 1.21.0 input judge budget the same way', () => {
+    const value = settingsValue()
+    const base = toSettingsData(value)
+    expect(buildPatch(value, { ...base, inputJudge: { ...base.inputJudge, maxTokens: '2048' } }).patch)
+      .toEqual({ expectedRevision: 3, inputJudge: { maxTokens: 2048 } })
+    expect(buildPatch(value, { ...base, inputJudge: { ...base.inputJudge, maxTokens: '-5' } }).invalid).toContain('0 或正整数')
+  })
+
   it('normalizes a list and ignores a pure reorder', () => {
     const value = settingsValue({ lists: { ...settingsValue().lists, denyTools: ['b', 'a'] } })
     const base = toSettingsData(value)
@@ -97,5 +143,22 @@ describe('baselineOf', () => {
     expect(baselineOf(settingsValue({ judge: { ...value.judge, available: false } }))).toBe(baselineOf(value))
     expect(baselineOf(settingsValue({ preset: 'hardened' }))).toBe(baselineOf(value))
     expect(baselineOf(settingsValue({ judge: { ...value.judge, maxChars: 9000 } }))).not.toBe(baselineOf(value))
+  })
+
+  it('tracks the 1.21.0 budget and effort fields', () => {
+    const value = settingsValue()
+    expect(baselineOf(settingsValue({ judge: { ...value.judge, maxTokens: 6000 } }))).not.toBe(baselineOf(value))
+    expect(baselineOf(settingsValue({ judge: { ...value.judge, reasoningEffort: 'low' } }))).not.toBe(baselineOf(value))
+  })
+
+  it('treats a panel that predates 1.21.0 as the 0/empty baseline', () => {
+    // The `?? 0` / `?? ''` in `baselineOf`: a payload without the new fields must compare
+    // equal to a form carrying their defaults, or every upgrade would drop a live draft.
+    const value = settingsValue()
+    const legacy = {
+      ...value,
+      judge: { ...value.judge, maxTokens: undefined, reasoningEffort: undefined },
+    } as unknown as PanelSettingsValue
+    expect(baselineOf(legacy)).toBe(baselineOf(value))
   })
 })

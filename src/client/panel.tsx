@@ -147,6 +147,23 @@ interface JudgeForm {
   readonly model: string
   readonly maxChars: string
   readonly timeoutMs: string
+  /** 1.21.0. `0` = keep the built-in budget. */
+  readonly maxTokens: string
+  /** 1.21.0. Empty = the provider's own default effort. */
+  readonly reasoningEffort: string
+}
+
+/**
+ * Settings form (the input-judge half).
+ *
+ * `timeoutMs` is a string here while {@link PanelInputJudge.timeoutMs} is a number:
+ * the form must be able to hold a half-typed value (and be marked dirty) without
+ * coercing it to a number on every keystroke. `buildPatch` does the parse.
+ */
+interface InputJudgeForm extends Omit<PanelInputJudge, 'timeoutMs' | 'maxTokens'> {
+  readonly timeoutMs: string
+  /** 1.21.0. `0` = follow the output judge's budget. */
+  readonly maxTokens: string
 }
 
 /** Settings form (the drafting-route half). */
@@ -208,7 +225,7 @@ interface SettingsForm {
   readonly judge: JudgeForm
   readonly draft: DraftForm
   readonly surfaces: PanelSurfaceSettings
-  readonly inputJudge: PanelInputJudge
+  readonly inputJudge: InputJudgeForm
   readonly toolDetection: ToolDetectionForm
   readonly pii: PanelResultPii
   readonly lists: ListForm
@@ -261,6 +278,8 @@ interface MutableJudgePatch {
   model?: string
   maxChars?: number
   timeoutMs?: number
+  maxTokens?: number
+  reasoningEffort?: string
 }
 
 /** Mutable builder for the drafting-route patch. */
@@ -274,6 +293,8 @@ interface MutableInputJudgePatch {
   mode?: 'off' | 'flagged' | 'always'
   failClosed?: boolean
   normalize?: boolean
+  timeoutMs?: number
+  maxTokens?: number
 }
 
 /** Mutable builder for the tool-detection patch. */
@@ -458,6 +479,11 @@ export function baselineOf(value: PanelSettingsValue): string {
       model: value.judge.model,
       maxChars: value.judge.maxChars,
       timeoutMs: value.judge.timeoutMs,
+      // 1.21.0. `?? 0` / `?? ''`: a panel served by an older plugin build sends
+      // neither field, and a missing key must compare equal to the form's default
+      // rather than stashing a draft nobody asked for.
+      maxTokens: value.judge.maxTokens ?? 0,
+      reasoningEffort: value.judge.reasoningEffort ?? '',
     },
     draft: value.draft,
     surfaces: value.surfaces,
@@ -472,12 +498,16 @@ export function baselineOf(value: PanelSettingsValue): string {
 /** A settings form draft kept across a Host remount. */
 interface StoredSettingsDraft {
   readonly baseline: string
-  readonly judge: JudgeForm
+  /**
+   * 1.21.0 widened both halves (`maxTokens`, `reasoningEffort`), so a draft stored by
+   * an older build is a *partial* shape: it is merged over the freshly loaded form.
+   */
+  readonly judge: Partial<JudgeForm>
   readonly draft: DraftForm
   /** Absent drafts from 1.9.5 and earlier fall back to the loaded value. */
   readonly surfaces?: PanelSurfaceSettings
   /** Absent drafts from 1.10.0 and earlier fall back to the loaded value. */
-  readonly inputJudge?: PanelInputJudge
+  readonly inputJudge?: Partial<InputJudgeForm>
   /** Absent drafts from 1.11.0 and earlier fall back to the loaded value. */
   readonly toolDetection?: ToolDetectionForm
   readonly pii?: PanelResultPii
@@ -1343,10 +1373,19 @@ export function toSettingsData(value: PanelSettingsValue): SettingsData {
       model: value.judge.model,
       maxChars: String(value.judge.maxChars),
       timeoutMs: String(value.judge.timeoutMs),
+      // 1.21.0. `0` means "keep the built-in budget", and the field shows the literal 0
+      // rather than the code default; an absent field (older host) reads as 0 so an
+      // untouched form never looks dirty.
+      maxTokens: String(value.judge.maxTokens ?? 0),
+      reasoningEffort: value.judge.reasoningEffort ?? '',
     },
     draft: { provider: value.draft.provider, model: value.draft.model },
     surfaces: { ...value.surfaces },
-    inputJudge: { ...value.inputJudge },
+    inputJudge: {
+      ...value.inputJudge,
+      timeoutMs: String(value.inputJudge.timeoutMs),
+      maxTokens: String(value.inputJudge.maxTokens ?? 0),
+    },
     toolDetection: {
       descriptorScan: value.toolDetection.descriptorScan,
       repeatedAttemptThreshold: String(value.toolDetection.repeatedAttemptThreshold),
@@ -1512,6 +1551,13 @@ export function buildPatch(value: PanelSettingsValue, form: SettingsForm): Patch
   if (judge.model !== value.judge.model) judgePatch.model = judge.model
   if (maxChars !== value.judge.maxChars) judgePatch.maxChars = maxChars
   if (timeoutMs !== value.judge.timeoutMs) judgePatch.timeoutMs = timeoutMs
+  // 1.21.0. `0` is legal (keep the built-in budget), so this only refuses negatives and
+  // fractions — the same discipline as the input judge's deadline.
+  const judgeMaxTokens = nonNegativeInt(judge.maxTokens)
+  if (judgeMaxTokens === undefined) return { patch: undefined, invalid: '「评审完成预算」必须是 0 或正整数。' }
+  if (judgeMaxTokens !== (value.judge.maxTokens ?? 0)) judgePatch.maxTokens = judgeMaxTokens
+  const reasoningEffort = judge.reasoningEffort.trim()
+  if (reasoningEffort !== (value.judge.reasoningEffort ?? '')) judgePatch.reasoningEffort = reasoningEffort
   const draftPatch: MutableDraftPatch = {}
   if (draft.provider !== value.draft.provider) draftPatch.provider = draft.provider
   if (draft.model !== value.draft.model) draftPatch.model = draft.model
@@ -1525,6 +1571,20 @@ export function buildPatch(value: PanelSettingsValue, form: SettingsForm): Patch
   if (inputJudge.mode !== value.inputJudge.mode) inputJudgePatch.mode = inputJudge.mode
   if (inputJudge.failClosed !== value.inputJudge.failClosed) inputJudgePatch.failClosed = inputJudge.failClosed
   if (inputJudge.normalize !== value.inputJudge.normalize) inputJudgePatch.normalize = inputJudge.normalize
+  if (inputJudge.timeoutMs !== String(value.inputJudge.timeoutMs)) {
+    // `0` is meaningful ("inherit the output judge's deadline") but the form shows the
+    // resolved number, so a zero here is an operator typing it deliberately.
+    const timeout = nonNegativeInt(inputJudge.timeoutMs)
+    if (timeout === undefined) return { patch: undefined, invalid: '「输入评审超时」必须是 0 或正整数毫秒。' }
+    inputJudgePatch.timeoutMs = timeout
+  }
+  // 1.21.0, same shape: the form shows the resolved budget, so `0` is a deliberate
+  // "inherit" and anything unparsable is refused before it reaches the host.
+  if (inputJudge.maxTokens !== String(value.inputJudge.maxTokens ?? 0)) {
+    const budget = nonNegativeInt(inputJudge.maxTokens)
+    if (budget === undefined) return { patch: undefined, invalid: '「输入评审预算」必须是 0 或正整数。' }
+    inputJudgePatch.maxTokens = budget
+  }
   const toolDetectionPatch: MutableToolDetectionPatch = {}
   if (toolDetection.descriptorScan !== value.toolDetection.descriptorScan) {
     toolDetectionPatch.descriptorScan = toolDetection.descriptorScan
@@ -2968,10 +3028,14 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
             if (parsed.baseline === baselineOf(value) && parsed.judge !== undefined && parsed.draft !== undefined) {
               data = {
                 value,
-                judge: parsed.judge,
+                // `...base.judge` first: a draft stored by a build that predates
+                // 1.21.0 has no `maxTokens` / `reasoningEffort`, and spreading it
+                // straight in would leave those inputs undefined (React then treats
+                // the fields as uncontrolled and `buildPatch` cannot diff them).
+                judge: { ...base.judge, ...parsed.judge },
                 draft: parsed.draft,
                 surfaces: parsed.surfaces ?? base.surfaces,
-                inputJudge: parsed.inputJudge ?? base.inputJudge,
+                inputJudge: { ...base.inputJudge, ...parsed.inputJudge },
                 toolDetection: parsed.toolDetection ?? base.toolDetection,
                 pii: parsed.pii ?? base.pii,
                 lists: parsed.lists ?? base.lists,
@@ -3043,7 +3107,7 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
     setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
   }, [])
 
-  const updateInputJudge = useCallback((patch: Partial<PanelInputJudge>): void => {
+  const updateInputJudge = useCallback((patch: Partial<InputJudgeForm>): void => {
     setView(current => current.status === 'ready'
       ? { status: 'ready', data: { ...current.data, inputJudge: { ...current.data.inputJudge, ...patch } } }
       : current)
@@ -3302,6 +3366,22 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
               { value: 'off', label: '关闭' },
             ]}
             hint="复用上面的评审路由；每次评审多一次模型调用"
+          />
+          <Field
+            label="输入评审超时（毫秒）"
+            value={inputJudge.timeoutMs}
+            inputMode="numeric"
+            disabled={readOnly}
+            onChange={(next) => { updateInputJudge({ timeoutMs: next }) }}
+            hint="0 = 跟随输出评审的 timeoutMs。输入面超时在 fail-closed 下会拒掉整轮，所以允许单独放宽。"
+          />
+          <Field
+            label="输入评审预算（token）"
+            value={inputJudge.maxTokens}
+            inputMode="numeric"
+            disabled={readOnly}
+            onChange={(next) => { updateInputJudge({ maxTokens: next }) }}
+            hint="0 = 跟随输出评审的 maxTokens（两者都是 0 时用内置 4096）。思考型模型可能把额度吃光、一个字的 JSON 都留不下。"
           />
         </div>
         <div className="shp-switch-row">
@@ -3713,6 +3793,21 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
             inputMode="numeric"
             disabled={readOnly}
             onChange={(next) => { updateJudge({ timeoutMs: next }) }}
+          />
+          <Field
+            label="评审完成预算（token）"
+            value={judge.maxTokens}
+            inputMode="numeric"
+            disabled={readOnly}
+            onChange={(next) => { updateJudge({ maxTokens: next }) }}
+            hint="0 = 内置 4096（1.19.0 起的默认）。空回答重试会自动翻倍。思考型模型把额度吃光时会一个字的 JSON 都留不下。"
+          />
+          <Field
+            label="评审思考档"
+            value={judge.reasoningEffort}
+            disabled={readOnly}
+            onChange={(next) => { updateJudge({ reasoningEffort: next }) }}
+            hint="留空 = 用 provider 自己的默认档。这是降成本的手段，不是修空回答的手段；填了路由不支持的档位会被宿主拒绝（账本记 call_refused）。"
           />
           <div className="shp-field">
             <span className="shp-field-label">当前路由</span>

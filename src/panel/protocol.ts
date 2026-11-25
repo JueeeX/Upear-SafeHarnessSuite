@@ -217,6 +217,10 @@ export interface PanelJudgeSettings {
   readonly model: string
   readonly maxChars: number
   readonly timeoutMs: number
+  /** Completion budget for one judge attempt; `0` keeps the built-in default (1.21.0). */
+  readonly maxTokens: number
+  /** Reasoning effort for the judge call; empty keeps the provider default (1.21.0). */
+  readonly reasoningEffort: string
   /** False when this profile has no `llm` service. */
   readonly available: boolean
   /** False when the host exposes no settings service or no editable entry. */
@@ -238,6 +242,22 @@ export interface PanelInputJudge {
   readonly failClosed: boolean
   /** Clean the text (NFKC / zero-width / HTML comments) before matching and rewrite it. */
   readonly normalize: boolean
+  /**
+   * Deadline in force for one input-judge call, in ms (1.20.0).
+   *
+   * Already resolved: when the profile leaves `input.judgeTimeoutMs` at `0`, this
+   * carries the output judge's deadline, because that is what the hook will use.
+   * The form shows the number in force, and — since the client only submits fields
+   * it changed — an untouched form never pins the fallback into the patch.
+   */
+  readonly timeoutMs: number
+  /**
+   * Completion budget in force for one input-judge attempt (1.21.0).
+   *
+   * Already resolved the same way as {@link timeoutMs}: `0` in
+   * `input.judgeMaxTokens` shows up here as the output judge's budget.
+   */
+  readonly maxTokens: number
 }
 
 /**
@@ -425,6 +445,10 @@ export interface PanelSettingsPatch {
     readonly mode?: 'off' | 'flagged' | 'always'
     readonly failClosed?: boolean
     readonly normalize?: boolean
+    /** 1.20.0. Input-judge deadline in ms; `0` reintroduces the output-judge fallback. */
+    readonly timeoutMs?: number
+    /** 1.21.0. Input-judge completion budget; `0` reintroduces the output-judge fallback. */
+    readonly maxTokens?: number
   }
   /** Tool-surface detection knobs (descriptor scan, thresholds, table allowlist). */
   readonly toolDetection?: {
@@ -475,6 +499,10 @@ export interface PanelSettingsPatch {
     readonly model?: string
     readonly maxChars?: number
     readonly timeoutMs?: number
+    /** `0` keeps the built-in budget (1.21.0). */
+    readonly maxTokens?: number
+    /** Empty string clears it back to the provider default (1.21.0). */
+    readonly reasoningEffort?: string
   }
   readonly draft?: {
     readonly enabled?: boolean

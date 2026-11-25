@@ -33,9 +33,10 @@ import type { Decision } from '../engine/types.js'
 import { ReasonCode } from '../engine/types.js'
 import { foundSomething, type Runtime } from '../runtime.js'
 import { createInputJudge } from '../judge/input.js'
+import { judgeLedgerMetrics } from '../judge/client.js'
 import { judgeCallOf } from './llm.js'
 import {
-  agentIdOf, rewriteUserText, sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf, userInputText,
+  agentIdOf, emptyUserMessages, rewriteUserText, sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf, userInputText,
 } from './context.js'
 import { observeSessionSandbox } from './sandbox.js'
 
@@ -132,8 +133,34 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
     if (mode === 'off') return next()
 
     try {
+      // Read-only retry-artefact signal (1.21.0). Computed before the "nothing to scan"
+      // early returns below, because those are exactly the cases where an empty user
+      // message used to leave no trace at all in the ledger.
+      const empties = emptyUserMessages(payload.messages)
+      const emptyCount = empties.retry + empties.other
+
       const text = userInputText(payload.messages)
-      if (text.length === 0) return next()
+      if (text.length === 0) {
+        // Nothing to scan, but an empty user message is still evidence: on 2026-11-25
+        // the host's retry appended one and every later request 400'd with
+        // `empty_message_content`. Recording it here is what makes that failure one
+        // queryable line instead of an invisible one (`incident-2026-11-25.md` §4).
+        if (emptyCount > 0) {
+          runtime.audit('invariant_probe', {
+            ...runtime.sessionFields(sessionId, agentId),
+            decision: 'warn',
+            reason_code: 'empty_user_message',
+            labels: {
+              state: 'empty_user_message',
+              ...(empties.retry > 0 ? { empty_user_retry: String(empties.retry) } : {}),
+              ...(empties.other > 0 ? { empty_user_other: String(empties.other) } : {}),
+            },
+            metrics: { empty_user_messages: emptyCount },
+          })
+          runtime.count('warn', sessionId)
+        }
+        return next()
+      }
 
       // Normalization is a precondition, not a finding: the same rules run on the
       // cleaned text, and a changed-allowed step enters with the cleaned messages.
@@ -159,18 +186,27 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
       let judgeBlocked = false
       let judgeUncertain = false
       const judgeLabels: Record<string, string> = {}
-      let judgeMetrics: Record<string, number | undefined> = {}
+      let judgeMetrics: Record<string, number | boolean | undefined> = {}
       if (judgeEligible) {
         const verdict = await inputJudge.review(scanned, {
           maxChars: runtime.config.output.judge.maxChars,
-          timeoutMs: runtime.config.output.judge.timeoutMs,
+          timeoutMs: runtime.config.input.judgeTimeoutMs,
+          // 1.21.0: the input surface's own completion budget (falls back to the
+          // output judge's value in `resolveConfig`).
+          maxTokens: runtime.config.input.judgeMaxTokens,
+          ...(runtime.config.output.judge.reasoningEffort.length === 0
+            ? {}
+            : { reasoningEffort: runtime.config.output.judge.reasoningEffort }),
         })
         judged = true
         judgeBlocked = verdict.status === 'ok' && verdict.verdict === 'block'
         judgeUncertain = !(verdict.status === 'ok' && (verdict.verdict === 'allow' || verdict.verdict === 'block'))
         judgeLabels['judge'] = judgeBlocked ? 'block' : verdict.verdict === 'allow' ? 'allow' : 'unknown'
         judgeLabels['judge_status'] = verdict.status
-        judgeMetrics = { ...verdict.metrics }
+        // Namespaced for the same reason as the output surface (1.20.0): the judge and
+        // this hook both measure `chars`, and a flat merge let the judge's number
+        // overwrite the user text's. See `judgeLedgerMetrics`.
+        judgeMetrics = judgeLedgerMetrics(verdict.metrics)
       }
       const uncertainDeny = judged && judgeUncertain && runtime.config.input.judgeFailClosed
       const deny = wouldDeny || judgeBlocked || uncertainDeny
@@ -187,6 +223,12 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
         labels['normalized'] = 'true'
         if (normalization.zeroWidth > 0) labels['zero_width'] = 'removed'
         if (normalization.comments > 0) labels['html_comment'] = 'removed'
+      }
+      if (emptyCount > 0) {
+        // The turn had real text AND a stale empty user message: this is the shape that
+        // made a poisoned session look perfectly normal until the provider answered 400.
+        labels['empty_user_message'] = String(emptyCount)
+        if (empties.retry > 0) labels['empty_user_retry'] = String(empties.retry)
       }
       const base = {
         ...runtime.sessionFields(sessionId, agentId),

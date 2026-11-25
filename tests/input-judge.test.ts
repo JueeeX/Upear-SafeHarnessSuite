@@ -110,4 +110,147 @@ describe('agent/pre-step input judge', () => {
     expect(decision).toEqual({ kind: 'reject' })
     expect(calls).not.toHaveBeenCalled()
   })
+
+  it('namespaces the judge metrics instead of overwriting the message length', async () => {
+    // 1.20.0. The judge reports its own `chars` (the content it was asked to review);
+    // the hook reports the scanned message length. They are the same number when nothing
+    // is clipped, which is exactly why the collision went unnoticed for so long. With a
+    // judge cap below the message length the two must diverge — and the *un-prefixed*
+    // key must still be the message.
+    const long = 'x'.repeat(400)
+    const { host, runtime } = createFakeHost({
+      config: {
+        preset: 'balanced',
+        input: { judge: 'always' },
+        output: { judge: { maxChars: 50 } },
+      },
+      services: { llm: replyingService('{"verdict":"safe","confidence":0.9}') },
+    })
+    installInputHook(host.ctx as never, runtime)
+    expect((await step(host as never, long) as { kind: string }).kind).toBe('enter')
+    const checked = (await records(runtime)).find((record) => record.kind === 'input_checked')
+    const metrics = checked?.metrics as Record<string, unknown>
+    expect(metrics.chars).toBe(long.length)
+    expect(metrics.judge_chars).toBe(50)
+    expect(metrics.judge_duration_ms).toEqual(expect.any(Number))
+  })
+})
+
+describe('input judge deadline (1.20.0)', () => {
+  /** A judge call that never answers, so the deadline is what ends it. */
+  const hanging = (): { stream: (request: unknown) => AsyncIterable<{ type: string }> } => ({
+    stream: () => (async function* () {
+      await new Promise(() => {})
+      yield { type: 'text-delta' }
+    })(),
+  })
+
+  it('uses output.judge.timeoutMs when input.judgeTimeoutMs is 0', async () => {
+    // The documented default: `0` means "same deadline as the output surface", so a
+    // profile that predates 1.20.0 keeps behaving byte-identically.
+    const { host, runtime } = createFakeHost({
+      config: {
+        preset: 'balanced',
+        input: { judge: 'always', judgeFailClosed: true },
+        output: { judge: { timeoutMs: 25 } },
+      },
+      services: { llm: hanging() },
+    })
+    installInputHook(host.ctx as never, runtime)
+    expect(await step(host as never, 'hello')).toEqual({ kind: 'reject' })
+    const denied = (await records(runtime)).find((record) => record.kind === 'input_denied')
+    expect((denied?.labels as Record<string, string> | undefined)?.['judge_status']).toBe('timeout')
+  })
+
+  it('gives the input surface its own deadline when one is configured', async () => {
+    // The real incident (2026-11-25, seq 21364): a 102-character message spent the
+    // shared 6000 ms and the whole turn was denied. A longer input deadline is the
+    // operator's lever, and it has to be the one the hook actually reads.
+    const { host, runtime } = createFakeHost({
+      config: {
+        preset: 'balanced',
+        input: { judge: 'always', judgeFailClosed: true, judgeTimeoutMs: 400 },
+        output: { judge: { timeoutMs: 20 } },
+      },
+      services: { llm: hanging() },
+    })
+    installInputHook(host.ctx as never, runtime)
+    const startedAt = Date.now()
+    expect(await step(host as never, 'hello')).toEqual({ kind: 'reject' })
+    const elapsed = Date.now() - startedAt
+    // The input budget must dominate: 400 ms, not the output judge's 20 ms.
+    expect(elapsed).toBeGreaterThanOrEqual(300)
+    const denied = (await records(runtime)).find((record) => record.kind === 'input_denied')
+    expect((denied?.metrics as Record<string, number> | undefined)?.judge_timeout_ms).toBe(400)
+  })
+})
+
+describe('input judge budget and effort (1.21.0)', () => {
+  /** A judge service that answers and records the request it received. */
+  function recordingService(reply: string, seen: Record<string, unknown>[]): {
+    stream: (request: unknown) => AsyncIterable<{ type: string; text?: string }>
+  } {
+    return {
+      stream: (request: unknown) => {
+        seen.push(request as Record<string, unknown>)
+        return (async function* () {
+          yield { type: 'text-delta', text: reply }
+        })()
+      },
+    }
+  }
+
+  it('sends the resolved input budget, not the output judge\'s', async () => {
+    // Same split rationale as the deadline: a truncating budget costs the output surface
+    // a warning and the input surface the whole turn under `judgeFailClosed`.
+    const seen: Record<string, unknown>[] = []
+    const { host, runtime } = createFakeHost({
+      config: {
+        preset: 'balanced',
+        input: { judge: 'always', judgeMaxTokens: 777 },
+        output: { judge: { maxTokens: 1234 } },
+      },
+      services: { llm: recordingService('{"verdict":"safe"}', seen) },
+    })
+    installInputHook(host.ctx as never, runtime)
+    await step(host as never, 'hello')
+    expect(seen[0]?.maxTokens).toBe(777)
+  })
+
+  it('inherits the output judge budget when input.judgeMaxTokens is 0', async () => {
+    const seen: Record<string, unknown>[] = []
+    const { host, runtime } = createFakeHost({
+      config: {
+        preset: 'balanced',
+        input: { judge: 'always', judgeMaxTokens: 0 },
+        output: { judge: { maxTokens: 1234 } },
+      },
+      services: { llm: recordingService('{"verdict":"safe"}', seen) },
+    })
+    installInputHook(host.ctx as never, runtime)
+    await step(host as never, 'hello')
+    expect(seen[0]?.maxTokens).toBe(1234)
+  })
+
+  it('omits reasoningEffort unless one is configured, and forwards it when it is', async () => {
+    // An unsupported effort is refused by the host before any provider I/O, so sending
+    // one "just in case" would break every deployment whose route does not offer it.
+    const plain: Record<string, unknown>[] = []
+    const bare = createFakeHost({
+      config: { preset: 'balanced', input: { judge: 'always' } },
+      services: { llm: recordingService('{"verdict":"safe"}', plain) },
+    })
+    installInputHook(bare.host.ctx as never, bare.runtime)
+    await step(bare.host as never, 'hello')
+    expect('reasoningEffort' in (plain[0] ?? {})).toBe(false)
+
+    const withEffort: Record<string, unknown>[] = []
+    const tuned = createFakeHost({
+      config: { preset: 'balanced', input: { judge: 'always' }, output: { judge: { reasoningEffort: 'low' } } },
+      services: { llm: recordingService('{"verdict":"safe"}', withEffort) },
+    })
+    installInputHook(tuned.host.ctx as never, tuned.runtime)
+    await step(tuned.host as never, 'hello')
+    expect(withEffort[0]?.reasoningEffort).toBe('low')
+  })
 })

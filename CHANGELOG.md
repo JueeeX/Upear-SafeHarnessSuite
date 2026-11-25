@@ -2,6 +2,156 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.21.0 — 2026-11-25
+
+三件事，都是把「看不见的」变成「可查询的」，**不改变任何判定结果**：
+判官自己的 token 用量、宿主重试留下的空 user 消息、以及评审的补全预算与思考档。
+
+### 1. 判官自身的 usage 记账（`judge_usage_*`）
+
+`judge/client.ts` 的 `JudgeChunkLike` 过去只有 `type` 和 `text?`，于是宿主在
+`finish` 之前发出的 `usage` 块被直接丢掉了。后果不是"少一个数字"：账本里
+`output_reviewed.metrics.usage_input` / `usage_output` 一直是**主模型**的账单，
+而"评审这次到底花了多少"**根本查不到**——`docs/verification-2026-11-25.md` §4 把这条
+列为独立未做项。
+
+- `JudgeChunkLike` 新增 `usage?`（结构化的 `JudgeUsage`）与 `finish` 块的 `reason?`。
+- 每次评审把**所有尝试**的用量累加，写进 `JudgeResult.metrics`：
+  `usage_input` / `usage_output`，以及只在提供方真的报了才出现的
+  `usage_cache_read` / `usage_cache_write` / `usage_reasoning`。
+- 输出面与输入面经 1.20.0 的 `judgeLedgerMetrics()` 统一变成
+  `judge_usage_input` / `judge_usage_output` / …，所以回答的 `usage_*` 不会被覆盖。
+- 坏值不污染合计：`NaN`/负数/非数字按 0 计（`NaN` 序列化成 `null`，读者会误当 0）。
+- **重试是第二次计费调用**，所以两次都算：只报最后一次会让"最贵的那些评审"低报一半。
+
+### 2. 空 user 消息：一条只读信号（`empty_user_message`）
+
+2026-11-25 本会话真实发生：宿主「重试本轮」往持久化历史里追加了一条
+`content: []` 的 user 消息（`source.kind: retry`），严格端点随后对**每一轮**都回
+`400 [code=empty_message_content] param=messages[N]`，包括一条完全正常的用户输入。
+会话无法恢复（`docs/incident-2026-11-25.md`）。
+
+**这个故障在安全层里完全不可观测**：输入钩子只扫 `source.kind === 'user'`（tool 结果
+也是 `role: user`，不能当用户输入扫），空的重试消息被跳过；失败发生在宿主→模型之间，
+五个面都在它外边。
+
+1.21.0 加了一条**只读**信号，`src/hooks/context.ts` 的 `emptyUserMessages()`：
+
+- 正常回合：`labels.empty_user_message=<n>`（必要时再细分 `empty_user_retry` / `empty_user_other`）。
+- 整轮没有任何可扫文本（这正是中毒会话的形状）：单独写一条 `invariant_probe`，
+  `reason_code: empty_user_message`、`metrics.empty_user_messages`。
+- **不改消息**：安全插件静默改写宿主对话历史的代价大于这个 bug，所以这条只记账。
+
+### 3. 评审的补全预算与思考档 —— 提到配置面
+
+1.19.0 把单次预算写死成 4096（重试 8192），1.20.0 只给了 deadline 的旋钮。
+现在：
+
+| 新字段 | 默认 | 说明 |
+|---|---|---|
+| `output.judge.maxTokens` | `0` | `0` = 保留内置 4096，即 1.19.0/1.20.0 的行为逐字节不变；重试仍自动翻倍 |
+| `output.judge.reasoningEffort` | `""` | 空 = 用 provider 自己的默认档；填了才会真正发给宿主 |
+| `input.judgeMaxTokens` | `0` | `0` = 沿用 `output.judge.maxTokens`，与 `input.judgeTimeoutMs` 同构 |
+
+三者都是 volatile（面板可热改）。同时补了一处**误判修复**：
+
+- 宿主把"路由拒绝这个请求"（例如 `UNSUPPORTED_REASONING_EFFORT`）规范成终止 `finish` 块，
+  **不是**抛异常。过去这类失败会被当成"模型没说话"，于是再花一次翻倍预算重试。
+  现在读 `finish.reason`，记 `labels.reason=call_refused` + `labels.failure=<code>`，
+  **不重试**——同样的请求还会被拒一次。
+- 面板探针（`/safeharness judge probe` 与设置页的"测试连接"）改用与真实评审相同的
+  预算与思考档，否则它证明不了部署的行为。
+
+**明确不改的结论**（原文保留）：空回答是**路由**问题，1.19.0 的重试至今零触发，
+**不要**为它加预算或改 prompt。预算与思考档在这次发布里是**成本/兜底**旋钮，不是修复。
+
+### 测试
+
+- 内部口径 **68 文件 / 1089 用例**（1.20.0 是 67 / 1062）。
+- 新增 `tests/empty-user-message.test.ts`（7 条，含"信号绝不改写消息"）。
+- `judge` +11（usage 累计/缺失/可选计数器/坏值、预算翻倍、effort 透传、
+  `call_refused` 不重试）、`config` +6、`input-judge` +3、
+  `panel-settings` +4、`settings-form` +3、`settings-surface` volatile 精确列表 +3 项、
+  `ledger-metric-namespace` +1（`judge_usage_*` 与 `usage_*` 并存）。
+- 两道 `tsc` 0 错。
+
+---
+
+## 1.20.0 — 2026-11-25
+
+两件事，都由**账本实测**驱动：一个把已经错了很久的度量修对，一个把「一次超时 = 用户被拒一轮」
+变成可配置。两件都**不改变任何判定结果**。
+
+### 1. 账本度量被判官覆盖 —— 修掉（`judge_*` 命名空间）
+
+`output_reviewed` 的 metrics 是这样合并的：
+
+```ts
+metrics: { ...metrics, ...outcome.metrics },   // 1.19.0 及以前
+```
+
+`outcome.metrics` 来自判官，里面有 `chars`、`duration_ms`、`truncated` —— 与流钩子写的**同名**。
+判官的值在后，于是**覆盖了回答的值**。两条独立的账本铁证：
+
+| 证据 | 数量 |
+|---|---|
+| `duration_ms < review_ms`（`reviewStartedAt` 在流结束后才取，未覆盖时物理不可能） | **64 / 154** |
+| `duration_ms === judge_ms`（流总时长恰好等于判官时长） | **141 / 154** |
+
+（两个分数都是 2026-11-25 09:45 的快照；1.20.0 装进进程之前分母仍会增长，比例不变。）
+
+还有一条把 `chars` 也钉死的记录：`seq=5903`（1.6.0）`chars=3861`、`prompt_chars=4096`。
+`3861 = 4096 − 230（指令）− 5（分隔符）` —— 正是旧整条 prompt 上限裁掉指令后剩下的长度，
+「回答长度」不可能这么巧合地等于「上限减指令」。
+
+修法：判官的测量统一加 `judge_` 前缀（`judge_chars` / `judge_duration_ms` / `judge_prompt_chars` /
+`judge_response_chars` / `judge_attempts` / `judge_timeout_ms`），由 `judge/client.ts` 的
+`judgeLedgerMetrics()` 统一转换，输出面与输入面共用。**两个面的数字都保留**：判官的成本与
+它看到的内容是唯一证据，不能被「合并顺序」这种实现细节决定去留。
+
+**这是破坏性的口径变更**：1.20.0 之前的账本里，跑过判官的行上 `chars` / `duration_ms` 是判官的；
+之后的账本里它们永远是这一侧（回答/用户消息）的。跨版本对比长度或时长时必须以 1.20.0 为界。
+`tests/ledger-metric-namespace.test.ts` 8 条钉住两个方向：判官的数字仍在（带前缀），
+回答的数字不被改写（含 `judge.maxChars` 小于回答长度时 `chars` 仍为全长）。
+
+### 2. 输入面判官超时 —— 可单独配置（`input.judgeTimeoutMs`）
+
+输入面与输出面原本共用 `output.judge.timeoutMs`，但两者的**失败方向相反**：输出面超时只记一条
+`warn`，回答照常给用户；输入面在 `judgeFailClosed: true` 下超时 = **拒掉整轮**。
+2026-11-25 本机真实发生（`seq=21364`）：一条 102 字符的消息用掉共享的 6000 ms，整轮被拒，
+`reason_code=input_judge_unavailable`。
+
+- 新增 `input.judgeTimeoutMs`（volatile，面板可热改），**默认 `0` = 沿用 `output.judge.timeoutMs`**，
+  所以既有 profile 的行为逐字节不变。
+- 面板「防护面」卡片新增「输入评审超时（毫秒）」，提示里写明 `0 = 跟随输出评审`。
+- 面板**读取**的是已解析的生效值（`0` 已被替换），因为表单要回答「现在到底是多少」；
+  而表单只提交改动过的字段，所以不动它就不会把回退值钉进 patch。
+- `tests/config.test.ts` 4 条（0 回退、独立值、负数/小数被拒、坏的输出值只报一次）、
+  `tests/input-judge.test.ts` 3 条（含一条 400 ms vs 20 ms 的真计时用例）、
+  `tests/panel-settings.test.ts` 3 条、`tests/settings-form.test.ts` 2 条。
+
+### 判官空回答：结案，但**不是**这个版本修的
+
+上一版（1.19.0）为「空回答」加了 4096 预算 + 一次 8192 重试。2026-11-25 的全量取证结论是：
+
+- 全账本 **79 条** `empty`，末条 `2026-11-24T02:32:07Z`，之后 **0 条**。
+- 让它消失的是**换路由**：同一个 1.16.3 上，`02:36:05Z` 写入新 provider 前 6 次调用 6 条空回答，
+  之后 6 次调用 4 条成功、0 条空回答。1.19.0 要到 `11:34Z` 才加载。
+- 1.19.0 的**重试从未触发**：`attempts=2` 全账本 0 条；`labels.attempts` 一次都没写过
+  （`CHANGELOG 1.19.0` 说它「可核对」，核对结果是 0）。
+
+所以 1.20.0 **不为空回答改任何代码**：既有预算是无害的兜底，重试保持原样，
+但两份文档里「已修复」的口径都改成了「未验证」。取证方法与复算脚本口径见
+`docs/verification-2026-11-25.md`（该文件不入公开树）。
+
+### 测试
+
+- 内部树 **67 文件 / 1062 用例**（1.19.0 是 66 / 1042）。
+- 新增 `tests/ledger-metric-namespace.test.ts`（8 条）；`config` +4、`input-judge` +3、
+  `panel-settings` +3、`settings-form` +2、`settings-surface` 的 volatile 精确列表 +1 项。
+- 两道 `tsc` 均 0 错。
+
+---
 ## 1.19.0 — 2026-11-24
 
 三件事，全部由**实测数据**驱动，不是猜的。

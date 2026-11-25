@@ -5,22 +5,34 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createJudge, JUDGE_REQUEST_MARK } from '../src/judge/client.js'
-import type { JudgeCall, JudgeCallOptions, JudgeChunkLike, JudgeResult } from '../src/judge/client.js'
+import type { JudgeCall, JudgeCallOptions, JudgeCallOptionsForModel, JudgeChunkLike, JudgeResult } from '../src/judge/client.js'
 
 /** What a fake call saw; used for assertions about the prompt and the signal. */
 interface CallRecord {
   readonly prompt: string
   readonly maxTokens: number
   readonly signal: AbortSignal
+  /** 1.21.0: the configured reasoning effort, when one was asked for. */
+  readonly reasoningEffort?: string
 }
 
 /** Generous limits so most cases exercise the "nothing truncated" path. */
 const REVIEW: JudgeCallOptions = { maxChars: 100_000, timeoutMs: 1000 }
 
+/** Record one invocation, including the optional 1.21.0 controls. */
+function record(calls: CallRecord[], prompt: string, options: JudgeCallOptionsForModel): void {
+  calls.push({
+    prompt,
+    maxTokens: options.maxTokens,
+    signal: options.signal,
+    ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+  })
+}
+
 /** A call that streams exactly the given chunks, recording how it was invoked. */
 function chunkCall(chunks: readonly JudgeChunkLike[], calls: CallRecord[] = []): JudgeCall {
   return async function* (prompt, options) {
-    calls.push({ prompt, maxTokens: options.maxTokens, signal: options.signal })
+    record(calls, prompt, options)
     for (const chunk of chunks) yield chunk
   }
 }
@@ -39,7 +51,7 @@ function textCall(parts: readonly string[], calls: CallRecord[] = []): JudgeCall
 function seqCall(responses: readonly (readonly string[])[], calls: CallRecord[] = []): JudgeCall {
   let index = 0
   return async function* (prompt, options) {
-    calls.push({ prompt, maxTokens: options.maxTokens, signal: options.signal })
+    record(calls, prompt, options)
     const parts = responses[Math.min(index, responses.length - 1)] ?? []
     index += 1
     for (const part of parts) yield { type: 'text-delta', text: part }
@@ -49,7 +61,7 @@ function seqCall(responses: readonly (readonly string[])[], calls: CallRecord[] 
 /** A call that fails after one delta (iteration-time failure, not invocation). */
 function throwingCall(calls: CallRecord[] = []): JudgeCall {
   return async function* (prompt, options) {
-    calls.push({ prompt, maxTokens: options.maxTokens, signal: options.signal })
+    record(calls, prompt, options)
     yield { type: 'text-delta', text: '{"verdict":' }
     throw new Error('provider failed mid-stream')
   }
@@ -58,7 +70,7 @@ function throwingCall(calls: CallRecord[] = []): JudgeCall {
 /** A call that never produces a chunk; `return()` records cancellation. */
 function hangingCall(calls: CallRecord[], state: { returned: boolean }): JudgeCall {
   return (prompt, options) => {
-    calls.push({ prompt, maxTokens: options.maxTokens, signal: options.signal })
+    record(calls, prompt, options)
     return {
       [Symbol.asyncIterator](): AsyncIterator<JudgeChunkLike> {
         return {
@@ -416,5 +428,155 @@ describe('createJudge result hygiene', () => {
     const judge = createJudge(textCall(['{"verdict":"allow"}']), { now: () => ticks.shift() ?? 1015 })
     const result = await judge.review('hello', REVIEW)
     expect(result.metrics['duration_ms']).toBe(15)
+  })
+})
+
+describe('judge usage accounting (1.21.0)', () => {
+  /** A usage chunk as the host emits it before the terminal finish. */
+  function usageChunk(usage: Record<string, number>): JudgeChunkLike {
+    return { type: 'usage', usage }
+  }
+
+  it('reports the judged call\'s own token usage', async () => {
+    // Before 1.21.0 `JudgeChunkLike` dropped the usage block, so `output_reviewed`
+    // carried only the MAIN model's bill and the judge's cost was unmeasurable.
+    const result = await createJudge(chunkCall([
+      { type: 'text-delta', text: '{"verdict":"allow"}' },
+      usageChunk({ inputTokens: 800, outputTokens: 120 }),
+      { type: 'finish' },
+    ])).review('hello', REVIEW)
+    expect(result.metrics['usage_input']).toBe(800)
+    expect(result.metrics['usage_output']).toBe(120)
+  })
+
+  it('reports no usage keys when the provider sent no usage chunk', async () => {
+    const result = await createJudge(textCall(['{"verdict":"allow"}'])).review('hello', REVIEW)
+    expect(result.metrics['usage_input']).toBeUndefined()
+    expect(result.metrics['usage_output']).toBeUndefined()
+  })
+
+  it('sums usage across both attempts of an empty-reply retry', async () => {
+    // A retry is a second billed call: reporting only the last attempt would halve the
+    // recorded cost of exactly the reviews that cost the most.
+    let index = 0
+    const call: JudgeCall = async function* () {
+      const attempt = index
+      index += 1
+      if (attempt === 0) {
+        yield usageChunk({ inputTokens: 500, outputTokens: 4096 })
+        yield { type: 'finish' }
+        return
+      }
+      yield { type: 'text-delta', text: '{"verdict":"allow"}' }
+      yield usageChunk({ inputTokens: 400, outputTokens: 20 })
+      yield { type: 'finish' }
+    }
+    const result = await createJudge(call).review('hello', REVIEW)
+    expect(result.status).toBe('ok')
+    expect(result.metrics['attempts']).toBe(2)
+    expect(result.metrics['usage_input']).toBe(900)
+    expect(result.metrics['usage_output']).toBe(4116)
+  })
+
+  it('carries the optional cache and reasoning counters only when reported', async () => {
+    const withExtras = await createJudge(chunkCall([
+      { type: 'text-delta', text: '{"verdict":"allow"}' },
+      usageChunk({
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 7,
+        cacheWriteTokens: 3,
+        reasoningTokens: 4,
+      }),
+      { type: 'finish' },
+    ])).review('hello', REVIEW)
+    expect(withExtras.metrics['usage_cache_read']).toBe(7)
+    expect(withExtras.metrics['usage_cache_write']).toBe(3)
+    expect(withExtras.metrics['usage_reasoning']).toBe(4)
+
+    const withoutExtras = await createJudge(chunkCall([
+      { type: 'text-delta', text: '{"verdict":"allow"}' },
+      usageChunk({ inputTokens: 10, outputTokens: 5 }),
+      { type: 'finish' },
+    ])).review('hello', REVIEW)
+    expect(withoutExtras.metrics['usage_cache_read']).toBeUndefined()
+    expect(withoutExtras.metrics['usage_reasoning']).toBeUndefined()
+  })
+
+  it('survives a malformed usage block without poisoning the totals', async () => {
+    // `NaN` serializes to `null` in the ledger, which a reader would take as zero; a
+    // NaN total would be worse — it makes every downstream percentage meaningless.
+    const result = await createJudge(chunkCall([
+      { type: 'usage', usage: { inputTokens: Number.NaN, outputTokens: -5 } },
+      { type: 'text-delta', text: '{"verdict":"allow"}' },
+      { type: 'finish' },
+    ])).review('hello', REVIEW)
+    expect(result.status).toBe('ok')
+    expect(result.metrics['usage_input']).toBe(0)
+    expect(result.metrics['usage_output']).toBe(0)
+  })
+})
+
+describe('judge budget and effort controls (1.21.0)', () => {
+  it('uses the configured budget for the first attempt and doubles it for the retry', async () => {
+    const calls: CallRecord[] = []
+    const result = await createJudge(seqCall([[], ['{"verdict":"allow"}']], calls))
+      .review('hello', { ...REVIEW, maxTokens: 3000 })
+    expect(result.status).toBe('ok')
+    expect(calls[0]?.maxTokens).toBe(3000)
+    expect(calls[1]?.maxTokens).toBe(6000)
+  })
+
+  it('keeps 4096 when the configured budget is 0 (the unconfigured default)', async () => {
+    const calls: CallRecord[] = []
+    await createJudge(textCall(['{"verdict":"allow"}'], calls)).review('hello', { ...REVIEW, maxTokens: 0 })
+    expect(calls[0]?.maxTokens).toBe(4096)
+  })
+
+  it('forwards the configured reasoning effort to every attempt', async () => {
+    const calls: CallRecord[] = []
+    const result = await createJudge(seqCall([[], ['{"verdict":"allow"}']], calls))
+      .review('hello', { ...REVIEW, reasoningEffort: 'low' })
+    expect(result.status).toBe('ok')
+    expect(calls[0]?.reasoningEffort).toBe('low')
+    expect(calls[1]?.reasoningEffort).toBe('low')
+    expect(result.labels['effort']).toBe('low')
+  })
+
+  it('omits the effort entirely when none is configured', async () => {
+    const calls: CallRecord[] = []
+    const result = await createJudge(textCall(['{"verdict":"allow"}'], calls)).review('hello', REVIEW)
+    expect(calls[0]?.reasoningEffort).toBeUndefined()
+    expect(result.labels['effort']).toBeUndefined()
+  })
+
+  it('reports a refused request as error/call_refused instead of an empty reply', async () => {
+    // The host turns an unsupported `reasoningEffort` into a terminal `finish` chunk with
+    // an error reason, NOT a throw — so without reading the finish reason this would look
+    // like "the model said nothing" and be retried with a bigger budget.
+    const calls: CallRecord[] = []
+    const call: JudgeCall = async function* (prompt, options) {
+      record(calls, prompt, options)
+      yield {
+        type: 'finish',
+        reason: { kind: 'error', failure: { code: 'UNSUPPORTED_REASONING_EFFORT' } },
+      }
+    }
+    const result = await createJudge(call).review('hello', { ...REVIEW, reasoningEffort: 'ultra' })
+    expect(result.status).toBe('error')
+    expect(result.labels['reason']).toBe('call_refused')
+    expect(result.labels['failure']).toBe('UNSUPPORTED_REASONING_EFFORT')
+    // Not retried: the same request would be refused again.
+    expect(calls).toHaveLength(1)
+  })
+
+  it('still parses an answer that arrives before a benign finish', async () => {
+    const call: JudgeCall = async function* () {
+      yield { type: 'text-delta', text: '{"verdict":"allow"}' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const result = await createJudge(call).review('hello', REVIEW)
+    expect(result.status).toBe('ok')
+    expect(result.verdict).toBe('allow')
   })
 })

@@ -173,7 +173,24 @@ export interface SafeHarnessConfig {
     judge?: InputJudgeScope
     /** Treat "no usable verdict" as a denial instead of keeping the structural decision. */
     judgeFailClosed?: boolean
-  }
+      /**
+       * Wall-clock budget for ONE input-judge call, in milliseconds; `0` (the default)
+       * reuses `output.judge.timeoutMs`.
+       *
+       * Separate from the output budget because the two surfaces fail in opposite
+       * directions: a slow output judge only records a warning, while a slow input judge
+       * under `judgeFailClosed` rejects the whole turn. Measured 2026-11-25: one
+       * 102-character user message spent the shared 6000 ms and the turn was denied.
+       */
+      judgeTimeoutMs?: number
+      /**
+       * Completion budget for ONE input-judge attempt; `0` (default) reuses
+       * `output.judge.maxTokens` (1.21.0). Same split rationale as the deadline: a
+       * truncating budget costs the output surface a warning and the input surface a
+       * whole turn.
+       */
+      judgeMaxTokens?: number
+    }
   tools?: {
     mode?: EnforcementMode
     denyTools?: string[]
@@ -255,6 +272,18 @@ export interface SafeHarnessConfig {
       model?: string
       maxChars?: number
       timeoutMs?: number
+      /**
+       * Completion budget for ONE judge attempt; `0` (default) keeps the built-in
+       * 4096, and the empty-reply retry always gets twice this value (1.21.0).
+       */
+      maxTokens?: number
+      /**
+       * Reasoning effort for the judge's own call; empty keeps the provider default
+       * (1.21.0). Shared by both judge surfaces: it is a cost lever, not a fix for
+       * empty replies (those were a route problem — see
+       * `docs/verification-2026-11-25.md` §2).
+       */
+      reasoningEffort?: string
     }
     /**
      * Reasoning-text handling (1.18.0): `off`, `observe` (default — record length and
@@ -406,6 +435,16 @@ export const Config = z.object({
       .description('Input semantic judge: off, only when a structural rule hit, or every user turn.'),
     judgeFailClosed: z.boolean().volatile()
       .description('Deny when the input judge returns no usable verdict.'),
+    // 1.20.0. `0` means "reuse output.judge.timeoutMs", which keeps every existing
+    // profile byte-identical in behaviour; a non-zero value gives the input surface its
+    // own deadline. Volatile because an operator who finds themselves denied by a slow
+    // judge has to be able to raise it without restarting DSH.
+    judgeTimeoutMs: z.number().min(0).step(1).volatile()
+      .description('Input judge deadline in ms; 0 reuses output.judge.timeoutMs.'),
+    // 1.21.0, same fallback shape as the deadline above: `0` = reuse the output
+    // judge's completion budget, so nothing changes for an existing profile.
+    judgeMaxTokens: z.number().min(0).step(1).volatile()
+      .description('Input judge completion budget per attempt; 0 reuses output.judge.maxTokens.'),
   }).description('Input guard (agent/pre-step).'),
 
   tools: z.object({
@@ -460,6 +499,13 @@ export const Config = z.object({
       model: z.string().volatile().description('Judge model id.'),
       maxChars: z.number().min(1).volatile().description('Output characters fed to the judge.'),
       timeoutMs: z.number().min(1).volatile().description('Judge deadline.'),
+      // 1.21.0. `0` = keep the built-in 4096 budget, so an unconfigured profile is
+      // unchanged; volatile because it is the one lever against a local route whose
+      // answers keep running out of budget, and restarting DSH to change it is absurd.
+      maxTokens: z.number().min(0).step(1).volatile()
+        .description('Completion budget for one judge attempt; 0 keeps the built-in default.'),
+      reasoningEffort: z.string().volatile()
+        .description('Reasoning effort for the judge call; empty keeps the provider default.'),
     }).description('Semantic judge.'),
     /**
      * Reasoning (thinking) text, 1.18.0.
@@ -552,6 +598,22 @@ export interface ResolvedConfig {
     readonly normalize: boolean
     readonly judge: InputJudgeScope
     readonly judgeFailClosed: boolean
+    /**
+     * Effective deadline for one input-judge call, in ms.
+     *
+     * Already resolved: `0` in the raw config becomes `output.judge.timeoutMs` here, so
+     * the hook never has to reason about "unset". Keeping the fallback in one place is
+     * what makes the panel able to show the value actually in force.
+     */
+    readonly judgeTimeoutMs: number
+    /**
+     * Effective completion budget for one input-judge attempt (1.21.0).
+     *
+     * Resolved exactly like {@link judgeTimeoutMs}: `0` becomes the output judge's
+     * value here, so no hook re-implements the fallback and the panel can show what is
+     * actually in force.
+     */
+    readonly judgeMaxTokens: number
   }
   readonly tools: {
     readonly mode: EnforcementMode
@@ -603,6 +665,18 @@ export interface ResolvedConfig {
       readonly model: string
       readonly maxChars: number
       readonly timeoutMs: number
+      /**
+       * Completion budget for ONE judge attempt (1.21.0). Already resolved: `0` in the
+       * raw config becomes the client's built-in default, so every caller can pass the
+       * number through without re-deciding what "unset" means.
+       */
+      readonly maxTokens: number
+      /**
+       * Reasoning effort for the judge call; empty keeps the provider default
+       * (1.21.0). Not validated against the route here — the host refuses an
+       * unsupported id, and that refusal is recorded as `call_refused`.
+       */
+      readonly reasoningEffort: string
     }
     /** Reasoning-text handling (1.18.0); see {@link ReasoningHandling}. */
     readonly reasoning: ReasoningHandling
@@ -729,7 +803,15 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
   // explicit operator choice that adds a Python dependency.
   engine: { kind: 'builtin', command: '', args: [], cwd: '', timeoutMs: 1500, startTimeoutMs: 10000 },
   rules: { dir: '', watch: true, inline: [] },
-  input: { mode: 'enforce', maxChars: 60000, normalize: true, judge: 'flagged', judgeFailClosed: false },
+  input: {
+    mode: 'enforce',
+    maxChars: 60000,
+    normalize: true,
+    judge: 'flagged',
+    judgeFailClosed: false,
+    judgeTimeoutMs: 0,
+    judgeMaxTokens: 0,
+  },
   tools: {
     mode: 'enforce',
     denyTools: [],
@@ -771,7 +853,20 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
     mode: 'warn',
     bufferTimeoutMs: 15000,
     bufferMaxChars: 512000,
-    judge: { enabled: false, scope: 'flagged', provider: '', model: '', maxChars: 12000, timeoutMs: 4000 },
+    judge: {
+      enabled: false,
+      scope: 'flagged',
+      provider: '',
+      model: '',
+      maxChars: 12000,
+      timeoutMs: 4000,
+      // 1.21.0: `0` = keep the client's built-in 4096 budget, i.e. the 1.19.0–1.20.0
+      // behaviour, so this field's default changes nothing for an existing profile.
+      maxTokens: 0,
+      // Empty = the provider's own default effort. Lowering it is an explicit cost
+      // decision an operator has to make, never something the plugin infers.
+      reasoningEffort: '',
+    },
     // 1.18.0: reasoning is observed (length + hash) but not sent to the judge by
     // default — that would hand an external model the model's private scratchpad.
     // Redaction is ON because the cost of a leaked credential in thinking is the same
@@ -882,6 +977,52 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], path: st
   if (typeof value === 'string' && (allowed as readonly string[]).includes(value)) return value as T
   problems.push(`${path} must be one of ${allowed.join('|')} (got ${describeValue(value)})`)
   return allowed[0] as T
+}
+
+/**
+ * Upper bound on a judge completion budget (1.21.0).
+ *
+ * Not a provider limit — it is a guard against an operator typo (`maxTokens: 1000000`)
+ * turning a per-turn auxiliary call into a five-figure-token bill on every reviewed
+ * answer. The value is generous: the largest thinking model this plugin has measured
+ * spends ~4.4K tokens producing no text at all.
+ */
+export const MAX_JUDGE_MAX_TOKENS = 65536
+
+/**
+ * Split the judge's completion budget into (output, input) resolved values.
+ *
+ * Both fall back the same way and for the same reason: `0` means "inherit", and the
+ * inheritance is resolved exactly once here so no hook re-implements it.
+ *
+ * @param outputRaw - `output.judge.maxTokens` as written in the profile.
+ * @param inputRaw - `input.judgeMaxTokens` as written in the profile.
+ * @param problems - collector for config errors.
+ * @returns the output budget (0 = the client's built-in default) and the input one.
+ */
+export function resolveJudgeBudgets(
+  outputRaw: unknown,
+  inputRaw: unknown,
+  problems: string[],
+): { readonly output: number; readonly input: number } {
+  const output = boundedJudgeTokens(outputRaw, 'output.judge.maxTokens', problems, 0)
+  const inputRawValue = boundedJudgeTokens(inputRaw, 'input.judgeMaxTokens', problems, 0)
+  // Same "0 = inherit" rule as `input.judgeTimeoutMs`; inheriting 0 means both fall
+  // back to the client's default, which is the pre-1.21.0 behaviour.
+  return { output, input: inputRawValue === 0 ? output : inputRawValue }
+}
+
+/**
+ * Judge completion budget, clamped to {@link MAX_JUDGE_MAX_TOKENS}.
+ *
+ * `0` is legal and means "inherit / keep the built-in default", so the floor is 0
+ * rather than 1 — unlike a deadline, a budget of zero is a meaningful sentinel here.
+ */
+function boundedJudgeTokens(value: unknown, path: string, problems: string[], fallback: number): number {
+  const parsed = nonNegative(value, path, problems, fallback, { integer: true })
+  if (parsed <= MAX_JUDGE_MAX_TOKENS) return parsed
+  problems.push(`${path} must be <= ${MAX_JUDGE_MAX_TOKENS}`)
+  return MAX_JUDGE_MAX_TOKENS
 }
 
 /** Bounded non-negative number, or a recorded problem. */
@@ -1034,6 +1175,17 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     problems.push('engine.command is required when engine.kind is sidecar')
   }
 
+  // One resolution of the output judge's deadline, used twice: as its own value and as
+  // the fallback for `input.judgeTimeoutMs` (0 = "same as the output surface"). Reading
+  // it through `positive()` once keeps a bad value from being reported twice.
+  const outputJudgeTimeoutMs = positive(judge.timeoutMs, 'output.judge.timeoutMs', problems, 4000)
+  const inputJudgeTimeoutMs = nonNegative(input.judgeTimeoutMs, 'input.judgeTimeoutMs', problems, 0, { integer: true })
+    || outputJudgeTimeoutMs
+  // 1.21.0, resolved the same way: `0` means "inherit", and the fallback lives here so
+  // the hooks never have to decide what an unset budget means.
+  const judgeBudgets = resolveJudgeBudgets(judge.maxTokens, input.judgeMaxTokens, problems)
+  const judgeReasoningEffort = typeof judge.reasoningEffort === 'string' ? judge.reasoningEffort.trim() : ''
+
   const resolved: ResolvedConfig = {
     preset,
     engine: {
@@ -1055,6 +1207,8 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       normalize: typeof input.normalize === 'boolean' ? input.normalize : true,
       judge: oneOf(input.judge ?? 'flagged', ['off', 'flagged', 'always'] as const, 'input.judge', problems),
       judgeFailClosed: typeof input.judgeFailClosed === 'boolean' ? input.judgeFailClosed : false,
+      judgeTimeoutMs: inputJudgeTimeoutMs,
+      judgeMaxTokens: judgeBudgets.input,
     },
     tools: {
       mode: oneOf(tools.mode, ['off', 'warn', 'enforce'] as const, 'tools.mode', problems),
@@ -1101,7 +1255,9 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
         provider: typeof judge.provider === 'string' ? judge.provider : '',
         model: typeof judge.model === 'string' ? judge.model : '',
         maxChars: positive(judge.maxChars, 'output.judge.maxChars', problems, 12000),
-        timeoutMs: positive(judge.timeoutMs, 'output.judge.timeoutMs', problems, 4000),
+        timeoutMs: outputJudgeTimeoutMs,
+        maxTokens: judgeBudgets.output,
+        reasoningEffort: judgeReasoningEffort,
       },
       reasoning: oneOf(output.reasoning, ['off', 'observe', 'judge'] as const, 'output.reasoning', problems),
       reasoningRedact: typeof output.reasoningRedact === 'boolean' ? output.reasoningRedact : true,

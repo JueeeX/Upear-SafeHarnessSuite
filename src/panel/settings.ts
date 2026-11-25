@@ -18,7 +18,7 @@ import type { Judge } from '../judge/client.js'
 import { createJudgeFor } from '../hooks/llm.js'
 import { JUDGE_PROBE_TEXT } from '../surface/commands.js'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { isVolatileConfigPath, mergeConfigLayers } from '../config.js'
+import { isVolatileConfigPath, MAX_JUDGE_MAX_TOKENS, mergeConfigLayers } from '../config.js'
 import { isSensitivePathClass } from '../engine/sensitive-path.js'
 import { dirname } from 'node:path'
 import { resolveProviderIndexPath } from '../audit/paths.js'
@@ -810,6 +810,11 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       model: cfg.output.judge.model,
       maxChars: cfg.output.judge.maxChars,
       timeoutMs: cfg.output.judge.timeoutMs,
+      // 1.21.0. `0` is shown as 0 rather than as the client's built-in 4096: the client
+      // default is a code constant, not a deployment fact, and printing it here would
+      // make an untouched form look like an explicit `maxTokens: 4096` save.
+      maxTokens: cfg.output.judge.maxTokens,
+      reasoningEffort: cfg.output.judge.reasoningEffort,
       available: llm !== undefined,
       configurable,
     }
@@ -829,6 +834,17 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       mode: cfg.input.judge,
       failClosed: cfg.input.judgeFailClosed,
       normalize: cfg.input.normalize,
+      // 1.20.0. The *effective* deadline, i.e. `0` already replaced by the output
+      // judge's value. Showing the resolved number is what lets the form answer "what
+      // is in force"; because the client only sends fields it changed, an untouched
+      // form never pins the fallback into the patch. "Inherit" stays a patch-only
+      // spelling (`judgeTimeoutMs: 0`).
+      timeoutMs: cfg.input.judgeTimeoutMs,
+      // Same *shape* as the deadline (1.21.0), with one difference worth stating: this is
+      // the inherited number, and it can legitimately be `0` when the output judge is
+      // also `0` (both mean "use the client's built-in 4096"). The deadline has no such
+      // sentinel because it resolves to a concrete 4000 default.
+      maxTokens: cfg.input.judgeMaxTokens,
     }
     const toolDetection = {
       descriptorScan: cfg.tools.descriptorScan,
@@ -981,6 +997,19 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
         }
         input['normalize'] = knobs.normalize
       }
+      if (knobs.timeoutMs !== undefined) {
+        // 0 is meaningful here ("follow the output judge"), so the floor is 0 rather
+        // than MIN_TIMEOUT_MS; any other value gets the same bounds as the output judge.
+        const timeout = integerField(knobs.timeoutMs, 'inputJudge.timeoutMs', 0, MAX_TIMEOUT_MS)
+        if (timeout !== 0 && timeout < MIN_TIMEOUT_MS) {
+          throw new PanelSettingsError('settings_invalid', `inputJudge.timeoutMs must be 0 or at least ${MIN_TIMEOUT_MS}`)
+        }
+        input['judgeTimeoutMs'] = timeout
+      }
+      if (knobs.maxTokens !== undefined) {
+        // 1.21.0. `0` means "inherit the output judge's budget", so the floor is 0.
+        input['judgeMaxTokens'] = integerField(knobs.maxTokens, 'inputJudge.maxTokens', 0, MAX_JUDGE_MAX_TOKENS)
+      }
     }
 
     if (patch.judge !== undefined && patch.judge !== null) {
@@ -998,6 +1027,20 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       if (judge.model !== undefined) next['model'] = routeField(judge.model, 'judge.model')
       if (judge.maxChars !== undefined) next['maxChars'] = integerField(judge.maxChars, 'judge.maxChars', MIN_MAX_CHARS, MAX_MAX_CHARS)
       if (judge.timeoutMs !== undefined) next['timeoutMs'] = integerField(judge.timeoutMs, 'judge.timeoutMs', MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)
+      if (judge.maxTokens !== undefined) next['maxTokens'] = integerField(judge.maxTokens, 'judge.maxTokens', 0, MAX_JUDGE_MAX_TOKENS)
+      if (judge.reasoningEffort !== undefined) {
+        // Free-form by nature: the host is the authority on which ids a route accepts,
+        // and it refuses an unknown one before any provider I/O. Bounded here only so a
+        // paste cannot put a paragraph into the profile patch.
+        if (typeof judge.reasoningEffort !== 'string') {
+          throw new PanelSettingsError('settings_invalid', 'judge.reasoningEffort must be a string')
+        }
+        const effort = judge.reasoningEffort.trim()
+        if (effort.length > 64) {
+          throw new PanelSettingsError('settings_invalid', 'judge.reasoningEffort must be at most 64 characters')
+        }
+        next['reasoningEffort'] = effort
+      }
       const enabled = next['enabled'] === undefined ? cfg.output.judge.enabled : next['enabled'] === true
       const provider = typeof next['provider'] === 'string' ? next['provider'] : cfg.output.judge.provider
       const model = typeof next['model'] === 'string' ? next['model'] : cfg.output.judge.model
@@ -1479,6 +1522,11 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
     const result = await judge.review(JUDGE_PROBE_TEXT, {
       maxChars: 4_096,
       timeoutMs: Math.max(MIN_TIMEOUT_MS, cfg.timeoutMs),
+      // 1.21.0: a probe that used a different budget or effort than a real review would
+      // not be evidence about this deployment — an unsupported effort is exactly the
+      // failure the probe exists to surface.
+      maxTokens: cfg.maxTokens,
+      ...(cfg.reasoningEffort.length === 0 ? {} : { reasoningEffort: cfg.reasoningEffort }),
     })
     return {
       status: result.status,

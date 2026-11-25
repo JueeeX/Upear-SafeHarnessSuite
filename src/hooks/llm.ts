@@ -33,7 +33,7 @@ import { MAX_BUFFERED_OUTPUT_CHARS } from '../config.js'
 import { contentDigest } from '../util/hash.js'
 import { redactCredentialValues } from '../engine/tool.js'
 import { ReasonCode, type Decision } from '../engine/types.js'
-import { createJudge, JUDGE_REQUEST_MARK, type Judge, type JudgeResult, type JudgeStatus } from '../judge/client.js'
+import { createJudge, JUDGE_REQUEST_MARK, judgeLedgerMetrics, type Judge, type JudgeCallOptions, type JudgeCallOptionsForModel, type JudgeResult, type JudgeStatus } from '../judge/client.js'
 import { createRuleDrafter, DRAFT_REQUEST_MARK, type RuleDrafter } from '../draft/rule.js'
 
 /** Characters of assistant text we keep for post-stream scanning. */
@@ -97,6 +97,26 @@ interface ReviewOutcome {
  */
 export function createJudgeFor(ctx: Context, runtime: Runtime): Judge {
   return createJudge(judgeCallOf(ctx, runtime))
+}
+
+/**
+ * The output judge's per-call limits, read from the live config (1.21.0).
+ *
+ * Exported so the panel and the `/safeharness judge probe` travel with the same
+ * budget and effort as a real review: a probe that used different knobs would not be
+ * evidence about the deployment.
+ *
+ * @param runtime - shared config (a settings reload changes every field here).
+ * @returns the review options for {@link Judge.review}.
+ */
+export function outputJudgeLimits(runtime: Runtime): JudgeCallOptions {
+  const cfg = runtime.config.output.judge
+  return {
+    maxChars: cfg.maxChars,
+    timeoutMs: cfg.timeoutMs,
+    maxTokens: cfg.maxTokens,
+    ...(cfg.reasoningEffort.length === 0 ? {} : { reasoningEffort: cfg.reasoningEffort }),
+  }
 }
 
 /**
@@ -420,10 +440,7 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
         judgeDepth += 1
         const startedJudge = Date.now()
         try {
-          const judged = await judge.review(reasoning, {
-            maxChars: runtime.config.output.judge.maxChars,
-            timeoutMs: runtime.config.output.judge.timeoutMs,
-          })
+          const judged = await judge.review(reasoning, outputJudgeLimits(runtime))
           reasoningLabels.reasoning_judge = judged.status
           if (judged.status === 'ok' && judged.blocked) {
             reasoningDecision = 'warn'
@@ -473,7 +490,7 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
         // so "enforce-buffer was supposed to block this" stays answerable.
         ...(degraded === undefined ? {} : { buffer: degraded }),
       },
-      metrics: { ...metrics, ...outcome.metrics },
+      metrics: { ...metrics, ...judgeLedgerMetrics(outcome.metrics) },
     })
     runtime.count(outcome.decision === 'deny' ? 'deny' : outcome.decision === 'warn' ? 'warn' : 'allow', sessionId)
 
@@ -531,10 +548,7 @@ async function reviewOutput(
   } else if (judgeWanted && hooks.judgeAllowed) {
     hooks.onJudgeStart()
     try {
-      judgeResult = await judge.review(text, {
-        maxChars: cfg.output.judge.maxChars,
-        timeoutMs: cfg.output.judge.timeoutMs,
-      })
+      judgeResult = await judge.review(text, outputJudgeLimits(runtime))
     } finally {
       hooks.onJudgeEnd()
     }
@@ -704,7 +718,7 @@ function draftCallOf(
  * @param runtime - shared config (route can change on settings reload).
  * @returns the call, or undefined when the profile composes no llm service.
  */
-export function judgeCallOf(ctx: Context, runtime: Runtime): ((prompt: string, options: { signal: AbortSignal; maxTokens: number }) => AsyncIterable<{ type: string; text?: string }>) | undefined {
+export function judgeCallOf(ctx: Context, runtime: Runtime): ((prompt: string, options: JudgeCallOptionsForModel) => AsyncIterable<{ type: string; text?: string }>) | undefined {
   const service = ctx.get('llm') as { stream?: (options: unknown) => AsyncIterable<StreamChunk> } | undefined
   const dispatch = service?.stream?.bind(service)
   if (dispatch === undefined) return undefined
@@ -723,6 +737,10 @@ export function judgeCallOf(ctx: Context, runtime: Runtime): ((prompt: string, o
         source: { kind: 'plugin', plugin: '@upear/dsh-safeharness' } as never,
       })],
       maxTokens: options.maxTokens,
+      // 1.21.0. Sent only when configured: the host refuses an effort id the route
+      // does not advertise (UNSUPPORTED_REASONING_EFFORT) before any provider I/O, and
+      // a profile written before this field existed must keep the provider default.
+      ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort as never }),
       signal: options.signal,
       [JUDGE_REQUEST_MARK]: true,
     }
