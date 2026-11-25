@@ -201,6 +201,45 @@ describe('resolveConfig — validation', () => {
   })
 })
 
+describe('resolveConfig — input judge deadline (1.20.0)', () => {
+  it('falls back to the output judge deadline when input.judgeTimeoutMs is 0', () => {
+    // The compatibility promise: an unset field changes nothing. `0` is the default,
+    // and it must resolve to exactly the number the output surface uses.
+    const cfg = resolveConfig({ output: { judge: { timeoutMs: 4321 } } })
+    expect(cfg.input.judgeTimeoutMs).toBe(4321)
+    expect(cfg.input.judgeTimeoutMs).toBe(cfg.output.judge.timeoutMs)
+    // And with nothing configured at all, both sit on the documented 4000 ms default.
+    const bare = resolveConfig({})
+    expect(bare.output.judge.timeoutMs).toBe(4000)
+    expect(bare.input.judgeTimeoutMs).toBe(4000)
+  })
+
+  it('keeps an explicit input deadline independent of the output one', () => {
+    const cfg = resolveConfig({
+      input: { judgeTimeoutMs: 9000 },
+      output: { judge: { timeoutMs: 1500 } },
+    })
+    expect(cfg.input.judgeTimeoutMs).toBe(9000)
+    expect(cfg.output.judge.timeoutMs).toBe(1500)
+  })
+
+  it('rejects a negative or fractional deadline', () => {
+    expect(() => resolveConfig({ input: { judgeTimeoutMs: -1 } })).toThrow(/input\.judgeTimeoutMs/u)
+    expect(() => resolveConfig({ input: { judgeTimeoutMs: 1.5 } })).toThrow(/input\.judgeTimeoutMs/u)
+  })
+
+  it('reports a malformed output deadline exactly once', () => {
+    // One bad value must be reported once, not once per consumer.
+    try {
+      resolveConfig({ output: { judge: { timeoutMs: -5 } } })
+      throw new Error('expected a ConfigError')
+    } catch (error) {
+      const problems = (error as ConfigError).problems.filter((line) => /output\.judge\.timeoutMs/u.test(line))
+      expect(problems).toHaveLength(1)
+    }
+  })
+})
+
 describe('resolveConfig — notification channels', () => {
   it('turns the legacy feishuWebhook into one Feishu channel', () => {
     const config = resolveConfig({ patrol: { feishuWebhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/X' } })

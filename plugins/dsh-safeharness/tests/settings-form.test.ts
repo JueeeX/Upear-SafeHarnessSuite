@@ -16,7 +16,7 @@ function settingsValue(overrides: Partial<PanelSettingsValue> = {}): PanelSettin
   return {
     preset: 'balanced',
     surfaces: { input: 'enforce', tools: 'enforce', results: 'enforce', output: 'warn', approval: 'delegate' },
-    inputJudge: { mode: 'flagged', failClosed: false, normalize: true },
+    inputJudge: { mode: 'flagged', failClosed: false, normalize: true, timeoutMs: 4500 },
     toolDetection: { descriptorScan: 'warn', repeatedAttemptThreshold: 0, entropyThreshold: 0, entropyMinLength: 48, allowedTables: [] },
     pii: { enabled: true, classes: ['email', 'api_key'] },
     lists: { denyTools: ['rm -rf *'], askTools: [], denyTags: [], tagOverrides: [{ pattern: 'mcp__*', tags: ['external'] }], blockOn: ['credential_leak'], allowOnce: [] },
@@ -72,6 +72,33 @@ describe('buildPatch', () => {
     expect(buildPatch(value, { ...base, toolDetection: { ...base.toolDetection, entropyThreshold: '9' } }).invalid).toContain('0–8')
     expect(buildPatch(value, { ...base, source: { ...base.source, patrolWindowMinutes: '0' } }).invalid).toContain('≥ 1')
     expect(buildPatch(value, { ...base, source: { ...base.source, patrolMinCount: '-1' } }).invalid).toContain('0 或正整数')
+  })
+
+  it('patches the input judge deadline and rejects a non-numeric one (1.20.0)', () => {
+    const value = settingsValue()
+    const base = toSettingsData(value)
+    expect(buildPatch(value, {
+      ...base,
+      inputJudge: { ...base.inputJudge, timeoutMs: '12000' },
+    }).patch).toEqual({ expectedRevision: 3, inputJudge: { timeoutMs: 12000 } })
+    // `0` is a real choice ("inherit the output judge"), not an empty field.
+    expect(buildPatch(value, {
+      ...base,
+      inputJudge: { ...base.inputJudge, timeoutMs: '0' },
+    }).patch).toEqual({ expectedRevision: 3, inputJudge: { timeoutMs: 0 } })
+    expect(buildPatch(value, {
+      ...base,
+      inputJudge: { ...base.inputJudge, timeoutMs: 'abc' },
+    }).invalid).toContain('0 或正整数毫秒')
+  })
+
+  it('treats the freshly loaded input deadline as unchanged', () => {
+    // The regression this guards: the form carries the *resolved* deadline (4500 here)
+    // while the raw config may say `0`. Comparing the two raw values would make every
+    // load look dirty and pin the fallback on the first save.
+    const value = settingsValue()
+    expect(toSettingsData(value).inputJudge.timeoutMs).toBe('4500')
+    expect(buildPatch(value, toSettingsData(value)).patch).toBeUndefined()
   })
 
   it('normalizes a list and ignores a pure reorder', () => {

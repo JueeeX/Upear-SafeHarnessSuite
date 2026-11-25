@@ -33,6 +33,7 @@ import type { Decision } from '../engine/types.js'
 import { ReasonCode } from '../engine/types.js'
 import { foundSomething, type Runtime } from '../runtime.js'
 import { createInputJudge } from '../judge/input.js'
+import { judgeLedgerMetrics } from '../judge/client.js'
 import { judgeCallOf } from './llm.js'
 import {
   agentIdOf, rewriteUserText, sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf, userInputText,
@@ -159,18 +160,21 @@ export function installInputHook(ctx: Context, runtime: Runtime): void {
       let judgeBlocked = false
       let judgeUncertain = false
       const judgeLabels: Record<string, string> = {}
-      let judgeMetrics: Record<string, number | undefined> = {}
+      let judgeMetrics: Record<string, number | boolean | undefined> = {}
       if (judgeEligible) {
         const verdict = await inputJudge.review(scanned, {
           maxChars: runtime.config.output.judge.maxChars,
-          timeoutMs: runtime.config.output.judge.timeoutMs,
+          timeoutMs: runtime.config.input.judgeTimeoutMs,
         })
         judged = true
         judgeBlocked = verdict.status === 'ok' && verdict.verdict === 'block'
         judgeUncertain = !(verdict.status === 'ok' && (verdict.verdict === 'allow' || verdict.verdict === 'block'))
         judgeLabels['judge'] = judgeBlocked ? 'block' : verdict.verdict === 'allow' ? 'allow' : 'unknown'
         judgeLabels['judge_status'] = verdict.status
-        judgeMetrics = { ...verdict.metrics }
+        // Namespaced for the same reason as the output surface (1.20.0): the judge and
+        // this hook both measure `chars`, and a flat merge let the judge's number
+        // overwrite the user text's. See `judgeLedgerMetrics`.
+        judgeMetrics = judgeLedgerMetrics(verdict.metrics)
       }
       const uncertainDeny = judged && judgeUncertain && runtime.config.input.judgeFailClosed
       const deny = wouldDeny || judgeBlocked || uncertainDeny

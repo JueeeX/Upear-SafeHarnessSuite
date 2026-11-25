@@ -829,6 +829,12 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
       mode: cfg.input.judge,
       failClosed: cfg.input.judgeFailClosed,
       normalize: cfg.input.normalize,
+      // 1.20.0. The *effective* deadline, i.e. `0` already replaced by the output
+      // judge's value. Showing the resolved number is what lets the form answer "what
+      // is in force"; because the client only sends fields it changed, an untouched
+      // form never pins the fallback into the patch. "Inherit" stays a patch-only
+      // spelling (`judgeTimeoutMs: 0`).
+      timeoutMs: cfg.input.judgeTimeoutMs,
     }
     const toolDetection = {
       descriptorScan: cfg.tools.descriptorScan,
@@ -980,6 +986,15 @@ export function createPanelSettingsHost(ctx: Context, runtime: Runtime, logger: 
           throw new PanelSettingsError('settings_invalid', 'inputJudge.normalize must be a boolean')
         }
         input['normalize'] = knobs.normalize
+      }
+      if (knobs.timeoutMs !== undefined) {
+        // 0 is meaningful here ("follow the output judge"), so the floor is 0 rather
+        // than MIN_TIMEOUT_MS; any other value gets the same bounds as the output judge.
+        const timeout = integerField(knobs.timeoutMs, 'inputJudge.timeoutMs', 0, MAX_TIMEOUT_MS)
+        if (timeout !== 0 && timeout < MIN_TIMEOUT_MS) {
+          throw new PanelSettingsError('settings_invalid', `inputJudge.timeoutMs must be 0 or at least ${MIN_TIMEOUT_MS}`)
+        }
+        input['judgeTimeoutMs'] = timeout
       }
     }
 

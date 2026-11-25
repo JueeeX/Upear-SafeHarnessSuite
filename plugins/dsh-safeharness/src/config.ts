@@ -173,6 +173,16 @@ export interface SafeHarnessConfig {
     judge?: InputJudgeScope
     /** Treat "no usable verdict" as a denial instead of keeping the structural decision. */
     judgeFailClosed?: boolean
+    /**
+     * Wall-clock budget for ONE input-judge call, in milliseconds; `0` (the default)
+     * reuses `output.judge.timeoutMs`.
+     *
+     * Separate from the output budget because the two surfaces fail in opposite
+     * directions: a slow output judge only records a warning, while a slow input judge
+     * under `judgeFailClosed` rejects the whole turn. Measured 2026-11-25: one
+     * 102-character user message spent the shared 6000 ms and the turn was denied.
+     */
+    judgeTimeoutMs?: number
   }
   tools?: {
     mode?: EnforcementMode
@@ -406,6 +416,12 @@ export const Config = z.object({
       .description('Input semantic judge: off, only when a structural rule hit, or every user turn.'),
     judgeFailClosed: z.boolean().volatile()
       .description('Deny when the input judge returns no usable verdict.'),
+    // 1.20.0. `0` means "reuse output.judge.timeoutMs", which keeps every existing
+    // profile byte-identical in behaviour; a non-zero value gives the input surface its
+    // own deadline. Volatile because an operator who finds themselves denied by a slow
+    // judge has to be able to raise it without restarting DSH.
+    judgeTimeoutMs: z.number().min(0).step(1).volatile()
+      .description('Input judge deadline in ms; 0 reuses output.judge.timeoutMs.'),
   }).description('Input guard (agent/pre-step).'),
 
   tools: z.object({
@@ -552,6 +568,14 @@ export interface ResolvedConfig {
     readonly normalize: boolean
     readonly judge: InputJudgeScope
     readonly judgeFailClosed: boolean
+    /**
+     * Effective deadline for one input-judge call, in ms.
+     *
+     * Already resolved: `0` in the raw config becomes `output.judge.timeoutMs` here, so
+     * the hook never has to reason about "unset". Keeping the fallback in one place is
+     * what makes the panel able to show the value actually in force.
+     */
+    readonly judgeTimeoutMs: number
   }
   readonly tools: {
     readonly mode: EnforcementMode
@@ -729,7 +753,7 @@ const BASE_DEFAULTS: SafeHarnessConfig & Record<string, unknown> = {
   // explicit operator choice that adds a Python dependency.
   engine: { kind: 'builtin', command: '', args: [], cwd: '', timeoutMs: 1500, startTimeoutMs: 10000 },
   rules: { dir: '', watch: true, inline: [] },
-  input: { mode: 'enforce', maxChars: 60000, normalize: true, judge: 'flagged', judgeFailClosed: false },
+  input: { mode: 'enforce', maxChars: 60000, normalize: true, judge: 'flagged', judgeFailClosed: false, judgeTimeoutMs: 0 },
   tools: {
     mode: 'enforce',
     denyTools: [],
@@ -1034,6 +1058,13 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
     problems.push('engine.command is required when engine.kind is sidecar')
   }
 
+  // One resolution of the output judge's deadline, used twice: as its own value and as
+  // the fallback for `input.judgeTimeoutMs` (0 = "same as the output surface"). Reading
+  // it through `positive()` once keeps a bad value from being reported twice.
+  const outputJudgeTimeoutMs = positive(judge.timeoutMs, 'output.judge.timeoutMs', problems, 4000)
+  const inputJudgeTimeoutMs = nonNegative(input.judgeTimeoutMs, 'input.judgeTimeoutMs', problems, 0, { integer: true })
+    || outputJudgeTimeoutMs
+
   const resolved: ResolvedConfig = {
     preset,
     engine: {
@@ -1055,6 +1086,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
       normalize: typeof input.normalize === 'boolean' ? input.normalize : true,
       judge: oneOf(input.judge ?? 'flagged', ['off', 'flagged', 'always'] as const, 'input.judge', problems),
       judgeFailClosed: typeof input.judgeFailClosed === 'boolean' ? input.judgeFailClosed : false,
+      judgeTimeoutMs: inputJudgeTimeoutMs,
     },
     tools: {
       mode: oneOf(tools.mode, ['off', 'warn', 'enforce'] as const, 'tools.mode', problems),
@@ -1101,7 +1133,7 @@ export function resolveConfig(raw: SafeHarnessConfig = {}): ResolvedConfig {
         provider: typeof judge.provider === 'string' ? judge.provider : '',
         model: typeof judge.model === 'string' ? judge.model : '',
         maxChars: positive(judge.maxChars, 'output.judge.maxChars', problems, 12000),
-        timeoutMs: positive(judge.timeoutMs, 'output.judge.timeoutMs', problems, 4000),
+        timeoutMs: outputJudgeTimeoutMs,
       },
       reasoning: oneOf(output.reasoning, ['off', 'observe', 'judge'] as const, 'output.reasoning', problems),
       reasoningRedact: typeof output.reasoningRedact === 'boolean' ? output.reasoningRedact : true,

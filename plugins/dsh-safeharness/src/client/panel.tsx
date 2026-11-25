@@ -149,6 +149,17 @@ interface JudgeForm {
   readonly timeoutMs: string
 }
 
+/**
+ * Settings form (the input-judge half).
+ *
+ * `timeoutMs` is a string here while {@link PanelInputJudge.timeoutMs} is a number:
+ * the form must be able to hold a half-typed value (and be marked dirty) without
+ * coercing it to a number on every keystroke. `buildPatch` does the parse.
+ */
+interface InputJudgeForm extends Omit<PanelInputJudge, 'timeoutMs'> {
+  readonly timeoutMs: string
+}
+
 /** Settings form (the drafting-route half). */
 interface DraftForm {
   readonly provider: string
@@ -208,7 +219,7 @@ interface SettingsForm {
   readonly judge: JudgeForm
   readonly draft: DraftForm
   readonly surfaces: PanelSurfaceSettings
-  readonly inputJudge: PanelInputJudge
+  readonly inputJudge: InputJudgeForm
   readonly toolDetection: ToolDetectionForm
   readonly pii: PanelResultPii
   readonly lists: ListForm
@@ -274,6 +285,7 @@ interface MutableInputJudgePatch {
   mode?: 'off' | 'flagged' | 'always'
   failClosed?: boolean
   normalize?: boolean
+  timeoutMs?: number
 }
 
 /** Mutable builder for the tool-detection patch. */
@@ -477,7 +489,7 @@ interface StoredSettingsDraft {
   /** Absent drafts from 1.9.5 and earlier fall back to the loaded value. */
   readonly surfaces?: PanelSurfaceSettings
   /** Absent drafts from 1.10.0 and earlier fall back to the loaded value. */
-  readonly inputJudge?: PanelInputJudge
+  readonly inputJudge?: InputJudgeForm
   /** Absent drafts from 1.11.0 and earlier fall back to the loaded value. */
   readonly toolDetection?: ToolDetectionForm
   readonly pii?: PanelResultPii
@@ -1346,7 +1358,7 @@ export function toSettingsData(value: PanelSettingsValue): SettingsData {
     },
     draft: { provider: value.draft.provider, model: value.draft.model },
     surfaces: { ...value.surfaces },
-    inputJudge: { ...value.inputJudge },
+    inputJudge: { ...value.inputJudge, timeoutMs: String(value.inputJudge.timeoutMs) },
     toolDetection: {
       descriptorScan: value.toolDetection.descriptorScan,
       repeatedAttemptThreshold: String(value.toolDetection.repeatedAttemptThreshold),
@@ -1525,6 +1537,13 @@ export function buildPatch(value: PanelSettingsValue, form: SettingsForm): Patch
   if (inputJudge.mode !== value.inputJudge.mode) inputJudgePatch.mode = inputJudge.mode
   if (inputJudge.failClosed !== value.inputJudge.failClosed) inputJudgePatch.failClosed = inputJudge.failClosed
   if (inputJudge.normalize !== value.inputJudge.normalize) inputJudgePatch.normalize = inputJudge.normalize
+  if (inputJudge.timeoutMs !== String(value.inputJudge.timeoutMs)) {
+    // `0` is meaningful ("inherit the output judge's deadline") but the form shows the
+    // resolved number, so a zero here is an operator typing it deliberately.
+    const timeout = nonNegativeInt(inputJudge.timeoutMs)
+    if (timeout === undefined) return { patch: undefined, invalid: '「输入评审超时」必须是 0 或正整数毫秒。' }
+    inputJudgePatch.timeoutMs = timeout
+  }
   const toolDetectionPatch: MutableToolDetectionPatch = {}
   if (toolDetection.descriptorScan !== value.toolDetection.descriptorScan) {
     toolDetectionPatch.descriptorScan = toolDetection.descriptorScan
@@ -3043,7 +3062,7 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
     setSave(current => current.status === 'saved' ? { status: 'idle' } : current)
   }, [])
 
-  const updateInputJudge = useCallback((patch: Partial<PanelInputJudge>): void => {
+  const updateInputJudge = useCallback((patch: Partial<InputJudgeForm>): void => {
     setView(current => current.status === 'ready'
       ? { status: 'ready', data: { ...current.data, inputJudge: { ...current.data.inputJudge, ...patch } } }
       : current)
@@ -3302,6 +3321,14 @@ export function SettingsTab({ face, active, draftFact, onRefresh }: {
               { value: 'off', label: '关闭' },
             ]}
             hint="复用上面的评审路由；每次评审多一次模型调用"
+          />
+          <Field
+            label="输入评审超时（毫秒）"
+            value={inputJudge.timeoutMs}
+            inputMode="numeric"
+            disabled={readOnly}
+            onChange={(next) => { updateInputJudge({ timeoutMs: next }) }}
+            hint="0 = 跟随输出评审的 timeoutMs。输入面超时在 fail-closed 下会拒掉整轮，所以允许单独放宽。"
           />
         </div>
         <div className="shp-switch-row">

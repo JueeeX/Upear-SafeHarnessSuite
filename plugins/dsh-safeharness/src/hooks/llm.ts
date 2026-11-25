@@ -33,7 +33,7 @@ import { MAX_BUFFERED_OUTPUT_CHARS } from '../config.js'
 import { contentDigest } from '../util/hash.js'
 import { redactCredentialValues } from '../engine/tool.js'
 import { ReasonCode, type Decision } from '../engine/types.js'
-import { createJudge, JUDGE_REQUEST_MARK, type Judge, type JudgeResult, type JudgeStatus } from '../judge/client.js'
+import { createJudge, JUDGE_REQUEST_MARK, judgeLedgerMetrics, type Judge, type JudgeResult, type JudgeStatus } from '../judge/client.js'
 import { createRuleDrafter, DRAFT_REQUEST_MARK, type RuleDrafter } from '../draft/rule.js'
 
 /** Characters of assistant text we keep for post-stream scanning. */
@@ -473,7 +473,7 @@ export function installLlmHook(ctx: Context, runtime: Runtime): void {
         // so "enforce-buffer was supposed to block this" stays answerable.
         ...(degraded === undefined ? {} : { buffer: degraded }),
       },
-      metrics: { ...metrics, ...outcome.metrics },
+      metrics: { ...metrics, ...judgeLedgerMetrics(outcome.metrics) },
     })
     runtime.count(outcome.decision === 'deny' ? 'deny' : outcome.decision === 'warn' ? 'warn' : 'allow', sessionId)
 

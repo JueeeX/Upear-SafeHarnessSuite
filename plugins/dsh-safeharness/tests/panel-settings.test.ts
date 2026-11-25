@@ -16,7 +16,7 @@ function stubRuntime(overrides: {
 } = {}): Runtime {
   const config = {
     preset: 'balanced',
-    input: { mode: 'enforce' as const, judge: 'flagged' as const, judgeFailClosed: false, normalize: true },
+    input: { mode: 'enforce' as const, judge: 'flagged' as const, judgeFailClosed: false, normalize: true, judgeTimeoutMs: 6000 },
     tools: {
       mode: 'enforce' as const,
       descriptorScan: 'warn' as const,
@@ -164,6 +164,14 @@ describe('createPanelSettingsHost', () => {
       configurable: true,
     })
     expect(value.draft).toEqual({ enabled: false, provider: '', model: '' })
+    // 1.20.0: the read projection carries the deadline the hook will actually use, so
+    // the form can answer "what is in force" without re-deriving the fallback.
+    expect(value.inputJudge).toEqual({
+      mode: 'flagged',
+      failClosed: false,
+      normalize: true,
+      timeoutMs: 6000,
+    })
     expect(value.surfaces).toEqual({
       input: 'enforce',
       tools: 'enforce',
@@ -308,6 +316,37 @@ describe('createPanelSettingsHost', () => {
     await expect(host.save({ pii: { classes: ['passport'] } })).rejects.toMatchObject({ code: 'settings_invalid' })
     await expect(host.save({ pii: { enabled: 'yes' as never } })).rejects.toMatchObject({ code: 'settings_invalid' })
     expect(update).not.toHaveBeenCalled()
+  })
+
+  it('saves the input judge deadline on the live seam (1.20.0)', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ inputJudge: { timeoutMs: 9000 } })
+    expect(update).toHaveBeenCalledWith('safeharness', { input: { judgeTimeoutMs: 9000 } })
+  })
+
+  it('accepts 0 as inherit-the-output-deadline, not as an empty field', async () => {
+    const update = vi.fn(async () => undefined)
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(update), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await host.save({ inputJudge: { timeoutMs: 0 } })
+    expect(update).toHaveBeenCalledWith('safeharness', { input: { judgeTimeoutMs: 0 } })
+  })
+
+  it('refuses a deadline below the floor unless it is exactly 0', async () => {
+    const host = createPanelSettingsHost(
+      stubContext({ settings: stubSettings(vi.fn(async () => undefined)), configEditor: stubEditor() }) as never,
+      stubRuntime(),
+      logger,
+    )
+    await expect(host.save({ inputJudge: { timeoutMs: 10 } })).rejects.toMatchObject({ code: 'settings_invalid' })
   })
 
   it('reads the 1.12.0 detection state back to the panel', async () => {

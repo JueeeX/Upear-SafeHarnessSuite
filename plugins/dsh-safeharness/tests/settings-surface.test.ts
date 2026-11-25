@@ -93,6 +93,9 @@ describe('settings schema', () => {
       'input.mode',
       'input.judge',
       'input.judgeFailClosed',
+      // 1.20.0: the input judge's own deadline. Volatile because the failure it guards
+      // against is a denied turn — the operator has to be able to raise it live.
+      'input.judgeTimeoutMs',
       'input.normalize',
       'output.bufferMaxChars',
       'output.bufferTimeoutMs',

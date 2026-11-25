@@ -190,6 +190,48 @@ const RETRY_INSTRUCTION_SUFFIX = ' Answer immediately with the JSON object and n
 /** Sentinel resolved by the deadline timer; a symbol cannot collide with a chunk. */
 const TIMEOUT = Symbol('safeharness-judge-timeout')
 
+/**
+ * Prefix applied when a judge result's metrics are written into a *host* audit
+ * record (1.20.0).
+ *
+ * The judge measures the same things the stream hook measures — `chars`,
+ * `duration_ms`, `truncated` — from the other side of a different call. Merging
+ * the two flat namespaces let the judge's numbers overwrite the answer's, which
+ * silently corrupted every ledger-based measurement: measured 2026-11-25,
+ * `duration_ms < review_ms` on 64 of 154 judged rows (impossible unless
+ * overwritten) and `chars` pinned at `4096 - 230 - 5 = 3861` on the one row that
+ * hit the old whole-prompt ceiling.
+ *
+ * Namespacing is deliberately *not* a reordering of the merge: reordering would
+ * hide the judge's numbers instead, and they are the only record of what the
+ * judge actually cost and saw. Both halves must survive.
+ */
+export const JUDGE_METRIC_PREFIX = 'judge_'
+
+/**
+ * Rename a judge result's metrics for a host audit record.
+ *
+ * `judge_duration_ms` rather than `duration_ms`, `judge_chars` rather than
+ * `chars`: a reader can tell which side of the call a number came from without
+ * knowing the merge order. Values are passed through untouched — the parameter is
+ * widened to include booleans only because some callers merge the judge's numbers
+ * into a record that also carries flags (the output hook's `would_block`).
+ *
+ * @param metrics - the judge's own metrics (`JudgeResult.metrics`), or a record
+ *   they were already folded into.
+ * @returns the same measurements, every key prefixed.
+ */
+export function judgeLedgerMetrics(
+  metrics: Readonly<Record<string, number | boolean | undefined>>,
+): Record<string, number | boolean | undefined> {
+  const renamed: Record<string, number | boolean | undefined> = {}
+  for (const [key, value] of Object.entries(metrics)) {
+    if (value === undefined) continue
+    renamed[`${JUDGE_METRIC_PREFIX}${key}`] = value
+  }
+  return renamed
+}
+
 /** Build a frozen result, deriving `blocked` so callers cannot disagree about it. */
 function buildResult(
   status: JudgeStatus,

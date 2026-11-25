@@ -238,6 +238,15 @@ export interface PanelInputJudge {
   readonly failClosed: boolean
   /** Clean the text (NFKC / zero-width / HTML comments) before matching and rewrite it. */
   readonly normalize: boolean
+  /**
+   * Deadline in force for one input-judge call, in ms (1.20.0).
+   *
+   * Already resolved: when the profile leaves `input.judgeTimeoutMs` at `0`, this
+   * carries the output judge's deadline, because that is what the hook will use.
+   * The form shows the number in force, and — since the client only submits fields
+   * it changed — an untouched form never pins the fallback into the patch.
+   */
+  readonly timeoutMs: number
 }
 
 /**
@@ -425,6 +434,8 @@ export interface PanelSettingsPatch {
     readonly mode?: 'off' | 'flagged' | 'always'
     readonly failClosed?: boolean
     readonly normalize?: boolean
+    /** 1.20.0. Input-judge deadline in ms; `0` reintroduces the output-judge fallback. */
+    readonly timeoutMs?: number
   }
   /** Tool-surface detection knobs (descriptor scan, thresholds, table allowlist). */
   readonly toolDetection?: {

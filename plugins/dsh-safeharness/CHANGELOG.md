@@ -2,6 +2,81 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.20.0 — 2026-11-25
+
+两件事，都由**账本实测**驱动：一个把已经错了很久的度量修对，一个把「一次超时 = 用户被拒一轮」
+变成可配置。两件都**不改变任何判定结果**。
+
+### 1. 账本度量被判官覆盖 —— 修掉（`judge_*` 命名空间）
+
+`output_reviewed` 的 metrics 是这样合并的：
+
+```ts
+metrics: { ...metrics, ...outcome.metrics },   // 1.19.0 及以前
+```
+
+`outcome.metrics` 来自判官，里面有 `chars`、`duration_ms`、`truncated` —— 与流钩子写的**同名**。
+判官的值在后，于是**覆盖了回答的值**。两条独立的账本铁证：
+
+| 证据 | 数量 |
+|---|---|
+| `duration_ms < review_ms`（`reviewStartedAt` 在流结束后才取，未覆盖时物理不可能） | **64 / 154** |
+| `duration_ms === judge_ms`（流总时长恰好等于判官时长） | **141 / 154** |
+
+（两个分数都是 2026-11-25 09:45 的快照；1.20.0 装进进程之前分母仍会增长，比例不变。）
+
+还有一条把 `chars` 也钉死的记录：`seq=5903`（1.6.0）`chars=3861`、`prompt_chars=4096`。
+`3861 = 4096 − 230（指令）− 5（分隔符）` —— 正是旧整条 prompt 上限裁掉指令后剩下的长度，
+「回答长度」不可能这么巧合地等于「上限减指令」。
+
+修法：判官的测量统一加 `judge_` 前缀（`judge_chars` / `judge_duration_ms` / `judge_prompt_chars` /
+`judge_response_chars` / `judge_attempts` / `judge_timeout_ms`），由 `judge/client.ts` 的
+`judgeLedgerMetrics()` 统一转换，输出面与输入面共用。**两个面的数字都保留**：判官的成本与
+它看到的内容是唯一证据，不能被「合并顺序」这种实现细节决定去留。
+
+**这是破坏性的口径变更**：1.20.0 之前的账本里，跑过判官的行上 `chars` / `duration_ms` 是判官的；
+之后的账本里它们永远是这一侧（回答/用户消息）的。跨版本对比长度或时长时必须以 1.20.0 为界。
+`tests/ledger-metric-namespace.test.ts` 8 条钉住两个方向：判官的数字仍在（带前缀），
+回答的数字不被改写（含 `judge.maxChars` 小于回答长度时 `chars` 仍为全长）。
+
+### 2. 输入面判官超时 —— 可单独配置（`input.judgeTimeoutMs`）
+
+输入面与输出面原本共用 `output.judge.timeoutMs`，但两者的**失败方向相反**：输出面超时只记一条
+`warn`，回答照常给用户；输入面在 `judgeFailClosed: true` 下超时 = **拒掉整轮**。
+2026-11-25 本机真实发生（`seq=21364`）：一条 102 字符的消息用掉共享的 6000 ms，整轮被拒，
+`reason_code=input_judge_unavailable`。
+
+- 新增 `input.judgeTimeoutMs`（volatile，面板可热改），**默认 `0` = 沿用 `output.judge.timeoutMs`**，
+  所以既有 profile 的行为逐字节不变。
+- 面板「防护面」卡片新增「输入评审超时（毫秒）」，提示里写明 `0 = 跟随输出评审`。
+- 面板**读取**的是已解析的生效值（`0` 已被替换），因为表单要回答「现在到底是多少」；
+  而表单只提交改动过的字段，所以不动它就不会把回退值钉进 patch。
+- `tests/config.test.ts` 4 条（0 回退、独立值、负数/小数被拒、坏的输出值只报一次）、
+  `tests/input-judge.test.ts` 3 条（含一条 400 ms vs 20 ms 的真计时用例）、
+  `tests/panel-settings.test.ts` 3 条、`tests/settings-form.test.ts` 2 条。
+
+### 判官空回答：结案，但**不是**这个版本修的
+
+上一版（1.19.0）为「空回答」加了 4096 预算 + 一次 8192 重试。2026-11-25 的全量取证结论是：
+
+- 全账本 **79 条** `empty`，末条 `2026-11-24T02:32:07Z`，之后 **0 条**。
+- 让它消失的是**换路由**：同一个 1.16.3 上，`02:36:05Z` 写入新 provider 前 6 次调用 6 条空回答，
+  之后 6 次调用 4 条成功、0 条空回答。1.19.0 要到 `11:34Z` 才加载。
+- 1.19.0 的**重试从未触发**：`attempts=2` 全账本 0 条；`labels.attempts` 一次都没写过
+  （`CHANGELOG 1.19.0` 说它「可核对」，核对结果是 0）。
+
+所以 1.20.0 **不为空回答改任何代码**：既有预算是无害的兜底，重试保持原样，
+但两份文档里「已修复」的口径都改成了「未验证」。取证方法与复算脚本口径见
+`docs/verification-2026-11-25.md`（该文件不入公开树）。
+
+### 测试
+
+- 内部树 **67 文件 / 1062 用例**（1.19.0 是 66 / 1042）。
+- 新增 `tests/ledger-metric-namespace.test.ts`（8 条）；`config` +4、`input-judge` +3、
+  `panel-settings` +3、`settings-form` +2、`settings-surface` 的 volatile 精确列表 +1 项。
+- 两道 `tsc` 均 0 错。
+
+---
 ## 1.19.0 — 2026-11-24
 
 三件事，全部由**实测数据**驱动，不是猜的。
