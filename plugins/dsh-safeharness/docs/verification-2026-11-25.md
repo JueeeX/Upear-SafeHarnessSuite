@@ -362,15 +362,21 @@ if (r.kind === 'output_reviewed' && r.plugin_version === '1.16.3') {
   - 给 `input.judge` 加一档「只在结构性可疑时 fail-closed」（现在是二选一）；
   - 或者给输入判官加**连续失败熔断**（同会话连 N 次不可用后降级为记账 + 放行）；
   - 或者把 `input.judgeFailClosed` 的默认值在 `always` 档下改成 `false`（破坏性）。
-- 判官自身 usage 记账：仍然没有。`JudgeChunkLike` 丢弃 `usage` 块，
-  所以要量判官成本，得先让它把 usage 透出来。这是**独立的一项**，未做。
+- 判官自身 usage 记账：~~仍然没有~~ → **1.21.0 已做**。`JudgeChunkLike` 现在读 `usage` 与
+  `finish.reason`，跨尝试累加后经 `judgeLedgerMetrics()` 写成
+  `judge_usage_input` / `judge_usage_output`（+ 可选的 `judge_usage_cache_read` /
+  `_cache_write` / `_reasoning`）。回答侧的 `usage_*` 与之并存。因此
+  「/safeharness judge probe 测一下评审开销」现在**可以**做了——见文末补注。
 
 ---
 
 ## 9. 没做的事
 
 - **没有改 profile 配置**：`od-ds` 那条路由是操作者通过面板加的，本文只记录它。
-- 没有重跑 `/safeharness judge probe` 测判官开销——判官 usage 仍未透出（§8 末）。
+- 没有重跑 `/safeharness judge probe` 测判官开销——写本文时判官 usage 仍未透出（§8 末）。
+  **1.21.0 之后这条限制消失了**：重跑 probe（或任意一次真实评审）即可从账本的
+  `judge_usage_input` / `judge_usage_output` 读到评审自己的 token 成本；
+  这一步仍未执行，属于「可以做但本次没做」。
 - 没有就地改写 §9.10 / MANUAL §11 第 24 条的历史结论：按本仓惯例
   （交接文档「历史文档保留」原则），原文保留，1.20.0 的 CHANGELOG 与 MANUAL
   在原文之后追加「实测更正」段落，而不是重写历史。
@@ -378,4 +384,5 @@ if (r.kind === 'output_reviewed' && r.plugin_version === '1.16.3') {
 ---
 
 *本文取证于 2026-11-25 09:45（Asia/Shanghai），单次扫描快照：插件 1.19.0 /
-账本 seq `21999` / 22145 行 / 16,781,288 B。§5/§6 的修复于同日 1.20.0 落地。*
+账本 seq `21999` / 22145 行 / 16,781,288 B。§5/§6 的修复于同日 1.20.0 落地，
+§8 末的「判官 usage」于同日 1.21.0 落地。*

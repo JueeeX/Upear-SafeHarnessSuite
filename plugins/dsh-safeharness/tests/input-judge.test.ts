@@ -184,3 +184,73 @@ describe('input judge deadline (1.20.0)', () => {
     expect((denied?.metrics as Record<string, number> | undefined)?.judge_timeout_ms).toBe(400)
   })
 })
+
+describe('input judge budget and effort (1.21.0)', () => {
+  /** A judge service that answers and records the request it received. */
+  function recordingService(reply: string, seen: Record<string, unknown>[]): {
+    stream: (request: unknown) => AsyncIterable<{ type: string; text?: string }>
+  } {
+    return {
+      stream: (request: unknown) => {
+        seen.push(request as Record<string, unknown>)
+        return (async function* () {
+          yield { type: 'text-delta', text: reply }
+        })()
+      },
+    }
+  }
+
+  it('sends the resolved input budget, not the output judge\'s', async () => {
+    // Same split rationale as the deadline: a truncating budget costs the output surface
+    // a warning and the input surface the whole turn under `judgeFailClosed`.
+    const seen: Record<string, unknown>[] = []
+    const { host, runtime } = createFakeHost({
+      config: {
+        preset: 'balanced',
+        input: { judge: 'always', judgeMaxTokens: 777 },
+        output: { judge: { maxTokens: 1234 } },
+      },
+      services: { llm: recordingService('{"verdict":"safe"}', seen) },
+    })
+    installInputHook(host.ctx as never, runtime)
+    await step(host as never, 'hello')
+    expect(seen[0]?.maxTokens).toBe(777)
+  })
+
+  it('inherits the output judge budget when input.judgeMaxTokens is 0', async () => {
+    const seen: Record<string, unknown>[] = []
+    const { host, runtime } = createFakeHost({
+      config: {
+        preset: 'balanced',
+        input: { judge: 'always', judgeMaxTokens: 0 },
+        output: { judge: { maxTokens: 1234 } },
+      },
+      services: { llm: recordingService('{"verdict":"safe"}', seen) },
+    })
+    installInputHook(host.ctx as never, runtime)
+    await step(host as never, 'hello')
+    expect(seen[0]?.maxTokens).toBe(1234)
+  })
+
+  it('omits reasoningEffort unless one is configured, and forwards it when it is', async () => {
+    // An unsupported effort is refused by the host before any provider I/O, so sending
+    // one "just in case" would break every deployment whose route does not offer it.
+    const plain: Record<string, unknown>[] = []
+    const bare = createFakeHost({
+      config: { preset: 'balanced', input: { judge: 'always' } },
+      services: { llm: recordingService('{"verdict":"safe"}', plain) },
+    })
+    installInputHook(bare.host.ctx as never, bare.runtime)
+    await step(bare.host as never, 'hello')
+    expect('reasoningEffort' in (plain[0] ?? {})).toBe(false)
+
+    const withEffort: Record<string, unknown>[] = []
+    const tuned = createFakeHost({
+      config: { preset: 'balanced', input: { judge: 'always' }, output: { judge: { reasoningEffort: 'low' } } },
+      services: { llm: recordingService('{"verdict":"safe"}', withEffort) },
+    })
+    installInputHook(tuned.host.ctx as never, tuned.runtime)
+    await step(tuned.host as never, 'hello')
+    expect(withEffort[0]?.reasoningEffort).toBe('low')
+  })
+})

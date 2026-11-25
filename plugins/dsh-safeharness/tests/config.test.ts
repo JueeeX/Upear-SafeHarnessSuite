@@ -129,7 +129,18 @@ describe('resolveConfig — preset expansion', () => {
     const config = resolveConfig({ preset: 'balanced' })
     expect(config.rules).toEqual({ dir: '', watch: true, inline: [] })
     expect(config.results.blockOn).toEqual(['credential_leak'])
-    expect(config.output.judge).toEqual({ enabled: false, scope: 'flagged', provider: '', model: '', maxChars: 12000, timeoutMs: 4000 })
+    // 1.21.0 added `maxTokens` (0 = the client's built-in 4096) and `reasoningEffort`
+    // (empty = the provider's own default), so an existing profile resolves as before.
+    expect(config.output.judge).toEqual({
+      enabled: false,
+      scope: 'flagged',
+      provider: '',
+      model: '',
+      maxChars: 12000,
+      timeoutMs: 4000,
+      maxTokens: 0,
+      reasoningEffort: '',
+    })
     // M3 buffers (T3.2): both caps are present so a deployment can tune them.
     expect(config.output.bufferTimeoutMs).toBe(15000)
     expect(config.output.bufferMaxChars).toBe(512000)
@@ -237,6 +248,48 @@ describe('resolveConfig — input judge deadline (1.20.0)', () => {
       const problems = (error as ConfigError).problems.filter((line) => /output\.judge\.timeoutMs/u.test(line))
       expect(problems).toHaveLength(1)
     }
+  })
+})
+
+describe('resolveConfig — judge budgets and effort (1.21.0)', () => {
+  it('defaults to 0 on both surfaces, which the client reads as "built-in 4096"', () => {
+    // The compatibility promise again: an unset budget changes nothing, and `0` is the
+    // literal way to say "keep what 1.19.0/1.20.0 did".
+    const cfg = resolveConfig({})
+    expect(cfg.output.judge.maxTokens).toBe(0)
+    expect(cfg.input.judgeMaxTokens).toBe(0)
+    expect(cfg.output.judge.reasoningEffort).toBe('')
+  })
+
+  it('falls back to the output judge budget when input.judgeMaxTokens is 0', () => {
+    const cfg = resolveConfig({ output: { judge: { maxTokens: 6000 } } })
+    expect(cfg.output.judge.maxTokens).toBe(6000)
+    expect(cfg.input.judgeMaxTokens).toBe(6000)
+  })
+
+  it('keeps an explicit input budget independent of the output one', () => {
+    const cfg = resolveConfig({
+      input: { judgeMaxTokens: 2048 },
+      output: { judge: { maxTokens: 16000 } },
+    })
+    expect(cfg.input.judgeMaxTokens).toBe(2048)
+    expect(cfg.output.judge.maxTokens).toBe(16000)
+  })
+
+  it('refuses a negative or fractional budget', () => {
+    expect(() => resolveConfig({ output: { judge: { maxTokens: -1 } } })).toThrow(/output\.judge\.maxTokens/u)
+    expect(() => resolveConfig({ output: { judge: { maxTokens: 1.5 } } })).toThrow(/output\.judge\.maxTokens/u)
+    expect(() => resolveConfig({ input: { judgeMaxTokens: -2 } })).toThrow(/input\.judgeMaxTokens/u)
+  })
+
+  it('clamps a typo-scale budget instead of accepting it', () => {
+    // A million-token budget on a per-turn auxiliary call is a typo, not a policy.
+    expect(() => resolveConfig({ output: { judge: { maxTokens: 1_000_000 } } })).toThrow(/output\.judge\.maxTokens/u)
+  })
+
+  it('trims the reasoning effort and keeps it empty when unset', () => {
+    expect(resolveConfig({ output: { judge: { reasoningEffort: ' low ' } } }).output.judge.reasoningEffort).toBe('low')
+    expect(resolveConfig({ output: { judge: { reasoningEffort: '   ' } } }).output.judge.reasoningEffort).toBe('')
   })
 })
 

@@ -41,6 +41,40 @@ export function userInputText(messages: readonly Message[]): string {
 }
 
 /**
+ * Count the messages a step would enter that carry no text at all.
+ *
+ * This is a **read-only signal**, never a rewrite (1.21.0).
+ *
+ * Why it exists: on 2026-11-25 the host's "retry this turn" appended a user message
+ * with `content: []` and `source.kind: 'retry'` to the persisted history. Strict
+ * endpoints then rejected every later request with
+ * `400 empty_message_content param=messages[N]`, including turns whose own input was
+ * perfectly normal — the session was unrecoverable. The plugin could not see it at
+ * all: `userInputText` only reads `source.kind === 'user'`, and the failure happens
+ * between the host and the provider, past every seam (`incident-2026-11-25.md` §4).
+ *
+ * Counting it turns "the session is broken and the ledger says nothing" into one
+ * queryable number. It deliberately does **not** rewrite the history: a security
+ * plugin that silently edits the host's conversation is a larger risk than this bug.
+ *
+ * @param messages - the messages the step would enter.
+ * @returns how many user-role messages have no non-whitespace text, split by whether
+ *   they are the retry artefact (`retry`) or something else (`other`).
+ */
+export function emptyUserMessages(messages: readonly Message[]): { readonly retry: number; readonly other: number } {
+  let retry = 0
+  let other = 0
+  for (const message of messages) {
+    if (message.role !== 'user') continue
+    if (blocksText(message.content).trim().length > 0) continue
+    const source = message.source as { kind?: string } | undefined
+    if (source?.kind === 'retry') retry += 1
+    else other += 1
+  }
+  return { retry, other }
+}
+
+/**
  * Rewrite the text blocks of genuine end-user messages.
  *
  * The input guard's MODIFY path uses this after normalization: only user turns

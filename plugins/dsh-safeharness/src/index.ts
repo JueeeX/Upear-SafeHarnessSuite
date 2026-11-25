@@ -30,7 +30,7 @@ import { installInputHook } from './hooks/input.js'
 import { sessionCreatedAtOf, sessionIdOf, sessionTitleOf, sessionWorkspaceOf } from './hooks/context.js'
 import { observeSandbox, observeSessionSandbox, recordSandboxSwitch } from './hooks/sandbox.js'
 import { installToolHooks } from './hooks/tools.js'
-import { installLlmHook, createJudgeFor, createDrafterFor } from './hooks/llm.js'
+import { installLlmHook, createJudgeFor, createDrafterFor, outputJudgeLimits } from './hooks/llm.js'
 import { installApprovalHook } from './hooks/approval.js'
 import { runPosture, enforceLoadTimePosture, type PostureProbe } from './posture/report.js'
 import { runPatrol, type PatrolProbe, type PatrolReport } from './patrol/index.js'
@@ -640,10 +640,9 @@ export async function apply(ctx: Context, config: SafeHarnessConfig = {}): Promi
       const judgeHandle = createJudgeFor(ctx, runtime)
       const judgeTarget: JudgeCommandTarget = {
         state: judgeFact,
-        probe: () => judgeHandle.review(JUDGE_PROBE_TEXT, {
-          maxChars: 512,
-          timeoutMs: Math.max(1000, runtime.config.output.judge.timeoutMs),
-        }),
+        // 1.21.0: same budget/effort as a real review; only the content cap differs,
+        // because the probe text is a fixed short string.
+        probe: () => judgeHandle.review(JUDGE_PROBE_TEXT, { ...outputJudgeLimits(runtime), maxChars: 512 }),
       }
       const draftTarget: DraftCommandTarget = {
         // Read live, so flipping `draft.enabled` in settings takes effect without a reload.

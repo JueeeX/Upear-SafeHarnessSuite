@@ -2,6 +2,81 @@
 
 版本遵循 semver。`1.0.0-rc.1` 起配置字段名冻结；`1.0.0` 起为正式版，新增字段只增不改名。
 
+## 1.21.0 — 2026-11-25
+
+三件事，都是把「看不见的」变成「可查询的」，**不改变任何判定结果**：
+判官自己的 token 用量、宿主重试留下的空 user 消息、以及评审的补全预算与思考档。
+
+### 1. 判官自身的 usage 记账（`judge_usage_*`）
+
+`judge/client.ts` 的 `JudgeChunkLike` 过去只有 `type` 和 `text?`，于是宿主在
+`finish` 之前发出的 `usage` 块被直接丢掉了。后果不是"少一个数字"：账本里
+`output_reviewed.metrics.usage_input` / `usage_output` 一直是**主模型**的账单，
+而"评审这次到底花了多少"**根本查不到**——`docs/verification-2026-11-25.md` §4 把这条
+列为独立未做项。
+
+- `JudgeChunkLike` 新增 `usage?`（结构化的 `JudgeUsage`）与 `finish` 块的 `reason?`。
+- 每次评审把**所有尝试**的用量累加，写进 `JudgeResult.metrics`：
+  `usage_input` / `usage_output`，以及只在提供方真的报了才出现的
+  `usage_cache_read` / `usage_cache_write` / `usage_reasoning`。
+- 输出面与输入面经 1.20.0 的 `judgeLedgerMetrics()` 统一变成
+  `judge_usage_input` / `judge_usage_output` / …，所以回答的 `usage_*` 不会被覆盖。
+- 坏值不污染合计：`NaN`/负数/非数字按 0 计（`NaN` 序列化成 `null`，读者会误当 0）。
+- **重试是第二次计费调用**，所以两次都算：只报最后一次会让"最贵的那些评审"低报一半。
+
+### 2. 空 user 消息：一条只读信号（`empty_user_message`）
+
+2026-11-25 本会话真实发生：宿主「重试本轮」往持久化历史里追加了一条
+`content: []` 的 user 消息（`source.kind: retry`），严格端点随后对**每一轮**都回
+`400 [code=empty_message_content] param=messages[N]`，包括一条完全正常的用户输入。
+会话无法恢复（`docs/incident-2026-11-25.md`）。
+
+**这个故障在安全层里完全不可观测**：输入钩子只扫 `source.kind === 'user'`（tool 结果
+也是 `role: user`，不能当用户输入扫），空的重试消息被跳过；失败发生在宿主→模型之间，
+五个面都在它外边。
+
+1.21.0 加了一条**只读**信号，`src/hooks/context.ts` 的 `emptyUserMessages()`：
+
+- 正常回合：`labels.empty_user_message=<n>`（必要时再细分 `empty_user_retry` / `empty_user_other`）。
+- 整轮没有任何可扫文本（这正是中毒会话的形状）：单独写一条 `invariant_probe`，
+  `reason_code: empty_user_message`、`metrics.empty_user_messages`。
+- **不改消息**：安全插件静默改写宿主对话历史的代价大于这个 bug，所以这条只记账。
+
+### 3. 评审的补全预算与思考档 —— 提到配置面
+
+1.19.0 把单次预算写死成 4096（重试 8192），1.20.0 只给了 deadline 的旋钮。
+现在：
+
+| 新字段 | 默认 | 说明 |
+|---|---|---|
+| `output.judge.maxTokens` | `0` | `0` = 保留内置 4096，即 1.19.0/1.20.0 的行为逐字节不变；重试仍自动翻倍 |
+| `output.judge.reasoningEffort` | `""` | 空 = 用 provider 自己的默认档；填了才会真正发给宿主 |
+| `input.judgeMaxTokens` | `0` | `0` = 沿用 `output.judge.maxTokens`，与 `input.judgeTimeoutMs` 同构 |
+
+三者都是 volatile（面板可热改）。同时补了一处**误判修复**：
+
+- 宿主把"路由拒绝这个请求"（例如 `UNSUPPORTED_REASONING_EFFORT`）规范成终止 `finish` 块，
+  **不是**抛异常。过去这类失败会被当成"模型没说话"，于是再花一次翻倍预算重试。
+  现在读 `finish.reason`，记 `labels.reason=call_refused` + `labels.failure=<code>`，
+  **不重试**——同样的请求还会被拒一次。
+- 面板探针（`/safeharness judge probe` 与设置页的"测试连接"）改用与真实评审相同的
+  预算与思考档，否则它证明不了部署的行为。
+
+**明确不改的结论**（原文保留）：空回答是**路由**问题，1.19.0 的重试至今零触发，
+**不要**为它加预算或改 prompt。预算与思考档在这次发布里是**成本/兜底**旋钮，不是修复。
+
+### 测试
+
+- 内部口径 **68 文件 / 1089 用例**（1.20.0 是 67 / 1062）。
+- 新增 `tests/empty-user-message.test.ts`（7 条，含"信号绝不改写消息"）。
+- `judge` +11（usage 累计/缺失/可选计数器/坏值、预算翻倍、effort 透传、
+  `call_refused` 不重试）、`config` +6、`input-judge` +3、
+  `panel-settings` +4、`settings-form` +3、`settings-surface` volatile 精确列表 +3 项、
+  `ledger-metric-namespace` +1（`judge_usage_*` 与 `usage_*` 并存）。
+- 两道 `tsc` 0 错。
+
+---
+
 ## 1.20.0 — 2026-11-25
 
 两件事，都由**账本实测**驱动：一个把已经错了很久的度量修对，一个把「一次超时 = 用户被拒一轮」

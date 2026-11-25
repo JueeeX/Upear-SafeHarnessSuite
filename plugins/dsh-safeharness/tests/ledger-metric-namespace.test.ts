@@ -145,6 +145,29 @@ describe('output_reviewed: the answer and the judge both survive the merge', () 
     expect(metrics.judge_attempts).toBe(1)
   })
 
+  it('namespaces the judge\'s own token usage so it cannot be read as the answer\'s (1.21.0)', async () => {
+    // The judge measures `usage_input`/`usage_output` too — and before 1.21.0 it did not
+    // even see them, so the ledger had no judge cost at all. Now both are recorded and
+    // only the prefixed pair belongs to the judge.
+    const { host, runtime } = setupWithLlm(JUDGED, () => [
+      { type: 'text-delta', index: 0, text: '{"verdict":"allow"}' },
+      { type: 'usage', usage: { inputTokens: 900, outputTokens: 150 } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+    await collect(host.emitStream('llm/stream', { provider: 'p', model: 'm', messages: [] }, async function* () {
+      yield { type: 'text-delta', index: 0, text: CLEAN_TEXT }
+      yield { type: 'usage', usage: { inputTokens: 11, outputTokens: 3 } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }) as AsyncIterable<StreamChunk>)
+    const metrics = (await reviewedOf(runtime))?.metrics as Record<string, unknown>
+    // Answer side keeps its own bill…
+    expect(metrics.usage_input).toBe(11)
+    expect(metrics.usage_output).toBe(3)
+    // …and the judge's is one prefix away.
+    expect(metrics.judge_usage_input).toBe(900)
+    expect(metrics.judge_usage_output).toBe(150)
+  })
+
   it('writes no prefixed keys when the judge never ran', async () => {
     // `skipped_empty` means no judge call happened: the row must not claim otherwise.
     const { host, runtime } = setupWithLlm(JUDGED, () => answer('{"verdict":"allow"}'))

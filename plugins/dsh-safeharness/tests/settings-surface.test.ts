@@ -96,11 +96,18 @@ describe('settings schema', () => {
       // 1.20.0: the input judge's own deadline. Volatile because the failure it guards
       // against is a denied turn — the operator has to be able to raise it live.
       'input.judgeTimeoutMs',
+      // 1.21.0: the input judge's own completion budget, same "volatile because an
+      // operator denied by a truncated judge answer has to fix it live" argument.
+      'input.judgeMaxTokens',
       'input.normalize',
       'output.bufferMaxChars',
       'output.bufferTimeoutMs',
       'output.judge.enabled',
       'output.judge.maxChars',
+      // 1.21.0: the judge's budget and effort are the two cost levers an operator
+      // moves while watching bills, so neither can be a restart-only field.
+      'output.judge.maxTokens',
+      'output.judge.reasoningEffort',
       'output.judge.model',
       'output.judge.provider',
       'output.judge.scope',
